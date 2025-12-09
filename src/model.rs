@@ -373,3 +373,9 @@ pub struct ManifestSheetStub {
     pub candidate_expectations: Vec<String>,
     pub notes: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CloseWorkbookResponse {
+    pub workbook_id: WorkbookId,
+    pub message: String,
+}

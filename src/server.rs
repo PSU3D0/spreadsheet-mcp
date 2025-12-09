@@ -1,9 +1,9 @@
 use crate::config::ServerConfig;
 use crate::model::{
-    FindFormulaResponse, FormulaTraceResponse, ManifestStubResponse, NamedRangesResponse,
-    SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
-    SheetStatisticsResponse, SheetStylesResponse, VolatileScanResponse, WorkbookDescription,
-    WorkbookListResponse,
+    CloseWorkbookResponse, FindFormulaResponse, FormulaTraceResponse, ManifestStubResponse,
+    NamedRangesResponse, SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse,
+    SheetPageResponse, SheetStatisticsResponse, SheetStylesResponse, VolatileScanResponse,
+    WorkbookDescription, WorkbookListResponse,
 };
 use crate::state::AppState;
 use crate::tools;
@@ -257,7 +257,7 @@ impl SpreadsheetServer {
     pub async fn close_workbook(
         &self,
         Parameters(params): Parameters<tools::CloseWorkbookParams>,
-    ) -> Result<Json<String>, McpError> {
+    ) -> Result<Json<CloseWorkbookResponse>, McpError> {
         self.ensure_tool_enabled("close_workbook")
             .map_err(to_mcp_error)?;
         tools::close_workbook(self.state.clone(), params)

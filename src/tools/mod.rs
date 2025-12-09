@@ -186,11 +186,7 @@ pub async fn sheet_formula_map(
 
     for mut group in graph.groups() {
         if let Some(range) = &params.range {
-            group.addresses = group
-                .addresses
-                .into_iter()
-                .filter(|addr| address_in_range(addr, range))
-                .collect();
+            group.addresses.retain(|addr| address_in_range(addr, range));
             if group.addresses.is_empty() {
                 continue;
             }
@@ -233,7 +229,7 @@ pub async fn formula_trace(
     let workbook = state.open_workbook(&params.workbook_id).await?;
     let graph = workbook.formula_graph(&params.sheet_name)?;
     let formula_lookup = build_formula_lookup(&graph);
-    let depth = params.depth.unwrap_or(3).max(1).min(5);
+    let depth = params.depth.unwrap_or(3).clamp(1, 5);
     let page_size = params
         .page_size
         .or_else(|| params.limit.map(|v| v as usize))
@@ -241,15 +237,18 @@ pub async fn formula_trace(
         .clamp(TRACE_PAGE_MIN, TRACE_PAGE_MAX);
 
     let origin = params.cell_address.to_uppercase();
+    let config = TraceConfig {
+        direction: &params.direction,
+        origin: &origin,
+        sheet_name: &params.sheet_name,
+        depth_limit: depth,
+        page_size,
+    };
     let (layers, next_cursor, notes) = build_trace_layers(
         &workbook,
         &graph,
         &formula_lookup,
-        &params.direction,
-        &origin,
-        &params.sheet_name,
-        depth,
-        page_size,
+        &config,
         params.cursor.clone(),
     )?;
 
@@ -478,7 +477,7 @@ pub async fn sheet_statistics(
 }
 
 fn address_in_range(address: &str, range: &str) -> bool {
-    parse_range(range).map_or(true, |((start_col, start_row), (end_col, end_row))| {
+    parse_range(range).is_none_or(|((start_col, start_row), (end_col, end_row))| {
         if let Some((col, row)) = parse_address(address) {
             col >= start_col && col <= end_col && row >= start_row && row <= end_row
         } else {
@@ -678,10 +677,15 @@ pub struct CloseWorkbookParams {
     pub workbook_id: WorkbookId,
 }
 
-pub async fn close_workbook(state: Arc<AppState>, params: CloseWorkbookParams) -> Result<String> {
+pub async fn close_workbook(
+    state: Arc<AppState>,
+    params: CloseWorkbookParams,
+) -> Result<CloseWorkbookResponse> {
     state.close_workbook(&params.workbook_id)?;
-    let data = format!("workbook {} evicted", params.workbook_id.as_str());
-    Ok(data)
+    Ok(CloseWorkbookResponse {
+        workbook_id: params.workbook_id.clone(),
+        message: format!("workbook {} evicted", params.workbook_id.as_str()),
+    })
 }
 fn collect_formula_matches(
     sheet: &umya_spreadsheet::Worksheet,
@@ -774,25 +778,29 @@ fn build_formula_lookup(graph: &FormulaGraph) -> HashMap<String, TraceFormulaInf
     map
 }
 
+struct TraceConfig<'a> {
+    direction: &'a TraceDirection,
+    origin: &'a str,
+    sheet_name: &'a str,
+    depth_limit: u32,
+    page_size: usize,
+}
+
 fn build_trace_layers(
     workbook: &WorkbookContext,
     graph: &FormulaGraph,
     formula_lookup: &HashMap<String, TraceFormulaInfo>,
-    direction: &TraceDirection,
-    origin: &str,
-    sheet_name: &str,
-    depth_limit: u32,
-    page_size: usize,
+    config: &TraceConfig<'_>,
     cursor: Option<TraceCursor>,
 ) -> Result<(Vec<TraceLayer>, Option<TraceCursor>, Vec<String>)> {
-    let layer_links = collect_layer_links(graph, direction, origin, depth_limit);
+    let layer_links = collect_layer_links(graph, config.direction, config.origin, config.depth_limit);
     let mut layers = Vec::new();
     let mut next_cursor = None;
     let mut notes = Vec::new();
     let focus_depth = cursor.as_ref().map(|c| c.depth);
 
     for layer in layer_links {
-        let produce_edges = focus_depth.map_or(true, |depth| depth == layer.depth);
+        let produce_edges = focus_depth.is_none_or(|depth| depth == layer.depth);
         let offset = cursor
             .as_ref()
             .filter(|c| c.depth == layer.depth)
@@ -806,13 +814,13 @@ fn build_trace_layers(
         let mut nodes: Vec<String> = node_set.into_iter().collect();
         nodes.sort_by(|a, b| compare_addresses(a, b));
 
-        let details = workbook.with_sheet(sheet_name, |sheet| {
-            collect_neighbor_details(sheet, sheet_name, &nodes, formula_lookup)
+        let details = workbook.with_sheet(config.sheet_name, |sheet| {
+            collect_neighbor_details(sheet, config.sheet_name, &nodes, formula_lookup)
         })?;
         let total_nodes = details.len();
         let start = offset.min(total_nodes);
         let end = if produce_edges {
-            (start + page_size).min(total_nodes)
+            (start + config.page_size).min(total_nodes)
         } else {
             start
         };
@@ -1090,11 +1098,10 @@ fn build_formula_group_highlights(details: &[NeighborDetail]) -> Vec<TraceFormul
 fn build_range_highlights(details: &[NeighborDetail]) -> Vec<TraceRangeHighlight> {
     let mut by_column: HashMap<u32, Vec<&NeighborDetail>> = HashMap::new();
     for detail in details {
-        if let (Some(col), Some(_row)) = (detail.column, detail.row) {
-            if !detail.external {
+        if let (Some(col), Some(_row)) = (detail.column, detail.row)
+            && !detail.external {
                 by_column.entry(col).or_default().push(detail);
             }
-        }
     }
 
     for column_entries in by_column.values_mut() {
@@ -1142,21 +1149,19 @@ fn make_range_highlight(details: &[&NeighborDetail]) -> TraceRangeHighlight {
         match detail.kind {
             TraceCellKind::Formula => {
                 formulas += 1;
-                if let Some(formula) = &detail.formula {
-                    if sample_formulas.len() < TRACE_RANGE_FORMULA_SAMPLES
+                if let Some(formula) = &detail.formula
+                    && sample_formulas.len() < TRACE_RANGE_FORMULA_SAMPLES
                         && !sample_formulas.contains(formula)
                     {
                         sample_formulas.push(formula.clone());
                     }
-                }
             }
             TraceCellKind::Literal => {
                 literals += 1;
-                if let Some(value) = &detail.value {
-                    if sample_values.len() < TRACE_RANGE_VALUE_SAMPLES {
+                if let Some(value) = &detail.value
+                    && sample_values.len() < TRACE_RANGE_VALUE_SAMPLES {
                         sample_values.push(value.clone());
                     }
-                }
             }
             TraceCellKind::Blank => blanks += 1,
             TraceCellKind::External => {}

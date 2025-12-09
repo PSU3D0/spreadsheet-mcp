@@ -16,7 +16,6 @@ pub enum TransportKind {
     #[value(alias = "stream-http", alias = "stream_http")]
     #[serde(alias = "stream-http", alias = "stream_http")]
     Http,
-    Sse,
     Stdio,
 }
 
@@ -24,7 +23,6 @@ impl std::fmt::Display for TransportKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TransportKind::Http => write!(f, "http"),
-            TransportKind::Sse => write!(f, "sse"),
             TransportKind::Stdio => write!(f, "stdio"),
         }
     }
@@ -157,7 +155,7 @@ impl ServerConfig {
 
         let transport = cli_transport
             .or(file_transport)
-            .unwrap_or(TransportKind::Sse);
+            .unwrap_or(TransportKind::Http);
 
         let http_bind_address = cli_http_bind.or(file_http_bind).unwrap_or_else(|| {
             DEFAULT_HTTP_BIND

@@ -33,11 +33,10 @@ impl WorkbookFilter {
     }
 
     pub fn matches(&self, slug: &str, folder: Option<&str>, path: &Path) -> bool {
-        if let Some(prefix) = &self.slug_prefix {
-            if !slug.to_ascii_lowercase().starts_with(prefix) {
+        if let Some(prefix) = &self.slug_prefix
+            && !slug.to_ascii_lowercase().starts_with(prefix) {
                 return false;
             }
-        }
 
         if let Some(expected_folder) = &self.folder {
             match folder.map(|f| f.to_ascii_lowercase()) {
@@ -46,11 +45,10 @@ impl WorkbookFilter {
             }
         }
 
-        if let Some(glob) = &self.path_glob {
-            if !glob.is_match(path) {
+        if let Some(glob) = &self.path_glob
+            && !glob.is_match(path) {
                 return false;
             }
-        }
 
         true
     }

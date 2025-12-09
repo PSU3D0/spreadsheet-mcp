@@ -34,7 +34,7 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
         let column_name = column_number_to_name(col);
         let header = sheet
             .get_cell((1u32, col))
-            .and_then(|cell| cell_to_value(cell));
+            .and_then(cell_to_value);
         let mut numeric_values = Vec::new();
         let mut text_values = Vec::new();
         let mut samples = Vec::new();
@@ -42,8 +42,8 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
         let mut duplicate_flag = false;
 
         for row in 1..=max_row {
-            if let Some(cell) = sheet.get_cell((row, col)) {
-                if let Some(value) = cell_to_value(cell) {
+            if let Some(cell) = sheet.get_cell((row, col))
+                && let Some(value) = cell_to_value(cell) {
                     filled_cells += 1;
                     match value.clone() {
                         CellValue::Number(n) => numeric_values.push(n),
@@ -51,11 +51,10 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
                         | CellValue::Text(_)
                         | CellValue::Date(_)
                         | CellValue::Error(_) => {
-                            if let CellValue::Text(ref s) = value {
-                                if !unique_values.insert(s.clone()) {
+                            if let CellValue::Text(ref s) = value
+                                && !unique_values.insert(s.clone()) {
                                     duplicate_flag = true;
                                 }
-                            }
                             text_values.push(value.clone());
                         }
                     }
@@ -63,7 +62,6 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
                         samples.push(value);
                     }
                 }
-            }
         }
 
         let nulls = max_row - (numeric_values.len() as u32 + text_values.len() as u32);

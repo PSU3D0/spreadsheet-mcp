@@ -14,7 +14,6 @@ pub use server::SpreadsheetServer;
 use anyhow::Result;
 use axum::Router;
 use model::WorkbookListResponse;
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -24,12 +23,9 @@ use tokio::{
     net::TcpListener,
     time::{Duration, timeout},
 };
-use tokio_util::sync::CancellationToken;
 use tools::filters::WorkbookFilter;
 
 const HTTP_SERVICE_PATH: &str = "/mcp";
-const SSE_EVENTS_PATH: &str = "/mcp/sse";
-const SSE_MESSAGE_PATH: &str = "/mcp/message";
 
 pub async fn run_server(config: ServerConfig) -> Result<()> {
     let config = Arc::new(config);
@@ -72,8 +68,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
             let server = SpreadsheetServer::from_state(state);
             server.run_stdio().await
         }
-        TransportKind::Http => run_stream_http_transport(config, state).await,
-        TransportKind::Sse => run_sse_transport(config, state).await,
+        TransportKind::Http => run_stream_http_transport(config, state).await
     }
 }
 
@@ -123,43 +118,4 @@ async fn run_stream_http_transport(config: Arc<ServerConfig>, state: Arc<AppStat
 
 pub fn startup_scan(state: &Arc<AppState>) -> Result<WorkbookListResponse> {
     state.list_workbooks(WorkbookFilter::default())
-}
-
-async fn run_sse_transport(config: Arc<ServerConfig>, state: Arc<AppState>) -> Result<()> {
-    let bind_addr = config.http_bind_address;
-    let cancellation = CancellationToken::new();
-    let server = SseServer::serve_with_config(SseServerConfig {
-        bind: bind_addr,
-        sse_path: SSE_EVENTS_PATH.to_string(),
-        post_path: SSE_MESSAGE_PATH.to_string(),
-        ct: cancellation.clone(),
-        sse_keep_alive: None,
-    })
-    .await?;
-
-    let service_state = state.clone();
-    let server_ct =
-        server.with_service(move || SpreadsheetServer::from_state(service_state.clone()));
-
-    tracing::info!(
-        transport = "sse",
-        bind = %bind_addr,
-        events_path = SSE_EVENTS_PATH,
-        message_path = SSE_MESSAGE_PATH,
-        "listening"
-    );
-
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        tracing::warn!(?error, "ctrl_c listener exited unexpectedly");
-    } else {
-        tracing::info!("shutdown signal received");
-    }
-
-    server_ct.cancel();
-    cancellation.cancel();
-
-    // allow background tasks a short window to flush before exiting
-    let _ = timeout(Duration::from_secs(5), cancellation.cancelled()).await;
-    tracing::info!("sse transport stopped");
-    Ok(())
 }
