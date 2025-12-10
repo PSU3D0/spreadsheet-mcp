@@ -22,6 +22,7 @@ const TRACE_CELL_HIGHLIGHT_LIMIT: usize = 5;
 const TRACE_RANGE_VALUE_SAMPLES: usize = 3;
 const TRACE_RANGE_FORMULA_SAMPLES: usize = 2;
 const TRACE_GROUP_SAMPLE_LIMIT: usize = 5;
+const TRACE_DEPENDENTS_PER_CELL_LIMIT: usize = 500;
 
 pub async fn list_workbooks(
     state: Arc<AppState>,
@@ -482,6 +483,19 @@ pub struct SheetFormulaMapParams {
     pub range: Option<String>,
     #[serde(default)]
     pub expand: bool,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub sort_by: Option<FormulaSortBy>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FormulaSortBy {
+    #[default]
+    Address,
+    Complexity,
+    Count,
 }
 
 pub async fn sheet_formula_map(
@@ -505,6 +519,26 @@ pub async fn sheet_formula_map(
             truncated = true;
         }
         groups.push(group);
+    }
+
+    let sort_by = params.sort_by.unwrap_or_default();
+    match sort_by {
+        FormulaSortBy::Address => {
+            groups.sort_by(|a, b| a.addresses.first().cmp(&b.addresses.first()));
+        }
+        FormulaSortBy::Complexity => {
+            groups.sort_by(|a, b| b.formula.len().cmp(&a.formula.len()));
+        }
+        FormulaSortBy::Count => {
+            groups.sort_by(|a, b| b.addresses.len().cmp(&a.addresses.len()));
+        }
+    }
+
+    if let Some(limit) = params.limit
+        && groups.len() > limit as usize
+    {
+        groups.truncate(limit as usize);
+        truncated = true;
     }
 
     let response = SheetFormulaMapResponse {
@@ -2028,6 +2062,7 @@ struct TraceEdgeRaw {
 struct LayerLinks {
     depth: u32,
     edges: Vec<TraceEdgeRaw>,
+    truncated_cells: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -2146,6 +2181,22 @@ fn build_trace_layers(
             ));
         }
 
+        if !layer.truncated_cells.is_empty() {
+            let cell_list = if layer.truncated_cells.len() <= 3 {
+                layer.truncated_cells.join(", ")
+            } else {
+                format!(
+                    "{}, ... ({} more)",
+                    layer.truncated_cells[..3].join(", "),
+                    layer.truncated_cells.len() - 3
+                )
+            };
+            notes.push(format!(
+                "Layer {}: dependents truncated at {} per cell for: {}",
+                layer.depth, TRACE_DEPENDENTS_PER_CELL_LIMIT, cell_list
+            ));
+        }
+
         layers.push(TraceLayer {
             depth: layer.depth,
             summary,
@@ -2172,12 +2223,19 @@ fn collect_layer_links(
     for depth in 1..=depth_limit {
         let mut next_frontier_set: HashSet<String> = HashSet::new();
         let mut edges = Vec::new();
+        let mut truncated_cells = Vec::new();
 
         for cell in &frontier {
-            let neighbors = match direction {
-                TraceDirection::Precedents => graph.precedents(cell),
-                TraceDirection::Dependents => graph.dependents(cell),
+            let (neighbors, was_truncated) = match direction {
+                TraceDirection::Precedents => (graph.precedents(cell), false),
+                TraceDirection::Dependents => {
+                    graph.dependents_limited(cell, Some(TRACE_DEPENDENTS_PER_CELL_LIMIT))
+                }
             };
+
+            if was_truncated {
+                truncated_cells.push(cell.clone());
+            }
 
             for neighbor in neighbors {
                 let neighbor_upper = neighbor.to_ascii_uppercase();
@@ -2204,7 +2262,11 @@ fn collect_layer_links(
             break;
         }
 
-        layers.push(LayerLinks { depth, edges });
+        layers.push(LayerLinks {
+            depth,
+            edges,
+            truncated_cells,
+        });
         if next_frontier_set.is_empty() {
             break;
         }

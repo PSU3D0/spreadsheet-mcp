@@ -24,6 +24,32 @@ use std::sync::Arc;
 use umya_spreadsheet::reader::xlsx;
 use umya_spreadsheet::{DefinedName, Spreadsheet, Worksheet};
 
+const KV_MAX_WIDTH_FOR_DENSITY_CHECK: u32 = 6;
+const KV_SAMPLE_ROWS: u32 = 20;
+const KV_DENSITY_THRESHOLD: f32 = 0.4;
+const KV_CHECK_ROWS: u32 = 15;
+const KV_MAX_LABEL_LEN: usize = 25;
+const KV_MIN_TEXT_VALUE_LEN: usize = 2;
+const KV_MIN_PAIRS: u32 = 3;
+const KV_MIN_PAIR_RATIO: f32 = 0.3;
+
+const HEADER_MAX_SCAN_ROWS: u32 = 2;
+const HEADER_LONG_STRING_PENALTY_THRESHOLD: usize = 40;
+const HEADER_LONG_STRING_PENALTY: f32 = 1.5;
+const HEADER_PROPER_NOUN_MIN_LEN: usize = 5;
+const HEADER_PROPER_NOUN_PENALTY: f32 = 1.0;
+const HEADER_DIGIT_STRING_MIN_LEN: usize = 3;
+const HEADER_DIGIT_STRING_PENALTY: f32 = 0.5;
+const HEADER_DATE_PENALTY: f32 = 1.0;
+const HEADER_YEAR_LIKE_BONUS: f32 = 0.5;
+const HEADER_YEAR_MIN: f64 = 1900.0;
+const HEADER_YEAR_MAX: f64 = 2100.0;
+const HEADER_UNIQUE_BONUS: f32 = 0.2;
+const HEADER_NUMBER_PENALTY: f32 = 0.3;
+const HEADER_SINGLE_COL_MIN_SCORE: f32 = 1.5;
+const HEADER_SCORE_TIE_THRESHOLD: f32 = 0.3;
+const HEADER_SECOND_ROW_MIN_SCORE_RATIO: f32 = 0.6;
+
 pub struct WorkbookContext {
     pub id: WorkbookId,
     pub short_id: String,
@@ -284,12 +310,120 @@ impl WorkbookContext {
     }
 }
 
+fn contains_date_time_token(format_code: &str) -> bool {
+    let mut in_quote = false;
+    let mut in_bracket = false;
+    let chars: Vec<char> = format_code.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        match ch {
+            '"' => in_quote = !in_quote,
+            '[' if !in_quote => in_bracket = true,
+            ']' if !in_quote => in_bracket = false,
+            'y' | 'd' | 'h' | 's' | 'm' if !in_quote && !in_bracket => {
+                if ch == 'm' {
+                    let prev = if i > 0 { chars.get(i - 1) } else { None };
+                    let next = chars.get(i + 1);
+                    let after_time_sep = prev == Some(&':') || prev == Some(&'h');
+                    let before_time_sep = next == Some(&':') || next == Some(&'s');
+                    if after_time_sep || before_time_sep {
+                        return true;
+                    }
+                    if prev == Some(&'m') || next == Some(&'m') {
+                        return true;
+                    }
+                    if matches!(prev, Some(&'/') | Some(&'-') | Some(&'.'))
+                        || matches!(next, Some(&'/') | Some(&'-') | Some(&'.'))
+                    {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+const DATE_FORMAT_IDS: &[u32] = &[
+    14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51,
+    52, 53, 54, 55, 56, 57, 58,
+];
+
+const EXCEL_LEAP_YEAR_BUG_SERIAL: i64 = 60;
+
+fn is_date_formatted(cell: &umya_spreadsheet::Cell) -> bool {
+    let Some(nf) = cell.get_style().get_number_format() else {
+        return false;
+    };
+
+    let format_id = nf.get_number_format_id();
+    if DATE_FORMAT_IDS.contains(format_id) {
+        return true;
+    }
+
+    let code = nf.get_format_code();
+    if code == "General" || code == "@" || code == "0" || code == "0.00" {
+        return false;
+    }
+
+    contains_date_time_token(code)
+}
+
+pub fn excel_serial_to_iso(serial: f64, use_1904_system: bool) -> String {
+    excel_serial_to_iso_with_leap_bug(serial, use_1904_system, true)
+}
+
+pub fn excel_serial_to_iso_with_leap_bug(
+    serial: f64,
+    use_1904_system: bool,
+    compensate_leap_bug: bool,
+) -> String {
+    use chrono::NaiveDate;
+
+    let days = serial.trunc() as i64;
+
+    if use_1904_system {
+        let epoch_1904 = NaiveDate::from_ymd_opt(1904, 1, 1).unwrap();
+        return epoch_1904
+            .checked_add_signed(chrono::Duration::days(days))
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| serial.to_string());
+    }
+
+    let epoch = if compensate_leap_bug && days >= EXCEL_LEAP_YEAR_BUG_SERIAL {
+        NaiveDate::from_ymd_opt(1899, 12, 30).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(1899, 12, 31).unwrap()
+    };
+
+    epoch
+        .checked_add_signed(chrono::Duration::days(days))
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| serial.to_string())
+}
+
 pub fn cell_to_value(cell: &umya_spreadsheet::Cell) -> Option<crate::model::CellValue> {
+    cell_to_value_with_date_system(cell, false)
+}
+
+pub fn cell_to_value_with_date_system(
+    cell: &umya_spreadsheet::Cell,
+    use_1904_system: bool,
+) -> Option<crate::model::CellValue> {
     let raw = cell.get_value();
     if raw.is_empty() {
         return None;
     }
     if let Ok(number) = raw.parse::<f64>() {
+        if is_date_formatted(cell) {
+            return Some(crate::model::CellValue::Date(excel_serial_to_iso(
+                number,
+                use_1904_system,
+            )));
+        }
         return Some(crate::model::CellValue::Number(number));
     }
 
@@ -694,16 +828,130 @@ fn build_region(
 struct HeaderInfo {
     header_row: Option<u32>,
     headers: Vec<String>,
+    is_key_value: bool,
+}
+
+fn is_key_value_layout(occupancy: &Occupancy, rect: &Rect) -> bool {
+    let width = rect.end_col - rect.start_col + 1;
+
+    if width == 2 {
+        return check_key_value_columns(occupancy, rect, rect.start_col, rect.start_col + 1);
+    }
+
+    if width <= KV_MAX_WIDTH_FOR_DENSITY_CHECK {
+        let rows_to_sample = (rect.end_row - rect.start_row + 1).min(KV_SAMPLE_ROWS);
+        let density_threshold = (rows_to_sample as f32 * KV_DENSITY_THRESHOLD) as u32;
+
+        let mut col_densities: Vec<(u32, u32)> = Vec::new();
+        for col in rect.start_col..=rect.end_col {
+            let count = (rect.start_row..rect.start_row + rows_to_sample)
+                .filter(|&row| occupancy.value_at(row, col).is_some())
+                .count() as u32;
+            if count >= density_threshold {
+                col_densities.push((col, count));
+            }
+        }
+
+        if col_densities.len() == 2 {
+            let label_col = col_densities[0].0;
+            let value_col = col_densities[1].0;
+            return check_key_value_columns(occupancy, rect, label_col, value_col);
+        } else if col_densities.len() == 4 && width >= 4 {
+            let pair1 =
+                check_key_value_columns(occupancy, rect, col_densities[0].0, col_densities[1].0);
+            let pair2 =
+                check_key_value_columns(occupancy, rect, col_densities[2].0, col_densities[3].0);
+            return pair1 && pair2;
+        }
+    }
+
+    false
+}
+
+fn check_key_value_columns(
+    occupancy: &Occupancy,
+    rect: &Rect,
+    label_col: u32,
+    value_col: u32,
+) -> bool {
+    let mut label_value_pairs = 0u32;
+    let rows_to_check = (rect.end_row - rect.start_row + 1).min(KV_CHECK_ROWS);
+
+    for row in rect.start_row..rect.start_row + rows_to_check {
+        let first_col = occupancy.value_at(row, label_col);
+        let second_col = occupancy.value_at(row, value_col);
+
+        if let (Some(crate::model::CellValue::Text(label)), Some(val)) = (first_col, second_col) {
+            let label_looks_like_key = label.len() <= KV_MAX_LABEL_LEN
+                && !label.chars().any(|c| c.is_ascii_digit())
+                && label.contains(|c: char| c.is_alphabetic());
+
+            let value_is_data = matches!(
+                val,
+                crate::model::CellValue::Number(_) | crate::model::CellValue::Date(_)
+            ) || matches!(val, crate::model::CellValue::Text(s) if s.len() > KV_MIN_TEXT_VALUE_LEN);
+
+            if label_looks_like_key && value_is_data {
+                label_value_pairs += 1;
+            }
+        }
+    }
+
+    label_value_pairs >= KV_MIN_PAIRS
+        && label_value_pairs as f32 / rows_to_check as f32 >= KV_MIN_PAIR_RATIO
+}
+
+fn header_data_penalty(s: &str) -> f32 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    if s.len() > HEADER_LONG_STRING_PENALTY_THRESHOLD {
+        return HEADER_LONG_STRING_PENALTY;
+    }
+    let first_char = s.chars().next().unwrap();
+    let is_capitalized = first_char.is_uppercase();
+    let has_lowercase = s.chars().skip(1).any(|c| c.is_lowercase());
+    let is_all_caps = s.chars().all(|c| !c.is_alphabetic() || c.is_uppercase());
+    let has_digits = s.chars().any(|c| c.is_ascii_digit());
+    let is_proper_noun =
+        is_capitalized && has_lowercase && !is_all_caps && s.len() > HEADER_PROPER_NOUN_MIN_LEN;
+
+    let mut penalty = 0.0;
+    if is_proper_noun {
+        penalty += HEADER_PROPER_NOUN_PENALTY;
+    }
+    if has_digits && s.len() > HEADER_DIGIT_STRING_MIN_LEN {
+        penalty += HEADER_DIGIT_STRING_PENALTY;
+    }
+    penalty
 }
 
 fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
+    if is_key_value_layout(occupancy, rect) {
+        let mut headers = Vec::new();
+        for col in rect.start_col..=rect.end_col {
+            headers.push(crate::utils::column_number_to_name(col));
+        }
+        return HeaderInfo {
+            header_row: None,
+            headers,
+            is_key_value: true,
+        };
+    }
+
     let mut candidates = Vec::new();
-    let max_row = rect.start_row.saturating_add(2).min(rect.end_row);
+    let max_row = rect
+        .start_row
+        .saturating_add(HEADER_MAX_SCAN_ROWS)
+        .min(rect.end_row);
     for row in rect.start_row..=max_row {
         let mut text = 0;
         let mut numbers = 0;
         let mut non_empty = 0;
         let mut unique = HashSet::new();
+        let mut data_like_penalty: f32 = 0.0;
+        let mut year_like_bonus: f32 = 0.0;
+
         for col in rect.start_col..=rect.end_col {
             if let Some(val) = occupancy.value_at(row, col) {
                 non_empty += 1;
@@ -711,10 +959,20 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
                     crate::model::CellValue::Text(s) => {
                         text += 1;
                         unique.insert(s.clone());
+                        data_like_penalty += header_data_penalty(s);
                     }
-                    crate::model::CellValue::Number(_) => numbers += 1,
+                    crate::model::CellValue::Number(n) => {
+                        if *n >= HEADER_YEAR_MIN && *n <= HEADER_YEAR_MAX && n.fract() == 0.0 {
+                            year_like_bonus += HEADER_YEAR_LIKE_BONUS;
+                            text += 1;
+                        } else {
+                            numbers += 1;
+                        }
+                    }
                     crate::model::CellValue::Bool(_) => text += 1,
-                    crate::model::CellValue::Date(_) => text += 1,
+                    crate::model::CellValue::Date(_) => {
+                        data_like_penalty += HEADER_DATE_PENALTY;
+                    }
                     crate::model::CellValue::Error(_) => {}
                 }
             }
@@ -722,13 +980,22 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
         if non_empty == 0 {
             continue;
         }
-        let score = text as f32 + unique.len() as f32 * 0.2 - numbers as f32 * 0.3;
+        let score = text as f32 + unique.len() as f32 * HEADER_UNIQUE_BONUS
+            - numbers as f32 * HEADER_NUMBER_PENALTY
+            - data_like_penalty
+            + year_like_bonus;
         candidates.push((row, score, text, non_empty));
     }
 
+    let is_single_col = rect.start_col == rect.end_col;
+
     let header_candidates: Vec<&(u32, f32, u32, u32)> = candidates
         .iter()
-        .filter(|(_, _, text, non_empty)| *text >= 1 && *text * 2 >= *non_empty)
+        .filter(|(_, score, text, non_empty)| {
+            *text >= 1
+                && *text * 2 >= *non_empty
+                && (!is_single_col || *score > HEADER_SINGLE_COL_MIN_SCORE)
+        })
         .collect();
 
     let best = header_candidates.iter().copied().max_by(|a, b| {
@@ -743,7 +1010,7 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
 
     let maybe_header = match (best, earliest) {
         (Some(best_row), Some(early_row)) => {
-            if (best_row.1 - early_row.1).abs() <= 0.3 {
+            if (best_row.1 - early_row.1).abs() <= HEADER_SCORE_TIE_THRESHOLD {
                 Some(early_row.0)
             } else {
                 Some(best_row.0)
@@ -762,7 +1029,7 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
             && *text_next >= 1
             && *text_next * 2 >= *non_empty_next
             && *score_next
-                >= 0.6
+                >= HEADER_SECOND_ROW_MIN_SCORE_RATIO
                     * candidates
                         .iter()
                         .find(|(r, _, _, _)| *r == hr)
@@ -800,6 +1067,7 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
     HeaderInfo {
         header_row: header_rows.first().copied(),
         headers,
+        is_key_value: false,
     }
 }
 
@@ -839,11 +1107,12 @@ fn classify_region(
         && rect.end_row >= metrics.row_count.saturating_sub(3)
     {
         kind = crate::model::RegionKind::Metadata;
-    } else if formula_ratio < 0.25
-        && stats.numbers > 0
-        && stats.text > 0
-        && text_ratio >= 0.3
-        && (width <= 2 || (width <= 3 && header_info.header_row.is_none()))
+    } else if header_info.is_key_value
+        || (formula_ratio < 0.25
+            && stats.numbers > 0
+            && stats.text > 0
+            && text_ratio >= 0.3
+            && (width <= 2 || (width <= 3 && header_info.header_row.is_none())))
     {
         kind = crate::model::RegionKind::Parameters;
     } else if height <= 4 && width <= 6 && formula_ratio < 0.2 && text_ratio > 0.4 && density < 0.5

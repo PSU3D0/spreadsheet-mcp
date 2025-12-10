@@ -130,6 +130,56 @@ Default transport: HTTP streaming at `127.0.0.1:8079`. Endpoint: `POST /mcp`.
 
 Use `--transport stdio` for CLI pipelines.
 
+## Local Development Testing
+
+To test local changes without rebuilding Docker, point your MCP client directly at the cargo build:
+
+### Claude Code (Local Build)
+
+Add to `~/.claude.json` or project `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "cargo",
+      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-read-mcp/Cargo.toml", "--", "--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+Or build once and run the binary directly:
+```bash
+cargo build --release
+```
+
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "/path/to/spreadsheet-read-mcp/target/release/spreadsheet-read-mcp",
+      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+### Cursor / VS Code (Local Build)
+
+In `.vscode/settings.json` or user settings:
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "cargo",
+      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-read-mcp/Cargo.toml", "--", "--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+**Tip:** Use `cargo build --release` first, then point to the binary for faster startup.
+
 ## MCP Client Configuration
 
 ### Claude Desktop (Docker)

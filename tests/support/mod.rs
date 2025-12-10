@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+pub mod builders;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

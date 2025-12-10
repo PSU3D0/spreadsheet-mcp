@@ -19,6 +19,30 @@ use rmcp::{
 use std::sync::Arc;
 use thiserror::Error;
 
+const SERVER_INSTRUCTIONS: &str = "\
+Spreadsheet Read MCP: optimized for read-only spreadsheet analysis.
+
+WORKFLOW:
+1) list_workbooks → list_sheets → workbook_summary for orientation
+2) sheet_overview for region detection (ids/bounds/kind/confidence)
+3) For structured data: read_table with region_id, filters, sampling
+4) For spot checks: range_values or find_value (label mode for key-value sheets)
+
+TOOL SELECTION:
+- sheet_formula_map: Get formula overview. Use limit param for large sheets (e.g., limit=10). \
+Use sort_by='complexity' for most complex formulas first, or 'count' for most repeated. \
+Use range param to scope to specific region.
+- formula_trace: Trace ONE cell's precedents/dependents. Use AFTER formula_map \
+to dive deep on specific outputs (e.g., trace the total cell to understand calc flow).
+- sheet_page: Raw cell dump. Use ONLY when region detection fails or for \
+unstructured sheets. Prefer read_table for tabular data.
+- find_value with mode='label': For key-value layouts (label in col A, value in col B). \
+Use direction='right' or 'below' hints.
+
+DATES: Cells with date formats return ISO-8601 strings (YYYY-MM-DD).
+
+Keep payloads small. Page through large sheets. Read-only, no mutations.";
+
 #[derive(Clone)]
 pub struct SpreadsheetServer {
     state: Arc<AppState>,
@@ -348,17 +372,7 @@ impl ServerHandler for SpreadsheetServer {
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Spreadsheet Read MCP: optimized for read-only spreadsheet analysis.\n\
-                 Workflow guidance:\n\
-                 1) list_workbooks → list_sheets → workbook_summary for orientation.\n\
-                 2) sheet_overview to get detected regions (ids/bounds/kind/confidence).\n\
-                 3) Use region_id with table_profile/read_table; prefer range_values/find_value for spot checks.\n\
-                 4) sheet_page is a fallback when structure is unknown; prefer compact/values_only.\n\
-                 5) find_value supports label mode (direction hints) and value mode; scope by sheet/region.\n\
-                 6) table_profile/read_table support header rows, filters, sampling; use small limits first.\n\
-                 The server is read-only; no mutation or recalculation. Keep payloads small and page through large sheets.".to_string(),
-            ),
+            instructions: Some(SERVER_INSTRUCTIONS.to_string()),
             ..ServerInfo::default()
         }
     }
