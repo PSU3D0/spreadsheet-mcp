@@ -1,0 +1,9 @@
+target/
+rust-sdk/
+umya-spreadsheet/
+assets/
+tests/
+.git/
+.github/
+*.md
+LICENSE

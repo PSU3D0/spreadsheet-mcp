@@ -101,13 +101,27 @@ Regions are cached per sheet. Tools like `read_table` accept a `region_id` to sc
 
 ## Quick Start
 
+### Docker (Recommended)
+
+```bash
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-read-mcp:latest
+```
+
+For stdio mode (e.g., Claude Code):
+```bash
+docker run -i --rm -v /path/to/workbooks:/data ghcr.io/psu3d0/spreadsheet-read-mcp:latest \
+  --transport stdio
+```
+
+### Cargo Install
+
 ```bash
 cargo install spreadsheet-read-mcp
-
 spreadsheet-read-mcp --workspace-root /path/to/workbooks
 ```
 
-Or build from source:
+### Build from Source
+
 ```bash
 cargo run --release -- --workspace-root /path/to/workbooks
 ```
@@ -118,9 +132,22 @@ Use `--transport stdio` for CLI pipelines.
 
 ## MCP Client Configuration
 
-### Claude Desktop
+### Claude Desktop (Docker)
 
 Add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-read-mcp:latest", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+### Claude Desktop (Binary)
+
 ```json
 {
   "mcpServers": {
@@ -132,9 +159,21 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor / VS Code
+### Cursor / VS Code (Docker)
 
-Add to your MCP settings:
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-read-mcp:latest", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+### Cursor / VS Code (Binary)
+
 ```json
 {
   "mcp.servers": {
@@ -146,10 +185,10 @@ Add to your MCP settings:
 }
 ```
 
-### HTTP Mode (any client)
+### HTTP Mode
 
 ```bash
-spreadsheet-read-mcp --workspace-root /data/spreadsheets --http-bind 0.0.0.0:8079
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-read-mcp:latest
 ```
 
 Connect via `POST http://localhost:8079/mcp`.
