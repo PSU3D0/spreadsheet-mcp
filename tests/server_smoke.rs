@@ -57,8 +57,11 @@ async fn server_tool_handlers_return_json() -> Result<()> {
             start_row: 1,
             page_size: 10,
             columns: None,
+            columns_by_header: None,
             include_formulas: true,
             include_styles: false,
+            include_header: true,
+            format: None,
         }))
         .await
     {
@@ -76,6 +79,9 @@ async fn server_tool_handlers_return_json() -> Result<()> {
             columns: None,
             include_formulas: true,
             include_styles: false,
+            columns_by_header: None,
+            include_header: true,
+            format: None,
         }))
         .await
         .expect("page fetch")
@@ -125,6 +131,9 @@ async fn disabled_tools_return_invalid_request() -> Result<()> {
             columns: None,
             include_formulas: true,
             include_styles: false,
+            columns_by_header: None,
+            include_header: true,
+            format: None,
         }))
         .await
     {

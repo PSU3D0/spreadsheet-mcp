@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(transparent)]
 pub struct WorkbookId(pub String);
 
@@ -82,6 +82,7 @@ pub struct SheetOverviewResponse {
     pub sheet_name: String,
     pub narrative: String,
     pub regions: Vec<SheetRegion>,
+    pub detected_regions: Vec<DetectedRegion>,
     pub key_ranges: Vec<String>,
     pub formula_ratio: f32,
     pub notable_features: Vec<String>,
@@ -106,6 +107,18 @@ pub enum RegionKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DetectedRegion {
+    pub id: u32,
+    pub bounds: String,
+    pub header_row: Option<u32>,
+    pub headers: Vec<String>,
+    pub row_count: u32,
+    pub classification: RegionKind,
+    pub region_kind: Option<RegionKind>,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetPageResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
@@ -114,6 +127,9 @@ pub struct SheetPageResponse {
     pub has_more: bool,
     pub next_start_row: Option<u32>,
     pub header_row: Option<RowSnapshot>,
+    pub compact: Option<SheetPageCompact>,
+    pub values_only: Option<SheetPageValues>,
+    pub format: SheetPageFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -141,6 +157,32 @@ pub enum CellValue {
     Bool(bool),
     Error(String),
     Date(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetPageFormat {
+    Full,
+    Compact,
+    ValuesOnly,
+}
+
+impl Default for SheetPageFormat {
+    fn default() -> Self {
+        SheetPageFormat::Full
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SheetPageCompact {
+    pub headers: Vec<String>,
+    pub header_row: Vec<Option<CellValue>>,
+    pub rows: Vec<Vec<Option<CellValue>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SheetPageValues {
+    pub rows: Vec<Vec<Option<CellValue>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -372,6 +414,113 @@ pub struct ManifestSheetStub {
     pub classification: SheetClassification,
     pub candidate_expectations: Vec<String>,
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FindMode {
+    #[default]
+    Value,
+    Label,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelDirection {
+    Right,
+    Below,
+    Any,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FindValueMatch {
+    pub address: String,
+    pub sheet_name: String,
+    pub value: Option<CellValue>,
+    pub row_context: Option<RowContext>,
+    pub neighbors: Option<NeighborValues>,
+    pub label_hit: Option<LabelHit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RowContext {
+    pub headers: Vec<String>,
+    pub values: Vec<Option<CellValue>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NeighborValues {
+    pub left: Option<CellValue>,
+    pub right: Option<CellValue>,
+    pub up: Option<CellValue>,
+    pub down: Option<CellValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LabelHit {
+    pub label_address: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FindValueResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub matches: Vec<FindValueMatch>,
+    pub truncated: bool,
+}
+
+pub type TableRow = BTreeMap<String, Option<CellValue>>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadTableResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub sheet_name: String,
+    pub table_name: Option<String>,
+    pub headers: Vec<String>,
+    pub rows: Vec<TableRow>,
+    pub total_rows: u32,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ColumnTypeSummary {
+    pub name: String,
+    pub inferred_type: String,
+    pub nulls: u32,
+    pub distinct: u32,
+    pub top_values: Vec<String>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub mean: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TableProfileResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub sheet_name: String,
+    pub table_name: Option<String>,
+    pub headers: Vec<String>,
+    pub column_types: Vec<ColumnTypeSummary>,
+    pub row_count: u32,
+    pub samples: Vec<TableRow>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub sheet_name: String,
+    pub values: Vec<RangeValuesEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesEntry {
+    pub range: String,
+    pub rows: Vec<Vec<Option<CellValue>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

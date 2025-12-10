@@ -40,6 +40,7 @@ pub struct SheetCacheEntry {
     pub metrics: SheetMetrics,
     pub style_tags: Vec<String>,
     pub named_ranges: Vec<NamedRangeDescriptor>,
+    pub detected_regions: Vec<crate::model::DetectedRegion>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,11 +142,13 @@ impl WorkbookContext {
             .ok_or_else(|| anyhow!("sheet {} not found", sheet_name))?;
         let (metrics, style_tags) = compute_sheet_metrics(sheet);
         let named_ranges = gather_named_ranges(sheet, book.get_defined_names());
+        let detected_regions = detect_regions_basic(sheet, &metrics);
 
         let entry = Arc::new(SheetCacheEntry {
             metrics,
             style_tags,
             named_ranges,
+            detected_regions,
         });
 
         writer.insert(sheet_name.to_string(), entry.clone());
@@ -246,6 +249,7 @@ impl WorkbookContext {
         let narrative = classification::narrative(&entry.metrics);
         let regions = classification::regions(&entry.metrics);
         let key_ranges = classification::key_ranges(&entry.metrics);
+        let detected_regions = entry.detected_regions.clone();
 
         Ok(SheetOverviewResponse {
             workbook_id: self.id.clone(),
@@ -253,6 +257,7 @@ impl WorkbookContext {
             sheet_name: sheet_name.to_string(),
             narrative,
             regions,
+            detected_regions,
             key_ranges,
             formula_ratio: if entry.metrics.non_empty_cells == 0 {
                 0.0
@@ -261,6 +266,20 @@ impl WorkbookContext {
             },
             notable_features: entry.style_tags.clone(),
         })
+    }
+
+    pub fn detected_region(
+        &self,
+        sheet_name: &str,
+        id: u32,
+    ) -> Result<crate::model::DetectedRegion> {
+        let entry = self.get_sheet_metrics(sheet_name)?;
+        entry
+            .detected_regions
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow!("region {} not found on sheet {}", id, sheet_name))
     }
 }
 
@@ -344,6 +363,44 @@ pub fn compute_sheet_metrics(sheet: &Worksheet) -> (SheetMetrics, Vec<String>) {
         classification,
     };
     (metrics, style_tags)
+}
+
+fn detect_regions_basic(
+    sheet: &Worksheet,
+    metrics: &SheetMetrics,
+) -> Vec<crate::model::DetectedRegion> {
+    if metrics.row_count == 0 || metrics.column_count == 0 {
+        return Vec::new();
+    }
+    let end_col = crate::utils::column_number_to_name(metrics.column_count.max(1));
+    let bounds = format!("A1:{}{}", end_col, metrics.row_count.max(1));
+    vec![crate::model::DetectedRegion {
+        id: 0,
+        bounds,
+        header_row: Some(1),
+        headers: (1..=metrics.column_count)
+            .filter_map(|col| {
+                sheet
+                    .get_cell((1u32, col))
+                    .and_then(|cell| crate::workbook::cell_to_value(cell))
+                    .and_then(|v| match v {
+                        crate::model::CellValue::Text(s) => Some(s),
+                        crate::model::CellValue::Number(n) => Some(n.to_string()),
+                        crate::model::CellValue::Bool(b) => Some(b.to_string()),
+                        crate::model::CellValue::Date(d) => Some(d),
+                        crate::model::CellValue::Error(e) => Some(e),
+                    })
+            })
+            .collect(),
+        row_count: metrics.row_count,
+        classification: crate::model::RegionKind::Table,
+        region_kind: Some(match metrics.classification {
+            crate::model::SheetClassification::Calculator => crate::model::RegionKind::Calculator,
+            crate::model::SheetClassification::Metadata => crate::model::RegionKind::Metadata,
+            _ => crate::model::RegionKind::Table,
+        }),
+        confidence: 0.5,
+    }]
 }
 
 fn gather_named_ranges(

@@ -96,8 +96,11 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             start_row: 2,
             page_size: 5,
             columns: Some(vec!["A".into(), "D".into(), "E".into(), "G".into()]),
+            columns_by_header: None,
             include_formulas: true,
             include_styles: true,
+            include_header: true,
+            format: None,
         },
     )
     .await?;

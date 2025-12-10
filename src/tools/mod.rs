@@ -5,10 +5,11 @@ use crate::model::*;
 use crate::state::AppState;
 use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Result, anyhow};
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 const DEFAULT_TRACE_PAGE_SIZE: usize = 20;
@@ -103,6 +104,10 @@ fn default_include_formulas() -> bool {
     true
 }
 
+fn default_include_header() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetPageParams {
     pub workbook_id: WorkbookId,
@@ -113,10 +118,143 @@ pub struct SheetPageParams {
     pub page_size: u32,
     #[serde(default)]
     pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub columns_by_header: Option<Vec<String>>,
     #[serde(default = "default_include_formulas")]
     pub include_formulas: bool,
     #[serde(default)]
     pub include_styles: bool,
+    #[serde(default = "default_include_header")]
+    pub include_header: bool,
+    #[serde(default)]
+    pub format: Option<SheetPageFormat>,
+}
+
+impl Default for SheetPageParams {
+    fn default() -> Self {
+        SheetPageParams {
+            workbook_id: WorkbookId(String::new()),
+            sheet_name: String::new(),
+            start_row: default_start_row(),
+            page_size: default_page_size(),
+            columns: None,
+            columns_by_header: None,
+            include_formulas: default_include_formulas(),
+            include_styles: false,
+            include_header: default_include_header(),
+            format: None,
+        }
+    }
+}
+
+fn default_find_limit() -> u32 {
+    50
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FindValueParams {
+    pub workbook_id: WorkbookId,
+    pub query: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub mode: Option<FindMode>,
+    #[serde(default)]
+    pub match_mode: Option<String>,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub region_id: Option<u32>,
+    #[serde(default)]
+    pub table_name: Option<String>,
+    #[serde(default)]
+    pub value_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub search_headers_only: bool,
+    #[serde(default)]
+    pub direction: Option<LabelDirection>,
+    #[serde(default = "default_find_limit")]
+    pub limit: u32,
+}
+
+impl Default for FindValueParams {
+    fn default() -> Self {
+        Self {
+            workbook_id: WorkbookId(String::new()),
+            query: String::new(),
+            label: None,
+            mode: None,
+            match_mode: None,
+            case_sensitive: false,
+            sheet_name: None,
+            region_id: None,
+            table_name: None,
+            value_types: None,
+            search_headers_only: false,
+            direction: None,
+            limit: default_find_limit(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct ReadTableParams {
+    pub workbook_id: WorkbookId,
+    #[serde(default)]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub table_name: Option<String>,
+    #[serde(default)]
+    pub region_id: Option<u32>,
+    #[serde(default)]
+    pub range: Option<String>,
+    #[serde(default)]
+    pub header_row: Option<u32>,
+    #[serde(default)]
+    pub header_rows: Option<u32>,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub filters: Option<Vec<TableFilter>>,
+    #[serde(default)]
+    pub sample_mode: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct TableFilter {
+    pub column: String,
+    pub op: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct TableProfileParams {
+    pub workbook_id: WorkbookId,
+    #[serde(default)]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub region_id: Option<u32>,
+    #[serde(default)]
+    pub table_name: Option<String>,
+    #[serde(default)]
+    pub sample_mode: Option<String>,
+    #[serde(default)]
+    pub sample_size: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RangeValuesParams {
+    pub workbook_id: WorkbookId,
+    pub sheet_name: String,
+    pub ranges: Vec<String>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
 }
 
 pub async fn sheet_page(
@@ -129,12 +267,15 @@ pub async fn sheet_page(
 
     let workbook = state.open_workbook(&params.workbook_id).await?;
     let metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
+    let format = params.format.unwrap_or_default();
 
     let start_row = params.start_row.max(1);
     let page_size = params.page_size.min(500);
     let include_formulas = params.include_formulas;
     let include_styles = params.include_styles;
     let columns = params.columns.clone();
+    let columns_by_header = params.columns_by_header.clone();
+    let include_header = params.include_header;
 
     let page = workbook.with_sheet(&params.sheet_name, |sheet| {
         build_page(
@@ -142,8 +283,10 @@ pub async fn sheet_page(
             start_row,
             page_size,
             columns.clone(),
+            columns_by_header.clone(),
             include_formulas,
             include_styles,
+            include_header,
         )
     })?;
 
@@ -154,14 +297,41 @@ pub async fn sheet_page(
         None
     };
 
+    let compact_payload = if matches!(format, SheetPageFormat::Compact) {
+        Some(build_compact_payload(
+            &page.header,
+            &page.rows,
+            include_header,
+        ))
+    } else {
+        None
+    };
+
+    let values_only_payload = if matches!(format, SheetPageFormat::ValuesOnly) {
+        Some(build_values_only_payload(
+            &page.header,
+            &page.rows,
+            include_header,
+        ))
+    } else {
+        None
+    };
+
     let response = SheetPageResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name,
-        rows: page.rows,
+        rows: if matches!(format, SheetPageFormat::Full) {
+            page.rows
+        } else {
+            Vec::new()
+        },
         has_more,
         next_start_row,
-        header_row: page.header,
+        header_row: if include_header { page.header } else { None },
+        compact: compact_payload,
+        values_only: values_only_payload,
+        format,
     };
     Ok(response)
 }
@@ -311,14 +481,27 @@ fn build_page(
     start_row: u32,
     page_size: u32,
     columns: Option<Vec<String>>,
+    columns_by_header: Option<Vec<String>>,
     include_formulas: bool,
     include_styles: bool,
+    include_header: bool,
 ) -> PageBuildResult {
     let max_col = sheet.get_highest_column();
     let end_row = (start_row + page_size - 1).min(sheet.get_highest_row().max(start_row));
-    let column_indices = resolve_columns(columns.as_ref(), max_col);
+    let column_indices =
+        resolve_columns_with_headers(sheet, columns.as_ref(), columns_by_header.as_ref(), max_col);
 
-    let header = build_row_snapshot(sheet, 1, &column_indices, include_formulas, include_styles);
+    let header = if include_header {
+        Some(build_row_snapshot(
+            sheet,
+            1,
+            &column_indices,
+            include_formulas,
+            include_styles,
+        ))
+    } else {
+        None
+    };
 
     let mut rows = Vec::new();
     for row_idx in start_row..=end_row {
@@ -333,7 +516,7 @@ fn build_page(
 
     PageBuildResult {
         rows,
-        header: Some(header),
+        header,
         end_row,
     }
 }
@@ -347,7 +530,7 @@ fn build_row_snapshot(
 ) -> RowSnapshot {
     let mut cells = Vec::new();
     for &col in columns {
-        if let Some(cell) = sheet.get_cell((row_index, col)) {
+        if let Some(cell) = sheet.get_cell((col, row_index)) {
             cells.push(build_cell_snapshot(cell, include_formulas, include_styles));
         } else {
             let address = crate::utils::cell_address(col, row_index);
@@ -439,6 +622,129 @@ fn resolve_columns(columns: Option<&Vec<String>>, max_column: u32) -> Vec<u32> {
 
     indices.into_iter().collect()
 }
+
+fn resolve_columns_with_headers(
+    sheet: &umya_spreadsheet::Worksheet,
+    columns: Option<&Vec<String>>,
+    columns_by_header: Option<&Vec<String>>,
+    max_column: u32,
+) -> Vec<u32> {
+    if columns_by_header.is_none() {
+        return resolve_columns(columns, max_column);
+    }
+
+    let mut selected = Vec::new();
+    let header_targets: Vec<String> = columns_by_header
+        .unwrap()
+        .iter()
+        .map(|h| h.trim().to_ascii_lowercase())
+        .collect();
+
+    for col_idx in 1..=max_column.max(1) {
+        let header_cell = sheet.get_cell((col_idx, 1u32));
+        let header_value = header_cell
+            .and_then(|c| cell_to_value(c))
+            .map(cell_value_to_string_lower);
+        if let Some(hval) = header_value {
+            if header_targets.iter().any(|target| target == &hval) {
+                selected.push(col_idx);
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        resolve_columns(columns, max_column)
+    } else {
+        selected
+    }
+}
+
+fn cell_value_to_string_lower(value: CellValue) -> String {
+    match value {
+        CellValue::Text(s) => s.to_ascii_lowercase(),
+        CellValue::Number(n) => n.to_string().to_ascii_lowercase(),
+        CellValue::Bool(b) => b.to_string(),
+        CellValue::Error(e) => e.to_ascii_lowercase(),
+        CellValue::Date(d) => d.to_ascii_lowercase(),
+    }
+}
+
+fn build_compact_payload(
+    header: &Option<RowSnapshot>,
+    rows: &[RowSnapshot],
+    include_header: bool,
+) -> SheetPageCompact {
+    let headers = derive_headers(header, rows);
+    let header_row = if include_header {
+        header
+            .as_ref()
+            .map(|h| h.cells.iter().map(|c| c.value.clone()).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let data_rows = rows
+        .iter()
+        .map(|row| {
+            let mut vals: Vec<Option<CellValue>> = Vec::new();
+            vals.push(Some(CellValue::Number(row.row_index as f64)));
+            vals.extend(row.cells.iter().map(|c| c.value.clone()));
+            vals
+        })
+        .collect();
+
+    SheetPageCompact {
+        headers,
+        header_row,
+        rows: data_rows,
+    }
+}
+
+fn build_values_only_payload(
+    header: &Option<RowSnapshot>,
+    rows: &[RowSnapshot],
+    include_header: bool,
+) -> SheetPageValues {
+    let mut data = Vec::new();
+    if include_header {
+        if let Some(h) = header {
+            data.push(h.cells.iter().map(|c| c.value.clone()).collect());
+        }
+    }
+    for row in rows {
+        data.push(row.cells.iter().map(|c| c.value.clone()).collect());
+    }
+
+    SheetPageValues { rows: data }
+}
+
+fn derive_headers(header: &Option<RowSnapshot>, rows: &[RowSnapshot]) -> Vec<String> {
+    if let Some(h) = header {
+        let mut headers: Vec<String> = h
+            .cells
+            .iter()
+            .map(|c| match &c.value {
+                Some(CellValue::Text(t)) => t.clone(),
+                Some(CellValue::Number(n)) => n.to_string(),
+                Some(CellValue::Bool(b)) => b.to_string(),
+                Some(CellValue::Date(d)) => d.clone(),
+                Some(CellValue::Error(e)) => e.clone(),
+                None => c.address.clone(),
+            })
+            .collect();
+        headers.insert(0, "Row".to_string());
+        headers
+    } else if let Some(first) = rows.first() {
+        let mut headers = Vec::new();
+        headers.push("Row".to_string());
+        for cell in &first.cells {
+            headers.push(cell.address.clone());
+        }
+        headers
+    } else {
+        vec![]
+    }
+}
 fn default_stats_sample() -> usize {
     500
 }
@@ -505,6 +811,560 @@ fn parse_address(address: &str) -> Option<(u32, u32)> {
         (Some(c), Some(r)) => Some((c, r)),
         _ => None,
     }
+}
+
+#[derive(Clone)]
+struct TableTarget {
+    sheet_name: String,
+    table_name: Option<String>,
+    range: ((u32, u32), (u32, u32)),
+}
+
+fn resolve_table_target(
+    workbook: &WorkbookContext,
+    params: &ReadTableParams,
+) -> Result<TableTarget> {
+    if let Some(region_id) = params.region_id {
+        if let Some(sheet) = &params.sheet_name {
+            if let Ok(region) = workbook.detected_region(sheet, region_id) {
+                return Ok(TableTarget {
+                    sheet_name: sheet.clone(),
+                    table_name: None,
+                    range: parse_range(&region.bounds).unwrap_or(((1, 1), (1, 1))),
+                });
+            }
+        }
+    }
+
+    if let Some(table_name) = &params.table_name {
+        let items = workbook.named_items()?;
+        for item in items {
+            if item.name.eq_ignore_ascii_case(table_name) {
+                let mut sheet_name = item
+                    .sheet_name
+                    .clone()
+                    .or_else(|| params.sheet_name.clone())
+                    .unwrap_or_else(|| workbook.sheet_names().get(0).cloned().unwrap_or_default());
+                let refers_to = item.refers_to.trim_start_matches('=');
+                let mut range_part = refers_to;
+                if let Some((sheet_part, rest)) = refers_to.split_once('!') {
+                    sheet_name = sheet_part.trim_matches('\'').to_string();
+                    range_part = rest;
+                }
+                if let Some(range) = parse_range(range_part) {
+                    return Ok(TableTarget {
+                        sheet_name,
+                        table_name: Some(item.name.clone()),
+                        range,
+                    });
+                }
+            }
+        }
+    }
+
+    let sheet_name = params
+        .sheet_name
+        .clone()
+        .unwrap_or_else(|| workbook.sheet_names().get(0).cloned().unwrap_or_default());
+
+    if let Some(rng) = &params.range {
+        if let Some(range) = parse_range(rng) {
+            return Ok(TableTarget {
+                sheet_name,
+                table_name: None,
+                range,
+            });
+        }
+    }
+
+    let metrics = workbook.get_sheet_metrics(&sheet_name)?;
+    let end_col = metrics.metrics.column_count.max(1);
+    let end_row = metrics.metrics.row_count.max(1);
+    Ok(TableTarget {
+        sheet_name,
+        table_name: None,
+        range: ((1, 1), (end_col, end_row)),
+    })
+}
+
+fn extract_table_rows(
+    sheet: &umya_spreadsheet::Worksheet,
+    target: &TableTarget,
+    header_row: Option<u32>,
+    header_rows: Option<u32>,
+    columns: Option<Vec<String>>,
+    filters: Option<Vec<TableFilter>>,
+    limit: usize,
+    offset: usize,
+    sample_mode: &str,
+) -> Result<(Vec<String>, Vec<TableRow>, u32)> {
+    let ((start_col, start_row), (end_col, end_row)) = target.range;
+    let header_start = header_row.unwrap_or(start_row);
+    let header_rows_count = header_rows.unwrap_or(1).max(1);
+    let data_start_row = header_start + header_rows_count;
+    let column_indices: Vec<u32> = if let Some(cols) = columns.as_ref() {
+        resolve_columns(Some(cols), end_col).into_iter().collect()
+    } else {
+        (start_col..=end_col).collect()
+    };
+
+    let headers = build_headers(sheet, &column_indices, header_start, header_rows_count);
+    let mut all_rows: Vec<TableRow> = Vec::new();
+
+    for row_idx in data_start_row..=end_row {
+        let mut row = BTreeMap::new();
+        for (i, col_idx) in column_indices.iter().enumerate() {
+            let header = headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("Col{col_idx}"));
+            let value = sheet
+                .get_cell((*col_idx, row_idx))
+                .and_then(|cell| cell_to_value(cell));
+            row.insert(header, value);
+        }
+        if !row_passes_filters(&row, filters.as_ref()) {
+            continue;
+        }
+        all_rows.push(row);
+    }
+
+    let total_rows = all_rows.len() as u32;
+    let rows = sample_rows(all_rows, limit, offset, sample_mode);
+
+    Ok((headers, rows, total_rows))
+}
+
+fn build_headers(
+    sheet: &umya_spreadsheet::Worksheet,
+    columns: &[u32],
+    header_start: u32,
+    header_rows: u32,
+) -> Vec<String> {
+    let mut headers = Vec::new();
+    for col_idx in columns {
+        let mut parts = Vec::new();
+        for h in header_start..(header_start + header_rows) {
+            if let Some(value) = sheet
+                .get_cell((*col_idx, h))
+                .and_then(|cell| cell_to_value(cell))
+            {
+                parts.push(match value {
+                    CellValue::Text(s) => s,
+                    CellValue::Number(n) => n.to_string(),
+                    CellValue::Bool(b) => b.to_string(),
+                    CellValue::Error(e) => e,
+                    CellValue::Date(d) => d,
+                });
+            }
+        }
+        if parts.is_empty() {
+            headers.push(crate::utils::column_number_to_name(*col_idx));
+        } else {
+            headers.push(parts.join(" / "));
+        }
+    }
+    headers
+}
+
+fn row_passes_filters(row: &TableRow, filters: Option<&Vec<TableFilter>>) -> bool {
+    if let Some(filters) = filters {
+        for filter in filters {
+            if let Some(value) = row.get(&filter.column) {
+                match filter.op.as_str() {
+                    "eq" => {
+                        if !value_eq(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    "contains" => {
+                        if !value_contains(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    "gt" => {
+                        if !value_gt(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    "lt" => {
+                        if !value_lt(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    true
+}
+
+fn value_eq(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    match (cell, cmp) {
+        (Some(CellValue::Text(s)), serde_json::Value::String(t)) => s == t,
+        (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
+            v.as_f64().map_or(false, |f| (*n - f).abs() < f64::EPSILON)
+        }
+        (Some(CellValue::Bool(b)), serde_json::Value::Bool(v)) => b == v,
+        _ => false,
+    }
+}
+
+fn value_contains(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    if let (Some(CellValue::Text(s)), serde_json::Value::String(t)) = (cell, cmp) {
+        return s.to_ascii_lowercase().contains(&t.to_ascii_lowercase());
+    }
+    false
+}
+
+fn value_gt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    match (cell, cmp) {
+        (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
+            v.as_f64().map_or(false, |f| *n > f)
+        }
+        _ => false,
+    }
+}
+
+fn value_lt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    match (cell, cmp) {
+        (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
+            v.as_f64().map_or(false, |f| *n < f)
+        }
+        _ => false,
+    }
+}
+
+fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: &str) -> Vec<TableRow> {
+    if rows.is_empty() {
+        return rows;
+    }
+
+    match mode {
+        "distributed" => {
+            if limit == 0 {
+                return Vec::new();
+            }
+            let mut result = Vec::new();
+            let span = rows.len().saturating_sub(1);
+            let step = std::cmp::max(1, span / std::cmp::max(1, limit.saturating_sub(1)));
+            let mut idx = offset;
+            while idx < rows.len() && result.len() < limit {
+                result.push(rows[idx].clone());
+                idx += step;
+            }
+            if result.len() < limit {
+                if let Some(last) = rows.last() {
+                    result.push(last.clone());
+                }
+            }
+            result
+        }
+        "last" => {
+            let start = rows.len().saturating_sub(limit + offset);
+            rows.into_iter().skip(start + offset).take(limit).collect()
+        }
+        _ => rows.into_iter().skip(offset).take(limit).collect(),
+    }
+}
+
+fn summarize_columns(headers: &[String], rows: &[TableRow]) -> Vec<ColumnTypeSummary> {
+    let mut summaries = Vec::new();
+    for header in headers {
+        let mut nulls = 0u32;
+        let mut distinct_set: HashSet<String> = HashSet::new();
+        let mut values: Vec<f64> = Vec::new();
+        let mut top_counts: HashMap<String, u32> = HashMap::new();
+
+        for row in rows {
+            match row.get(header) {
+                Some(Some(CellValue::Number(n))) => {
+                    values.push(*n);
+                    let key = n.to_string();
+                    *top_counts.entry(key).or_default() += 1;
+                }
+                Some(Some(CellValue::Text(s))) => {
+                    distinct_set.insert(s.clone());
+                    *top_counts.entry(s.clone()).or_default() += 1;
+                }
+                Some(Some(CellValue::Bool(b))) => {
+                    let key = b.to_string();
+                    distinct_set.insert(key.clone());
+                    *top_counts.entry(key).or_default() += 1;
+                }
+                Some(Some(CellValue::Date(d))) => {
+                    distinct_set.insert(d.clone());
+                    *top_counts.entry(d.clone()).or_default() += 1;
+                }
+                Some(Some(CellValue::Error(e))) => {
+                    distinct_set.insert(e.clone());
+                    *top_counts.entry(e.clone()).or_default() += 1;
+                }
+                _ => {
+                    nulls += 1;
+                }
+            }
+        }
+
+        let inferred_type = if !values.is_empty() {
+            "number"
+        } else if !distinct_set.is_empty() {
+            "text"
+        } else {
+            "unknown"
+        }
+        .to_string();
+
+        let min = values.iter().cloned().reduce(f64::min);
+        let max = values.iter().cloned().reduce(f64::max);
+        let mean = if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum::<f64>() / values.len() as f64)
+        };
+
+        let mut top_values: Vec<(String, u32)> = top_counts.into_iter().collect();
+        top_values.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_values = top_values.into_iter().take(3).map(|(v, _)| v).collect();
+
+        summaries.push(ColumnTypeSummary {
+            name: header.clone(),
+            inferred_type,
+            nulls,
+            distinct: distinct_set.len() as u32,
+            top_values,
+            min,
+            max,
+            mean,
+        });
+    }
+    summaries
+}
+
+fn collect_value_matches(
+    sheet: &umya_spreadsheet::Worksheet,
+    sheet_name: &str,
+    mode: &FindMode,
+    match_mode: &str,
+    direction: &LabelDirection,
+    params: &FindValueParams,
+    region: Option<&DetectedRegion>,
+    default_bounds: ((u32, u32), (u32, u32)),
+) -> Result<Vec<FindValueMatch>> {
+    let mut results = Vec::new();
+    let regex = if match_mode == "regex" {
+        Regex::new(&params.query).ok()
+    } else {
+        None
+    };
+    let bounds = region
+        .as_ref()
+        .and_then(|r| parse_range(&r.bounds))
+        .unwrap_or(default_bounds);
+
+    for cell in sheet.get_cell_collection() {
+        let coord = cell.get_coordinate();
+        let col = *coord.get_col_num();
+        let row = *coord.get_row_num();
+        if col < bounds.0.0 || col > bounds.1.0 || row < bounds.0.1 || row > bounds.1.1 {
+            continue;
+        }
+
+        let value = cell_to_value(cell);
+        if let Some(ref allowed) = params.value_types {
+            if !value_type_matches(&value, allowed) {
+                continue;
+            }
+        }
+        if matches!(mode, FindMode::Value) {
+            if !value_matches(
+                &value,
+                &params.query,
+                match_mode,
+                params.case_sensitive,
+                &regex,
+            ) {
+                continue;
+            }
+        } else if let Some(label) = &params.label {
+            if !label_matches(cell, label, match_mode, params.case_sensitive, &regex) {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        let neighbors = collect_neighbors(sheet, row, col);
+        let (label_hit, match_value) = if matches!(mode, FindMode::Label) {
+            let target_value = match direction {
+                LabelDirection::Right => sheet.get_cell((col + 1, row)),
+                LabelDirection::Below => sheet.get_cell((col, row + 1)),
+                LabelDirection::Any => sheet
+                    .get_cell((col + 1, row))
+                    .or_else(|| sheet.get_cell((col, row + 1))),
+            }
+            .and_then(|c| cell_to_value(c));
+            if target_value.is_none() {
+                continue;
+            }
+            (
+                Some(LabelHit {
+                    label_address: coord.get_coordinate(),
+                    label: label_from_cell(cell),
+                }),
+                target_value,
+            )
+        } else {
+            (None, value.clone())
+        };
+
+        let row_context = build_row_context(sheet, row, col);
+
+        results.push(FindValueMatch {
+            address: coord.get_coordinate(),
+            sheet_name: sheet_name.to_string(),
+            value: match_value,
+            row_context,
+            neighbors,
+            label_hit,
+        });
+    }
+
+    Ok(results)
+}
+
+fn label_from_cell(cell: &umya_spreadsheet::Cell) -> String {
+    cell_to_value(cell)
+        .and_then(|v| match v {
+            CellValue::Text(s) => Some(s),
+            CellValue::Number(n) => Some(n.to_string()),
+            CellValue::Bool(b) => Some(b.to_string()),
+            CellValue::Date(d) => Some(d),
+            CellValue::Error(e) => Some(e),
+        })
+        .unwrap_or_else(|| cell.get_value().to_string())
+}
+
+fn value_matches(
+    value: &Option<CellValue>,
+    query: &str,
+    mode: &str,
+    case_sensitive: bool,
+    regex: &Option<Regex>,
+) -> bool {
+    if value.is_none() {
+        return false;
+    }
+    let haystack = cell_value_to_string_lower(value.clone().unwrap());
+    let needle = if case_sensitive {
+        query.to_string()
+    } else {
+        query.to_ascii_lowercase()
+    };
+
+    match mode {
+        "exact" => haystack == needle,
+        "regex" => regex
+            .as_ref()
+            .map(|re| re.is_match(&haystack))
+            .unwrap_or(false),
+        _ => haystack.contains(&needle),
+    }
+}
+
+fn label_matches(
+    cell: &umya_spreadsheet::Cell,
+    label: &str,
+    mode: &str,
+    case_sensitive: bool,
+    regex: &Option<Regex>,
+) -> bool {
+    let value = cell_to_value(cell);
+    if value.is_none() {
+        return false;
+    }
+    let haystack = cell_value_to_string_lower(value.unwrap());
+    let needle = if case_sensitive {
+        label.to_string()
+    } else {
+        label.to_ascii_lowercase()
+    };
+    match mode {
+        "exact" => haystack == needle,
+        "regex" => regex
+            .as_ref()
+            .map(|re| re.is_match(&haystack))
+            .unwrap_or(false),
+        _ => haystack.contains(&needle),
+    }
+}
+
+fn value_type_matches(value: &Option<CellValue>, allowed: &[String]) -> bool {
+    if value.is_none() {
+        return allowed.iter().any(|v| v == "null");
+    }
+    match value.as_ref().unwrap() {
+        CellValue::Text(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("text")),
+        CellValue::Number(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("number")),
+        CellValue::Bool(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("bool")),
+        CellValue::Date(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("date")),
+        CellValue::Error(_) => true,
+    }
+}
+
+fn collect_neighbors(
+    sheet: &umya_spreadsheet::Worksheet,
+    row: u32,
+    col: u32,
+) -> Option<NeighborValues> {
+    Some(NeighborValues {
+        left: if col > 1 {
+            sheet
+                .get_cell((col - 1, row))
+                .and_then(|c| cell_to_value(c))
+        } else {
+            None
+        },
+        right: sheet
+            .get_cell((col + 1, row))
+            .and_then(|c| cell_to_value(c)),
+        up: if row > 1 {
+            sheet
+                .get_cell((col, row - 1))
+                .and_then(|c| cell_to_value(c))
+        } else {
+            None
+        },
+        down: sheet
+            .get_cell((col, row + 1))
+            .and_then(|c| cell_to_value(c)),
+    })
+}
+
+fn build_row_context(
+    sheet: &umya_spreadsheet::Worksheet,
+    row: u32,
+    col: u32,
+) -> Option<RowContext> {
+    let header_value = sheet
+        .get_cell((col, 1u32))
+        .and_then(|c| cell_to_value(c))
+        .map(|v| match v {
+            CellValue::Text(s) => s,
+            CellValue::Number(n) => n.to_string(),
+            CellValue::Bool(b) => b.to_string(),
+            CellValue::Date(d) => d,
+            CellValue::Error(e) => e,
+        })
+        .unwrap_or_else(|| format!("Col{}", col));
+    let value = sheet
+        .get_cell((col, row))
+        .and_then(|c| cell_to_value(c));
+    Some(RowContext {
+        headers: vec![header_value],
+        values: vec![value],
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -631,6 +1491,217 @@ pub async fn sheet_styles(
         conditional_rules: Vec::new(),
     };
     Ok(response)
+}
+
+pub async fn range_values(
+    state: Arc<AppState>,
+    params: RangeValuesParams,
+) -> Result<RangeValuesResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let include_headers = params.include_headers.unwrap_or(false);
+    let values = workbook.with_sheet(&params.sheet_name, |sheet| {
+        params
+            .ranges
+            .iter()
+            .filter_map(|range| {
+                parse_range(range).map(|((start_col, start_row), (end_col, end_row))| {
+                    let mut rows = Vec::new();
+                    for r in start_row..=end_row {
+                        let mut row_vals = Vec::new();
+                        for c in start_col..=end_col {
+                            if include_headers && r == start_row && start_row == 1 {
+                                row_vals.push(
+                                    sheet
+                                        .get_cell((c, 1u32))
+                                        .and_then(|cell| cell_to_value(cell)),
+                                );
+                            } else {
+                                row_vals.push(sheet.get_cell((c, r)).and_then(|cell| cell_to_value(cell)));
+                            }
+                        }
+                        rows.push(row_vals);
+                    }
+                    RangeValuesEntry {
+                        range: range.clone(),
+                        rows,
+                    }
+                })
+            })
+            .collect()
+    })?;
+
+    Ok(RangeValuesResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        sheet_name: params.sheet_name,
+        values,
+    })
+}
+
+pub async fn find_value(
+    state: Arc<AppState>,
+    params: FindValueParams,
+) -> Result<FindValueResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    let mode = params.mode.clone().unwrap_or_else(|| {
+        if params.label.is_some() {
+            FindMode::Label
+        } else {
+            FindMode::Value
+        }
+    });
+    let match_mode = params
+        .match_mode
+        .as_deref()
+        .unwrap_or("contains")
+        .to_ascii_lowercase();
+    let direction = params.direction.clone().unwrap_or(LabelDirection::Any);
+
+    let target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
+        vec![sheet.clone()]
+    } else {
+        workbook.sheet_names()
+    };
+
+    for sheet_name in target_sheets {
+        let metrics_entry = workbook.get_sheet_metrics(&sheet_name)?;
+        let default_bounds = (
+            (1, 1),
+            (
+                metrics_entry.metrics.column_count.max(1),
+                metrics_entry.metrics.row_count.max(1),
+            ),
+        );
+        let region_bounds = params
+            .region_id
+            .and_then(|id| workbook.detected_region(&sheet_name, id).ok());
+        let sheet_matches = workbook.with_sheet(&sheet_name, |sheet| {
+            collect_value_matches(
+                sheet,
+                &sheet_name,
+                &mode,
+                &match_mode,
+                &direction,
+                &params,
+                region_bounds.as_ref(),
+                default_bounds,
+            )
+        })??;
+        matches.extend(sheet_matches);
+        if matches.len() as u32 >= params.limit {
+            truncated = true;
+            matches.truncate(params.limit as usize);
+            break;
+        }
+    }
+
+    Ok(FindValueResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        matches,
+        truncated,
+    })
+}
+
+pub async fn read_table(
+    state: Arc<AppState>,
+    params: ReadTableParams,
+) -> Result<ReadTableResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let resolved = resolve_table_target(&workbook, &params)?;
+    let limit = params.limit.unwrap_or(100) as usize;
+    let offset = params.offset.unwrap_or(0) as usize;
+    let sample_mode = params
+        .sample_mode
+        .clone()
+        .unwrap_or_else(|| "first".to_string());
+
+    let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
+        extract_table_rows(
+            sheet,
+            &resolved,
+            params.header_row,
+            params.header_rows,
+            params.columns.clone(),
+            params.filters.clone(),
+            limit,
+            offset,
+            &sample_mode,
+        )
+    })??;
+
+    let has_more = offset + rows.len() < total_rows as usize;
+
+    Ok(ReadTableResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        sheet_name: resolved.sheet_name,
+        table_name: resolved.table_name,
+        headers,
+        rows,
+        total_rows,
+        has_more,
+    })
+}
+
+pub async fn table_profile(
+    state: Arc<AppState>,
+    params: TableProfileParams,
+) -> Result<TableProfileResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let resolved = resolve_table_target(
+        &workbook,
+        &ReadTableParams {
+            workbook_id: params.workbook_id.clone(),
+            sheet_name: params.sheet_name.clone(),
+            table_name: params.table_name.clone(),
+            region_id: params.region_id,
+            range: None,
+            header_row: None,
+            header_rows: None,
+            columns: None,
+            filters: None,
+            sample_mode: params.sample_mode.clone(),
+            limit: params.sample_size,
+            offset: Some(0),
+        },
+    )?;
+
+    let sample_size = params.sample_size.unwrap_or(10) as usize;
+    let sample_mode = params
+        .sample_mode
+        .clone()
+        .unwrap_or_else(|| "distributed".to_string());
+
+    let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
+        extract_table_rows(
+            sheet,
+            &resolved,
+            None,
+            None,
+            None,
+            None,
+            sample_size,
+            0,
+            &sample_mode,
+        )
+    })??;
+
+    let column_types = summarize_columns(&headers, &rows);
+
+    Ok(TableProfileResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        sheet_name: resolved.sheet_name,
+        table_name: resolved.table_name,
+        headers,
+        column_types,
+        row_count: total_rows,
+        samples: rows,
+        notes: Vec::new(),
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -793,7 +1864,8 @@ fn build_trace_layers(
     config: &TraceConfig<'_>,
     cursor: Option<TraceCursor>,
 ) -> Result<(Vec<TraceLayer>, Option<TraceCursor>, Vec<String>)> {
-    let layer_links = collect_layer_links(graph, config.direction, config.origin, config.depth_limit);
+    let layer_links =
+        collect_layer_links(graph, config.direction, config.origin, config.depth_limit);
     let mut layers = Vec::new();
     let mut next_cursor = None;
     let mut notes = Vec::new();
@@ -1099,9 +2171,10 @@ fn build_range_highlights(details: &[NeighborDetail]) -> Vec<TraceRangeHighlight
     let mut by_column: HashMap<u32, Vec<&NeighborDetail>> = HashMap::new();
     for detail in details {
         if let (Some(col), Some(_row)) = (detail.column, detail.row)
-            && !detail.external {
-                by_column.entry(col).or_default().push(detail);
-            }
+            && !detail.external
+        {
+            by_column.entry(col).or_default().push(detail);
+        }
     }
 
     for column_entries in by_column.values_mut() {
@@ -1151,17 +2224,18 @@ fn make_range_highlight(details: &[&NeighborDetail]) -> TraceRangeHighlight {
                 formulas += 1;
                 if let Some(formula) = &detail.formula
                     && sample_formulas.len() < TRACE_RANGE_FORMULA_SAMPLES
-                        && !sample_formulas.contains(formula)
-                    {
-                        sample_formulas.push(formula.clone());
-                    }
+                    && !sample_formulas.contains(formula)
+                {
+                    sample_formulas.push(formula.clone());
+                }
             }
             TraceCellKind::Literal => {
                 literals += 1;
                 if let Some(value) = &detail.value
-                    && sample_values.len() < TRACE_RANGE_VALUE_SAMPLES {
-                        sample_values.push(value.clone());
-                    }
+                    && sample_values.len() < TRACE_RANGE_VALUE_SAMPLES
+                {
+                    sample_values.push(value.clone());
+                }
             }
             TraceCellKind::Blank => blanks += 1,
             TraceCellKind::External => {}

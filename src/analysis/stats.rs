@@ -32,9 +32,7 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
 
     for col in 1..=max_col {
         let column_name = column_number_to_name(col);
-        let header = sheet
-            .get_cell((1u32, col))
-            .and_then(cell_to_value);
+        let header = sheet.get_cell((1u32, col)).and_then(cell_to_value);
         let mut numeric_values = Vec::new();
         let mut text_values = Vec::new();
         let mut samples = Vec::new();
@@ -43,25 +41,27 @@ pub fn compute_sheet_statistics(sheet: &Worksheet, _sample_rows: usize) -> Sheet
 
         for row in 1..=max_row {
             if let Some(cell) = sheet.get_cell((row, col))
-                && let Some(value) = cell_to_value(cell) {
-                    filled_cells += 1;
-                    match value.clone() {
-                        CellValue::Number(n) => numeric_values.push(n),
-                        CellValue::Bool(_)
-                        | CellValue::Text(_)
-                        | CellValue::Date(_)
-                        | CellValue::Error(_) => {
-                            if let CellValue::Text(ref s) = value
-                                && !unique_values.insert(s.clone()) {
-                                    duplicate_flag = true;
-                                }
-                            text_values.push(value.clone());
+                && let Some(value) = cell_to_value(cell)
+            {
+                filled_cells += 1;
+                match value.clone() {
+                    CellValue::Number(n) => numeric_values.push(n),
+                    CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::Date(_)
+                    | CellValue::Error(_) => {
+                        if let CellValue::Text(ref s) = value
+                            && !unique_values.insert(s.clone())
+                        {
+                            duplicate_flag = true;
                         }
-                    }
-                    if samples.len() < 5 {
-                        samples.push(value);
+                        text_values.push(value.clone());
                     }
                 }
+                if samples.len() < 5 {
+                    samples.push(value);
+                }
+            }
         }
 
         let nulls = max_row - (numeric_values.len() as u32 + text_values.len() as u32);

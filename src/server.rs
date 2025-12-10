@@ -1,8 +1,9 @@
 use crate::config::ServerConfig;
 use crate::model::{
-    CloseWorkbookResponse, FindFormulaResponse, FormulaTraceResponse, ManifestStubResponse,
-    NamedRangesResponse, SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse,
-    SheetPageResponse, SheetStatisticsResponse, SheetStylesResponse, VolatileScanResponse,
+    CloseWorkbookResponse, FindFormulaResponse, FindValueResponse, FormulaTraceResponse,
+    ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
+    SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
+    SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
     WorkbookDescription, WorkbookListResponse,
 };
 use crate::state::AppState;
@@ -129,6 +130,64 @@ impl SpreadsheetServer {
         self.ensure_tool_enabled("sheet_page")
             .map_err(to_mcp_error)?;
         tools::sheet_page(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "find_value", description = "Search cell values or labels")]
+    pub async fn find_value(
+        &self,
+        Parameters(params): Parameters<tools::FindValueParams>,
+    ) -> Result<Json<FindValueResponse>, McpError> {
+        self.ensure_tool_enabled("find_value")
+            .map_err(to_mcp_error)?;
+        tools::find_value(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "read_table",
+        description = "Read structured data from a range or table"
+    )]
+    pub async fn read_table(
+        &self,
+        Parameters(params): Parameters<tools::ReadTableParams>,
+    ) -> Result<Json<ReadTableResponse>, McpError> {
+        self.ensure_tool_enabled("read_table")
+            .map_err(to_mcp_error)?;
+        tools::read_table(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "table_profile", description = "Profile a region or table")]
+    pub async fn table_profile(
+        &self,
+        Parameters(params): Parameters<tools::TableProfileParams>,
+    ) -> Result<Json<TableProfileResponse>, McpError> {
+        self.ensure_tool_enabled("table_profile")
+            .map_err(to_mcp_error)?;
+        tools::table_profile(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "range_values",
+        description = "Fetch raw values for specific ranges"
+    )]
+    pub async fn range_values(
+        &self,
+        Parameters(params): Parameters<tools::RangeValuesParams>,
+    ) -> Result<Json<RangeValuesResponse>, McpError> {
+        self.ensure_tool_enabled("range_values")
+            .map_err(to_mcp_error)?;
+        tools::range_values(self.state.clone(), params)
             .await
             .map(Json)
             .map_err(to_mcp_error)
