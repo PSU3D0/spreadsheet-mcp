@@ -4,7 +4,7 @@ use crate::model::{
     ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
     SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
     SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse,
+    WorkbookDescription, WorkbookListResponse, WorkbookSummaryResponse,
 };
 use crate::state::AppState;
 use crate::tools;
@@ -88,6 +88,22 @@ impl SpreadsheetServer {
         self.ensure_tool_enabled("describe_workbook")
             .map_err(to_mcp_error)?;
         tools::describe_workbook(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "workbook_summary",
+        description = "Summarize workbook regions and entry points"
+    )]
+    pub async fn workbook_summary(
+        &self,
+        Parameters(params): Parameters<tools::WorkbookSummaryParams>,
+    ) -> Result<Json<WorkbookSummaryResponse>, McpError> {
+        self.ensure_tool_enabled("workbook_summary")
+            .map_err(to_mcp_error)?;
+        tools::workbook_summary(self.state.clone(), params)
             .await
             .map(Json)
             .map_err(to_mcp_error)
@@ -333,7 +349,15 @@ impl ServerHandler for SpreadsheetServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Spreadsheet MCP server. Use tools to explore workbooks in the configured workspace.".to_string(),
+                "Spreadsheet Read MCP: optimized for read-only spreadsheet analysis.\n\
+                 Workflow guidance:\n\
+                 1) list_workbooks → list_sheets → workbook_summary for orientation.\n\
+                 2) sheet_overview to get detected regions (ids/bounds/kind/confidence).\n\
+                 3) Use region_id with table_profile/read_table; prefer range_values/find_value for spot checks.\n\
+                 4) sheet_page is a fallback when structure is unknown; prefer compact/values_only.\n\
+                 5) find_value supports label mode (direction hints) and value mode; scope by sheet/region.\n\
+                 6) table_profile/read_table support header rows, filters, sampling; use small limits first.\n\
+                 The server is read-only; no mutation or recalculation. Keep payloads small and page through large sheets.".to_string(),
             ),
             ..ServerInfo::default()
         }

@@ -83,6 +83,140 @@ pub struct SheetOverviewParams {
     pub sheet_name: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorkbookSummaryParams {
+    pub workbook_id: WorkbookId,
+}
+
+pub async fn workbook_summary(
+    state: Arc<AppState>,
+    params: WorkbookSummaryParams,
+) -> Result<WorkbookSummaryResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let sheet_names = workbook.sheet_names();
+
+    let mut total_cells: u64 = 0;
+    let mut total_formulas: u64 = 0;
+    let mut breakdown = WorkbookBreakdown::default();
+    let mut region_counts = RegionCountSummary::default();
+    let mut entry_points: Vec<EntryPoint> = Vec::new();
+    let mut key_named_ranges: Vec<NamedRangeDescriptor> = Vec::new();
+
+    for sheet_name in &sheet_names {
+        let entry = workbook.get_sheet_metrics(sheet_name)?;
+        total_cells += (entry.metrics.row_count as u64) * (entry.metrics.column_count as u64);
+        total_formulas += entry.metrics.formula_cells as u64;
+        match entry.metrics.classification {
+            SheetClassification::Calculator => breakdown.calculator_sheets += 1,
+            SheetClassification::Metadata => breakdown.metadata_sheets += 1,
+            SheetClassification::Empty => {}
+            _ => breakdown.data_sheets += 1,
+        }
+
+        for region in &entry.detected_regions {
+            match region
+                .region_kind
+                .clone()
+                .unwrap_or(region.classification.clone())
+            {
+                RegionKind::Calculator => region_counts.calculator += 1,
+                RegionKind::Metadata => region_counts.metadata += 1,
+                RegionKind::Parameters => region_counts.parameters += 1,
+                RegionKind::Outputs => region_counts.outputs += 1,
+                RegionKind::Data | RegionKind::Table => region_counts.data += 1,
+                _ => region_counts.other += 1,
+            }
+            if region.confidence >= 0.3 {
+                let kind = region
+                    .region_kind
+                    .as_ref()
+                    .unwrap_or(&region.classification);
+                let priority = match kind {
+                    RegionKind::Parameters => 0,
+                    RegionKind::Data | RegionKind::Table => 1,
+                    RegionKind::Outputs => 2,
+                    RegionKind::Calculator => 3,
+                    RegionKind::Metadata => 4,
+                    _ => 5,
+                };
+                entry_points.push(EntryPoint {
+                    sheet_name: sheet_name.clone(),
+                    region_id: Some(region.id),
+                    bounds: Some(region.bounds.clone()),
+                    rationale: format!(
+                        "{:?} region ({} rows, {:.0}% conf, p{})",
+                        kind,
+                        region.row_count,
+                        region.confidence * 100.0,
+                        priority
+                    ),
+                });
+            }
+        }
+
+        if entry.detected_regions.is_empty() && entry.metrics.non_empty_cells > 0 {
+            entry_points.push(EntryPoint {
+                sheet_name: sheet_name.clone(),
+                region_id: None,
+                bounds: None,
+                rationale: "Whole sheet is non-empty; start at top-left".to_string(),
+            });
+        }
+    }
+
+    entry_points.sort_by(|a, b| {
+        let pa = priority_from_rationale(&a.rationale);
+        let pb = priority_from_rationale(&b.rationale);
+        pa.cmp(&pb)
+            .then_with(|| a.bounds.as_ref().map(|_| 1).cmp(&b.bounds.as_ref().map(|_| 1)))
+            .then_with(|| a.sheet_name.cmp(&b.sheet_name))
+    });
+    entry_points.truncate(5);
+
+    let mut seen_ranges = std::collections::HashSet::new();
+    for item in workbook.named_items()? {
+        if item.kind != NamedItemKind::NamedRange && item.kind != NamedItemKind::Table {
+            continue;
+        }
+        if !seen_ranges.insert(item.refers_to.clone()) {
+            continue;
+        }
+        key_named_ranges.push(item);
+        if key_named_ranges.len() >= 10 {
+            break;
+        }
+    }
+
+    Ok(WorkbookSummaryResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        slug: workbook.slug.clone(),
+        sheet_count: sheet_names.len(),
+        total_cells,
+        total_formulas,
+        breakdown,
+        region_counts,
+        key_named_ranges,
+        suggested_entry_points: entry_points,
+    })
+}
+
+fn priority_from_rationale(rationale: &str) -> u32 {
+    if rationale.contains("p0") {
+        0
+    } else if rationale.contains("p1") {
+        1
+    } else if rationale.contains("p2") {
+        2
+    } else if rationale.contains("p3") {
+        3
+    } else if rationale.contains("p4") {
+        4
+    } else {
+        5
+    }
+}
+
 pub async fn sheet_overview(
     state: Arc<AppState>,
     params: SheetOverviewParams,
@@ -643,13 +777,12 @@ fn resolve_columns_with_headers(
     for col_idx in 1..=max_column.max(1) {
         let header_cell = sheet.get_cell((col_idx, 1u32));
         let header_value = header_cell
-            .and_then(|c| cell_to_value(c))
+            .and_then(cell_to_value)
             .map(cell_value_to_string_lower);
-        if let Some(hval) = header_value {
-            if header_targets.iter().any(|target| target == &hval) {
+        if let Some(hval) = header_value
+            && header_targets.iter().any(|target| target == &hval) {
                 selected.push(col_idx);
             }
-        }
     }
 
     if selected.is_empty() {
@@ -706,11 +839,10 @@ fn build_values_only_payload(
     include_header: bool,
 ) -> SheetPageValues {
     let mut data = Vec::new();
-    if include_header {
-        if let Some(h) = header {
+    if include_header
+        && let Some(h) = header {
             data.push(h.cells.iter().map(|c| c.value.clone()).collect());
         }
-    }
     for row in rows {
         data.push(row.cells.iter().map(|c| c.value.clone()).collect());
     }
@@ -818,23 +950,23 @@ struct TableTarget {
     sheet_name: String,
     table_name: Option<String>,
     range: ((u32, u32), (u32, u32)),
+    header_hint: Option<u32>,
 }
 
 fn resolve_table_target(
     workbook: &WorkbookContext,
     params: &ReadTableParams,
 ) -> Result<TableTarget> {
-    if let Some(region_id) = params.region_id {
-        if let Some(sheet) = &params.sheet_name {
-            if let Ok(region) = workbook.detected_region(sheet, region_id) {
+    if let Some(region_id) = params.region_id
+        && let Some(sheet) = &params.sheet_name
+            && let Ok(region) = workbook.detected_region(sheet, region_id) {
                 return Ok(TableTarget {
                     sheet_name: sheet.clone(),
                     table_name: None,
                     range: parse_range(&region.bounds).unwrap_or(((1, 1), (1, 1))),
+                    header_hint: region.header_row,
                 });
             }
-        }
-    }
 
     if let Some(table_name) = &params.table_name {
         let items = workbook.named_items()?;
@@ -844,7 +976,7 @@ fn resolve_table_target(
                     .sheet_name
                     .clone()
                     .or_else(|| params.sheet_name.clone())
-                    .unwrap_or_else(|| workbook.sheet_names().get(0).cloned().unwrap_or_default());
+                    .unwrap_or_else(|| workbook.sheet_names().first().cloned().unwrap_or_default());
                 let refers_to = item.refers_to.trim_start_matches('=');
                 let mut range_part = refers_to;
                 if let Some((sheet_part, rest)) = refers_to.split_once('!') {
@@ -856,6 +988,7 @@ fn resolve_table_target(
                         sheet_name,
                         table_name: Some(item.name.clone()),
                         range,
+                        header_hint: None,
                     });
                 }
             }
@@ -865,17 +998,17 @@ fn resolve_table_target(
     let sheet_name = params
         .sheet_name
         .clone()
-        .unwrap_or_else(|| workbook.sheet_names().get(0).cloned().unwrap_or_default());
+        .unwrap_or_else(|| workbook.sheet_names().first().cloned().unwrap_or_default());
 
-    if let Some(rng) = &params.range {
-        if let Some(range) = parse_range(rng) {
+    if let Some(rng) = &params.range
+        && let Some(range) = parse_range(rng) {
             return Ok(TableTarget {
                 sheet_name,
                 table_name: None,
                 range,
+                header_hint: None,
             });
         }
-    }
 
     let metrics = workbook.get_sheet_metrics(&sheet_name)?;
     let end_col = metrics.metrics.column_count.max(1);
@@ -884,6 +1017,7 @@ fn resolve_table_target(
         sheet_name,
         table_name: None,
         range: ((1, 1), (end_col, end_row)),
+        header_hint: None,
     })
 }
 
@@ -899,9 +1033,15 @@ fn extract_table_rows(
     sample_mode: &str,
 ) -> Result<(Vec<String>, Vec<TableRow>, u32)> {
     let ((start_col, start_row), (end_col, end_row)) = target.range;
-    let header_start = header_row.unwrap_or(start_row);
+    let mut header_start = header_row.or(target.header_hint).unwrap_or(start_row);
+    if header_start < start_row {
+        header_start = start_row;
+    }
+    if header_start > end_row {
+        header_start = start_row;
+    }
     let header_rows_count = header_rows.unwrap_or(1).max(1);
-    let data_start_row = header_start + header_rows_count;
+    let data_start_row = (header_start + header_rows_count).max(start_row + header_rows_count);
     let column_indices: Vec<u32> = if let Some(cols) = columns.as_ref() {
         resolve_columns(Some(cols), end_col).into_iter().collect()
     } else {
@@ -910,6 +1050,7 @@ fn extract_table_rows(
 
     let headers = build_headers(sheet, &column_indices, header_start, header_rows_count);
     let mut all_rows: Vec<TableRow> = Vec::new();
+    let mut total_rows: u32 = 0;
 
     for row_idx in data_start_row..=end_row {
         let mut row = BTreeMap::new();
@@ -920,16 +1061,19 @@ fn extract_table_rows(
                 .unwrap_or_else(|| format!("Col{col_idx}"));
             let value = sheet
                 .get_cell((*col_idx, row_idx))
-                .and_then(|cell| cell_to_value(cell));
+                .and_then(cell_to_value);
             row.insert(header, value);
         }
         if !row_passes_filters(&row, filters.as_ref()) {
             continue;
         }
+        total_rows += 1;
+        if matches!(sample_mode, "first" | "all") && total_rows as usize > offset + limit {
+            continue;
+        }
         all_rows.push(row);
     }
 
-    let total_rows = all_rows.len() as u32;
     let rows = sample_rows(all_rows, limit, offset, sample_mode);
 
     Ok((headers, rows, total_rows))
@@ -945,17 +1089,19 @@ fn build_headers(
     for col_idx in columns {
         let mut parts = Vec::new();
         for h in header_start..(header_start + header_rows) {
+            let (origin_col, origin_row) = sheet.map_merged_cell((*col_idx, h));
             if let Some(value) = sheet
-                .get_cell((*col_idx, h))
-                .and_then(|cell| cell_to_value(cell))
+                .get_cell((origin_col, origin_row))
+                .and_then(cell_to_value)
             {
-                parts.push(match value {
-                    CellValue::Text(s) => s,
-                    CellValue::Number(n) => n.to_string(),
-                    CellValue::Bool(b) => b.to_string(),
-                    CellValue::Error(e) => e,
-                    CellValue::Date(d) => d,
-                });
+                match value {
+                    CellValue::Text(ref s) if s.trim().is_empty() => {}
+                    CellValue::Text(s) => parts.push(s),
+                    CellValue::Number(n) => parts.push(n.to_string()),
+                    CellValue::Bool(b) => parts.push(b.to_string()),
+                    CellValue::Error(e) => parts.push(e),
+                    CellValue::Date(d) => parts.push(d),
+                }
             }
         }
         if parts.is_empty() {
@@ -963,6 +1109,30 @@ fn build_headers(
         } else {
             headers.push(parts.join(" / "));
         }
+    }
+
+    if headers.iter().all(|h| h.trim().is_empty()) {
+        return columns
+            .iter()
+            .map(|c| crate::utils::column_number_to_name(*c))
+            .collect();
+    }
+
+    dedupe_headers(headers)
+}
+
+fn dedupe_headers(mut headers: Vec<String>) -> Vec<String> {
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    for h in headers.iter_mut() {
+        let key = h.clone();
+        if key.trim().is_empty() {
+            continue;
+        }
+        let count = seen.entry(key.clone()).or_insert(0);
+        if *count > 0 {
+            h.push_str(&format!("_{}", *count + 1));
+        }
+        *count += 1;
     }
     headers
 }
@@ -974,6 +1144,11 @@ fn row_passes_filters(row: &TableRow, filters: Option<&Vec<TableFilter>>) -> boo
                 match filter.op.as_str() {
                     "eq" => {
                         if !value_eq(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    "neq" => {
+                        if value_eq(value, &filter.value) {
                             return false;
                         }
                     }
@@ -992,6 +1167,16 @@ fn row_passes_filters(row: &TableRow, filters: Option<&Vec<TableFilter>>) -> boo
                             return false;
                         }
                     }
+                    "in" => {
+                        let list = filter
+                            .value
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_else(|| vec![filter.value.clone()]);
+                        if !list.iter().any(|cmp| value_eq(value, cmp)) {
+                            return false;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1004,9 +1189,18 @@ fn value_eq(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
     match (cell, cmp) {
         (Some(CellValue::Text(s)), serde_json::Value::String(t)) => s == t,
         (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
-            v.as_f64().map_or(false, |f| (*n - f).abs() < f64::EPSILON)
+            v.as_f64().is_some_and(|f| (*n - f).abs() < f64::EPSILON)
         }
+        (Some(CellValue::Number(n)), serde_json::Value::String(t)) => t
+            .parse::<f64>()
+            .map(|f| (*n - f).abs() < f64::EPSILON)
+            .unwrap_or(false),
         (Some(CellValue::Bool(b)), serde_json::Value::Bool(v)) => b == v,
+        (Some(CellValue::Bool(b)), serde_json::Value::String(t)) => {
+            t.eq_ignore_ascii_case("true") == *b
+        }
+        (Some(CellValue::Date(d)), serde_json::Value::String(t)) => d == t,
+        (None, serde_json::Value::Null) => true,
         _ => false,
     }
 }
@@ -1021,7 +1215,7 @@ fn value_contains(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
 fn value_gt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
     match (cell, cmp) {
         (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
-            v.as_f64().map_or(false, |f| *n > f)
+            v.as_f64().is_some_and(|f| *n > f)
         }
         _ => false,
     }
@@ -1030,7 +1224,7 @@ fn value_gt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
 fn value_lt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
     match (cell, cmp) {
         (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
-            v.as_f64().map_or(false, |f| *n < f)
+            v.as_f64().is_some_and(|f| *n < f)
         }
         _ => false,
     }
@@ -1046,20 +1240,27 @@ fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: &str) -> 
             if limit == 0 {
                 return Vec::new();
             }
-            let mut result = Vec::new();
+            let mut indices = Vec::new();
             let span = rows.len().saturating_sub(1);
             let step = std::cmp::max(1, span / std::cmp::max(1, limit.saturating_sub(1)));
             let mut idx = offset;
-            while idx < rows.len() && result.len() < limit {
-                result.push(rows[idx].clone());
-                idx += step;
-            }
-            if result.len() < limit {
-                if let Some(last) = rows.last() {
-                    result.push(last.clone());
+            while idx < rows.len() && indices.len() < limit {
+                indices.push(idx);
+                idx = idx.saturating_add(step);
+                if idx == indices.last().copied().unwrap_or(0) {
+                    idx += 1;
                 }
             }
-            result
+            if indices.len() < limit {
+                let last_idx = rows.len().saturating_sub(1);
+                if !indices.contains(&last_idx) {
+                    indices.push(last_idx);
+                }
+            }
+            indices
+                .into_iter()
+                .filter_map(|i| rows.get(i).cloned())
+                .collect()
         }
         "last" => {
             let start = rows.len().saturating_sub(limit + offset);
@@ -1172,11 +1373,10 @@ fn collect_value_matches(
         }
 
         let value = cell_to_value(cell);
-        if let Some(ref allowed) = params.value_types {
-            if !value_type_matches(&value, allowed) {
+        if let Some(ref allowed) = params.value_types
+            && !value_type_matches(&value, allowed) {
                 continue;
             }
-        }
         if matches!(mode, FindMode::Value) {
             if !value_matches(
                 &value,
@@ -1204,7 +1404,7 @@ fn collect_value_matches(
                     .get_cell((col + 1, row))
                     .or_else(|| sheet.get_cell((col, row + 1))),
             }
-            .and_then(|c| cell_to_value(c));
+            .and_then(cell_to_value);
             if target_value.is_none() {
                 continue;
             }
@@ -1236,12 +1436,12 @@ fn collect_value_matches(
 
 fn label_from_cell(cell: &umya_spreadsheet::Cell) -> String {
     cell_to_value(cell)
-        .and_then(|v| match v {
-            CellValue::Text(s) => Some(s),
-            CellValue::Number(n) => Some(n.to_string()),
-            CellValue::Bool(b) => Some(b.to_string()),
-            CellValue::Date(d) => Some(d),
-            CellValue::Error(e) => Some(e),
+        .map(|v| match v {
+            CellValue::Text(s) => s,
+            CellValue::Number(n) => n.to_string(),
+            CellValue::Bool(b) => b.to_string(),
+            CellValue::Date(d) => d,
+            CellValue::Error(e) => e,
         })
         .unwrap_or_else(|| cell.get_value().to_string())
 }
@@ -1322,23 +1522,23 @@ fn collect_neighbors(
         left: if col > 1 {
             sheet
                 .get_cell((col - 1, row))
-                .and_then(|c| cell_to_value(c))
+                .and_then(cell_to_value)
         } else {
             None
         },
         right: sheet
             .get_cell((col + 1, row))
-            .and_then(|c| cell_to_value(c)),
+            .and_then(cell_to_value),
         up: if row > 1 {
             sheet
                 .get_cell((col, row - 1))
-                .and_then(|c| cell_to_value(c))
+                .and_then(cell_to_value)
         } else {
             None
         },
         down: sheet
             .get_cell((col, row + 1))
-            .and_then(|c| cell_to_value(c)),
+            .and_then(cell_to_value),
     })
 }
 
@@ -1349,7 +1549,7 @@ fn build_row_context(
 ) -> Option<RowContext> {
     let header_value = sheet
         .get_cell((col, 1u32))
-        .and_then(|c| cell_to_value(c))
+        .and_then(cell_to_value)
         .map(|v| match v {
             CellValue::Text(s) => s,
             CellValue::Number(n) => n.to_string(),
@@ -1358,9 +1558,7 @@ fn build_row_context(
             CellValue::Error(e) => e,
         })
         .unwrap_or_else(|| format!("Col{}", col));
-    let value = sheet
-        .get_cell((col, row))
-        .and_then(|c| cell_to_value(c));
+    let value = sheet.get_cell((col, row)).and_then(cell_to_value);
     Some(RowContext {
         headers: vec![header_value],
         values: vec![value],
@@ -1513,10 +1711,12 @@ pub async fn range_values(
                                 row_vals.push(
                                     sheet
                                         .get_cell((c, 1u32))
-                                        .and_then(|cell| cell_to_value(cell)),
+                                        .and_then(cell_to_value),
                                 );
                             } else {
-                                row_vals.push(sheet.get_cell((c, r)).and_then(|cell| cell_to_value(cell)));
+                                row_vals.push(
+                                    sheet.get_cell((c, r)).and_then(cell_to_value),
+                                );
                             }
                         }
                         rows.push(row_vals);
