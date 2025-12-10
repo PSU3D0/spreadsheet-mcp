@@ -17,17 +17,7 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 ## Architecture
 
-```
-┌─────────────┐      ┌──────────────────────────────────────────────┐
-│  LLM Agent  │      │           spreadsheet-read-mcp               │
-│  (Claude,   │ MCP  │  ┌────────┐   ┌───────┐   ┌───────────────┐  │
-│   GPT, etc) │◄────►│  │ Tools  │──►│ Cache │──►│umya-spreadsheet│ │
-└─────────────┘      │  └────────┘   │ (LRU) │   └───────────────┘  │
-                     │               └───────┘           │          │
-                     │                                   ▼          │
-                     │                              .xlsx files     │
-                     └──────────────────────────────────────────────┘
-```
+![Architecture Overview](assets/architecture_overview.jpeg)
 
 - **LRU cache** keeps recently-accessed workbooks in memory (configurable capacity)
 - **Lazy sheet metrics** computed once per sheet, reused across tools
@@ -85,6 +75,8 @@ The agent now knows column types, cardinality, and value distributions—without
 
 ## Recommended Agent Workflow
 
+![Token Efficiency Workflow](assets/token_efficiency.jpeg)
+
 1. `list_workbooks` → `list_sheets` → `workbook_summary` for orientation
 2. `sheet_overview` to get `detected_regions` (ids/bounds/kind/confidence)
 3. `table_profile` → `read_table` with `region_id`, small `limit`, and `sample_mode` (`distributed` preferred)
@@ -93,6 +85,8 @@ The agent now knows column types, cardinality, and value distributions—without
 6. Keep payloads small; page/filter rather than full-sheet reads
 
 ## Region Detection
+
+![Region Detection Visualization](assets/region_detection_viz.jpeg)
 
 Spreadsheets often contain multiple logical tables, parameter blocks, and output areas on a single sheet. The server detects these automatically:
 
