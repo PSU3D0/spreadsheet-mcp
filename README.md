@@ -1,98 +1,66 @@
 # Spreadsheet Read MCP
 
-`spreadsheet-read-mcp` is a Model Context Protocol (MCP) server that lets LLM agents explore spreadsheet workbooks safely and deterministically. It focuses on high-signal, read-only insights (structure, formulas, styles, statistics) without mutating the source files. The server is optimized for XLSX first and can discover `.xls`/`.xlsb` files, while keeping the backend pluggable for future formats.
+# Spreadsheet Read MCP
+![Spreadsheet Read MCP](assets/banner.jpeg)
 
-## What It Does
-- Enumerates workbooks inside a workspace, exposing stable short IDs that are easy for an LLM to reference.
-- Streams sheet pages, highlights formulas, and surfaces cached values so models can inspect data slices without loading entire files.
-- Maps formula clusters, traces precedents/dependents with pagination-friendly summaries, and tags volatile functions.
-- Reports workbook metadata, sheet classifications, style usage, and named ranges to give agents a comprehensive mental model.
-- Provides manifest stubs and bookkeeping helpers so downstream harnesses can integrate the results quickly.
+Read-only MCP server for spreadsheet analysis with a slim, token-efficient tool surface. Emphasis: find the right region fast, profile lightly, then read only what you need. XLSX-first (via `umya-spreadsheet`), enumerates `.xls`/`.xlsb` files.
 
-## What It Is Not
-- No spreadsheet writing, mutation, or recalculation; everything is read-only.
-- No XLS macro execution, VBA inspection, or automation beyond surface metadata.
-- No on-the-fly format conversion; ODS and other backends will require future CAPS-enabled adapters.
-- Not a generic file browser — it focuses strictly on spreadsheet-aware inspection.
+## Tool Surface (≤10 exposed)
+| Tool | Purpose |
+| --- | --- |
+| `list_workbooks`, `list_sheets` | Discover targets and get sheet summaries. |
+| `workbook_summary` | Region counts/kinds, named ranges, suggested entry points. |
+| `sheet_overview` | Detected regions (bounds/id/kind/confidence), narrative, key ranges. |
+| `find_value` | Value/label-mode lookup with region/table scoping, neighbors, row context. |
+| `read_table` | Structured read (range/region/table/named range), headers, filters, sampling. |
+| `table_profile` | Lightweight column profiling with samples and inferred types. |
+| `range_values` | Minimal range fetch for spot checks. |
+| `sheet_page` | Fallback pagination; supports `compact`/`values_only`. |
+| `formula_trace` | Precedents/dependents with paging. |
+
+Hidden/optional: styles, statistics, volatiles, manifest stub, close_workbook.
+
+## Recommended Agent Workflow
+1) `list_workbooks` → `list_sheets` → `workbook_summary` for orientation.  
+2) `sheet_overview` to get `detected_regions` (ids/bounds/kind/confidence).  
+3) `table_profile` → `read_table` with `region_id`, small `limit`, and `sample_mode` (`distributed` preferred).  
+4) Use `find_value` (label mode) or `range_values` for targeted pulls.  
+5) Reserve `sheet_page` for unknown layouts or calculator inspection; prefer `compact`/`values_only`.  
+6) Keep payloads small; page/filter rather than full-sheet reads.
+
+## Region Detection
+- Gutter-based recursive splits, trimming sparse borders.
+- Header detection (multi-row) with merged-cell expansion.
+- Region kinds: data, parameters, outputs, calculator, metadata, other; confidence score per region.
+- Regions cached per sheet and reused by `sheet_overview`, `find_value`, `read_table`, `table_profile`.
 
 ## Quick Start
 ```bash
-# Run directly from the repository (SSE transport at http://127.0.0.1:8079/mcp/sse)
-cargo run --release -- \
-  --workspace-root /path/to/workbooks \
-  --cache-capacity 10
-```
+# Run HTTP streaming transport at 127.0.0.1:8079
+cargo run --release -- --workspace-root /path/to/workbooks
 
-To install the binary locally:
-```bash
-cargo install --path spreadsheet-read-mcp
+# or install
+cargo install --path .
 spreadsheet-read-mcp --workspace-root /path/to/workbooks
 ```
+Transport: HTTP streaming (default). Endpoints: `POST /mcp` for bidirectional streaming. `--transport stdio` is available for CLI pipelines.
 
-By default the server speaks MCP over Server-Sent Events (SSE). Connect an MCP-aware client to `GET http://127.0.0.1:8079/mcp/sse` and use the initial event payload to post JSON requests to `http://127.0.0.1:8079/mcp/message`. Provide `--http-bind <ADDR>` to choose a different address, `--transport http` for the streamable HTTP transport, or `--transport stdio` to retain the classic stdio mode.
-
-## Configuration Options
-You can configure the server through CLI flags, environment variables, or a YAML/JSON config file.
-
-### CLI / Environment
-| Flag | Env Var | Description |
+## Configuration (flags/env)
+| Flag | Env | Description |
 | --- | --- | --- |
-| `--workspace-root <DIR>` | `SPREADSHEET_MCP_WORKSPACE` | Root directory to scan for workbooks (defaults to current directory). |
-| `--cache-capacity <N>` | `SPREADSHEET_MCP_CACHE_CAPACITY` | Maximum in-memory workbook cache size (minimum 1, default 5). |
-| `--extensions ext1,ext2` | `SPREADSHEET_MCP_EXTENSIONS` | Allowed file extensions (defaults to `xlsx,xls,xlsb`). |
-| `--workbook <FILE>` | `SPREADSHEET_MCP_WORKBOOK` | Lock the server to a single workbook without scanning the workspace. |
-| `--enabled-tools tool1,tool2` | `SPREADSHEET_MCP_ENABLED_TOOLS` | Restrict execution to the named tools; others return an MCP `invalid_request`. |
-| `--transport <sse|http|stdio>` | `SPREADSHEET_MCP_TRANSPORT` | Select the transport implementation (defaults to `sse`). |
-| `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address for network transports (SSE/HTTP), defaults to `127.0.0.1:8079`. |
-| `--config <FILE>` | – | Load settings from a YAML or JSON file. CLI/env values override file entries. |
+| `--workspace-root <DIR>` | `SPREADSHEET_MCP_WORKSPACE` | Workspace root to scan (default cwd). |
+| `--cache-capacity <N>` | `SPREADSHEET_MCP_CACHE_CAPACITY` | Workbook cache size (default 5). |
+| `--extensions <list>` | `SPREADSHEET_MCP_EXTENSIONS` | Allowed extensions (`xlsx,xls,xlsb`). |
+| `--workbook <FILE>` | `SPREADSHEET_MCP_WORKBOOK` | Single-workbook mode. |
+| `--enabled-tools <list>` | `SPREADSHEET_MCP_ENABLED_TOOLS` | Whitelist exposed tools. |
+| `--transport <http|stdio>` | `SPREADSHEET_MCP_TRANSPORT` | Transport selection (HTTP streaming default). |
+| `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address (default `127.0.0.1:8079`). |
 
-### Config File Example (`config.yaml`)
-```yaml
-workspace_root: /data/spreadsheets
-cache_capacity: 8
-extensions: ["xlsx", "xlsb"]
-```
+## Testing
+`cargo test` runs unit + integration suites, including region detection, region-scoped tools, read_table edge cases (merged headers, filters, large sheets), and workbook summary.
 
-Start the server with `spreadsheet-read-mcp --config config.yaml`.
-
-## Transports
-- `sse` (default): Serves the MCP SSE interface with `GET /mcp/sse` for events and `POST /mcp/message` for JSON payloads. Ideal for local development where clients expect the classic SSE workflow.
-- `http`: Enables the streamable HTTP transport at `/mcp`, which combines JSON payloads and event streams over a single upgraded connection.
-- `stdio`: Keeps compatibility with stdio-based clients. Use `--transport stdio` to enable it.
-
-## Tool Surface
-| Tool | Why It Matters |
-| --- | --- |
-| `list_workbooks` | Lists discoverable workbooks with slug + short ID so agents can choose targets without remembering long hashes. |
-| `describe_workbook` | Returns workbook-level metadata (size, sheet count, CAPS) to gauge complexity before drilling in. |
-| `list_sheets` | Presents sheet summaries, visibility, metrics, and tags to help prioritize inspection order. |
-| `sheet_overview` | Offers classification, headline stats, and highlights (tables, named items) for a single sheet. |
-| `sheet_page` | Pages through tabular data with optional formula/style payloads, enabling high-signal slices for LLM review. |
-| `sheet_formula_map` | Groups identical formulas and aggregates ranges so the agent can spot patterns without sifting cell-by-cell. |
-| `formula_trace` | Walks precedents/dependents recursively (with safe pagination) to explain how values propagate across sheets. |
-| `named_ranges` | Surfaces named items, their scope, and target ranges to anchor reasoning in business terminology. |
-| `sheet_statistics` | Captures distribution metrics, data density, and heuristics that describe how "busy" a sheet is. |
-| `find_formula` | Searches formulas by text/regex, ideal for locating specific functions or references quickly. |
-| `scan_volatiles` | Flags volatile functions and high-churn ranges so models can reason about recalculation risk. |
-| `sheet_styles` | Summarizes style reuse and annotations, revealing which cells carry semantic emphasis or commentary. |
-| `get_manifest_stub` | Emits a structured stub that downstream pipelines can drop into corpus manifests. |
-| `close_workbook` | Explicitly evicts a workbook from the cache to free memory between exploratory sessions. |
-
-## Workspace Semantics
-- Workbooks are discovered relative to the configured workspace root. Subdirectories are preserved; use `list_workbooks` filters (`slug_prefix`, `folder`, `path_glob`) to focus the scan.
-- Single-workbook mode (`--workbook`) skips directory traversal and indexes only the specified file, while still providing the usual short ID aliases.
-- XLSX files are fully parsed through `umya-spreadsheet`. XLS/XLSB are enumerated and validated before load; unsupported structures are reported as MCP errors instead of crashing the server.
-- A bounded LRU cache keeps recently accessed workbooks warm while respecting memory limits.
-
-## Development
-- Format / lint using standard Rust tooling (`cargo fmt`, `cargo clippy`).
-- Run the full test suite with `cargo test` from the project root; integration tests synthesize workbooks on the fly via `umya-spreadsheet` fixtures.
-
-When opening pull requests, GitHub Actions will automatically run the cross-platform test + build workflow defined in `.github/workflows/ci.yml` and publish release binaries as artifacts.
-
-## Related Documentation
-Design notes and deeper architectural context live under `docs/`:
-- `mcp-server-design.md` — server architecture and module responsibilities.
-- `mcp-server-plan.md` — roadmap, tool contracts, and CAPS approach.
-- `mcp-rust-umya-analysis.md` — backend decision record and XLSX-first rationale.
-- `formualizer-parse-integration.md` — formula parser integration details.
+## Behavior & Limits
+- Strictly read-only; no mutation/recalc/VBA execution.
+- XLSX parsed fully; `.xls`/`.xlsb` discovered and validated before load.
+- Bounded in-memory cache honors `cache_capacity`.
+- Prefer region-scoped reads and sampling for token/latency efficiency.***

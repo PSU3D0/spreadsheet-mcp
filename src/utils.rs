@@ -17,9 +17,10 @@ pub fn hash_path_metadata(path: &Path, metadata: &Metadata) -> String {
     hasher.update(path.to_string_lossy().as_bytes());
     hasher.update(metadata.len().to_le_bytes());
     if let Ok(modified) = metadata.modified()
-        && let Some(dt) = system_time_to_datetime(modified) {
-            hasher.update(dt.to_rfc3339_opts(SecondsFormat::Micros, true).as_bytes());
-        }
+        && let Some(dt) = system_time_to_datetime(modified)
+    {
+        hasher.update(dt.to_rfc3339_opts(SecondsFormat::Micros, true).as_bytes());
+    }
     format!("{:x}", hasher.finalize())
 }
 

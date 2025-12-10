@@ -68,7 +68,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
             let server = SpreadsheetServer::from_state(state);
             server.run_stdio().await
         }
-        TransportKind::Http => run_stream_http_transport(config, state).await
+        TransportKind::Http => run_stream_http_transport(config, state).await,
     }
 }
 

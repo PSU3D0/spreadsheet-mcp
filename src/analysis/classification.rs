@@ -64,7 +64,7 @@ pub fn regions(metrics: &SheetMetrics) -> Vec<SheetRegion> {
     let kind = match metrics.classification {
         SheetClassification::Calculator => RegionKind::Calculator,
         SheetClassification::Metadata => RegionKind::Metadata,
-        _ => RegionKind::Table,
+        _ => RegionKind::Data,
     };
 
     regions.push(SheetRegion {

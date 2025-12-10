@@ -110,9 +110,10 @@ impl AppState {
         }
         let lowered = workbook_id.as_str().to_ascii_lowercase();
         if lowered != workbook_id.as_str()
-            && let Some(mapped) = aliases.get(&lowered).cloned() {
-                return Ok(mapped);
-            }
+            && let Some(mapped) = aliases.get(&lowered).cloned()
+        {
+            return Ok(mapped);
+        }
 
         let located = self.scan_for_workbook(workbook_id.as_str())?;
         let canonical = located.workbook_id.clone();

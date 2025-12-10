@@ -16,7 +16,8 @@ use crate::utils::{
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub struct SheetCacheEntry {
     pub metrics: SheetMetrics,
     pub style_tags: Vec<String>,
     pub named_ranges: Vec<NamedRangeDescriptor>,
+    pub detected_regions: Vec<crate::model::DetectedRegion>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,11 +143,13 @@ impl WorkbookContext {
             .ok_or_else(|| anyhow!("sheet {} not found", sheet_name))?;
         let (metrics, style_tags) = compute_sheet_metrics(sheet);
         let named_ranges = gather_named_ranges(sheet, book.get_defined_names());
+        let detected_regions = detect_regions(sheet, &metrics);
 
         let entry = Arc::new(SheetCacheEntry {
             metrics,
             style_tags,
             named_ranges,
+            detected_regions,
         });
 
         writer.insert(sheet_name.to_string(), entry.clone());
@@ -246,6 +250,7 @@ impl WorkbookContext {
         let narrative = classification::narrative(&entry.metrics);
         let regions = classification::regions(&entry.metrics);
         let key_ranges = classification::key_ranges(&entry.metrics);
+        let detected_regions = entry.detected_regions.clone();
 
         Ok(SheetOverviewResponse {
             workbook_id: self.id.clone(),
@@ -253,6 +258,7 @@ impl WorkbookContext {
             sheet_name: sheet_name.to_string(),
             narrative,
             regions,
+            detected_regions,
             key_ranges,
             formula_ratio: if entry.metrics.non_empty_cells == 0 {
                 0.0
@@ -261,6 +267,20 @@ impl WorkbookContext {
             },
             notable_features: entry.style_tags.clone(),
         })
+    }
+
+    pub fn detected_region(
+        &self,
+        sheet_name: &str,
+        id: u32,
+    ) -> Result<crate::model::DetectedRegion> {
+        let entry = self.get_sheet_metrics(sheet_name)?;
+        entry
+            .detected_regions
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow!("region {} not found on sheet {}", id, sheet_name))
     }
 }
 
@@ -344,6 +364,522 @@ pub fn compute_sheet_metrics(sheet: &Worksheet) -> (SheetMetrics, Vec<String>) {
         classification,
     };
     (metrics, style_tags)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Rect {
+    start_row: u32,
+    end_row: u32,
+    start_col: u32,
+    end_col: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CellInfo {
+    value: Option<crate::model::CellValue>,
+    is_formula: bool,
+}
+
+#[derive(Debug)]
+struct Occupancy {
+    cells: HashMap<(u32, u32), CellInfo>,
+}
+
+impl Occupancy {
+    fn row_col_counts(&self, rect: &Rect) -> (Vec<u32>, Vec<u32>) {
+        let mut row_counts = vec![0u32; (rect.end_row - rect.start_row + 1) as usize];
+        let mut col_counts = vec![0u32; (rect.end_col - rect.start_col + 1) as usize];
+        for ((row, col), _) in self.cells.iter() {
+            if *row >= rect.start_row
+                && *row <= rect.end_row
+                && *col >= rect.start_col
+                && *col <= rect.end_col
+            {
+                row_counts[(row - rect.start_row) as usize] += 1;
+                col_counts[(col - rect.start_col) as usize] += 1;
+            }
+        }
+        (row_counts, col_counts)
+    }
+
+    fn stats_in_rect(&self, rect: &Rect) -> RegionStats {
+        let mut stats = RegionStats::default();
+        for ((row, col), info) in self.cells.iter() {
+            if *row < rect.start_row
+                || *row > rect.end_row
+                || *col < rect.start_col
+                || *col > rect.end_col
+            {
+                continue;
+            }
+            stats.non_empty += 1;
+            if info.is_formula {
+                stats.formulas += 1;
+            }
+            if let Some(val) = &info.value {
+                match val {
+                    crate::model::CellValue::Text(_) => stats.text += 1,
+                    crate::model::CellValue::Number(_) => stats.numbers += 1,
+                    crate::model::CellValue::Bool(_) => stats.bools += 1,
+                    crate::model::CellValue::Date(_) => stats.dates += 1,
+                    crate::model::CellValue::Error(_) => stats.errors += 1,
+                }
+            }
+        }
+        stats
+    }
+
+    fn value_at(&self, row: u32, col: u32) -> Option<&crate::model::CellValue> {
+        self.cells.get(&(row, col)).and_then(|c| c.value.as_ref())
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct RegionStats {
+    non_empty: u32,
+    formulas: u32,
+    text: u32,
+    numbers: u32,
+    bools: u32,
+    dates: u32,
+    errors: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gutter {
+    Row { start: u32, end: u32 },
+    Col { start: u32, end: u32 },
+}
+
+fn detect_regions(sheet: &Worksheet, metrics: &SheetMetrics) -> Vec<crate::model::DetectedRegion> {
+    if metrics.row_count == 0 || metrics.column_count == 0 {
+        return Vec::new();
+    }
+    let occupancy = build_occupancy(sheet);
+    let root = Rect {
+        start_row: 1,
+        end_row: metrics.row_count.max(1),
+        start_col: 1,
+        end_col: metrics.column_count.max(1),
+    };
+
+    let mut leaves = Vec::new();
+    split_rect(&occupancy, &root, &mut leaves);
+
+    let mut regions = Vec::new();
+    for (idx, rect) in leaves.into_iter().enumerate() {
+        if let Some(trimmed) = trim_rect(&occupancy, rect) {
+            let region = build_region(&occupancy, &trimmed, metrics, idx as u32);
+            regions.push(region);
+        }
+    }
+    regions
+}
+
+fn build_occupancy(sheet: &Worksheet) -> Occupancy {
+    let mut cells = HashMap::new();
+    for cell in sheet.get_cell_collection() {
+        let coord = cell.get_coordinate();
+        let row = *coord.get_row_num();
+        let col = *coord.get_col_num();
+        let value = cell_to_value(cell);
+        let is_formula = cell.is_formula();
+        cells.insert((row, col), CellInfo { value, is_formula });
+    }
+    Occupancy { cells }
+}
+
+fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
+    if rect.start_row >= rect.end_row && rect.start_col >= rect.end_col {
+        leaves.push(*rect);
+        return;
+    }
+    if let Some(gutter) = find_best_gutter(occupancy, rect) {
+        match gutter {
+            Gutter::Row { start, end } => {
+                if start > rect.start_row {
+                    let upper = Rect {
+                        start_row: rect.start_row,
+                        end_row: start - 1,
+                        start_col: rect.start_col,
+                        end_col: rect.end_col,
+                    };
+                    split_rect(occupancy, &upper, leaves);
+                }
+                if end < rect.end_row {
+                    let lower = Rect {
+                        start_row: end + 1,
+                        end_row: rect.end_row,
+                        start_col: rect.start_col,
+                        end_col: rect.end_col,
+                    };
+                    split_rect(occupancy, &lower, leaves);
+                }
+            }
+            Gutter::Col { start, end } => {
+                if start > rect.start_col {
+                    let left = Rect {
+                        start_row: rect.start_row,
+                        end_row: rect.end_row,
+                        start_col: rect.start_col,
+                        end_col: start - 1,
+                    };
+                    split_rect(occupancy, &left, leaves);
+                }
+                if end < rect.end_col {
+                    let right = Rect {
+                        start_row: rect.start_row,
+                        end_row: rect.end_row,
+                        start_col: end + 1,
+                        end_col: rect.end_col,
+                    };
+                    split_rect(occupancy, &right, leaves);
+                }
+            }
+        }
+        return;
+    }
+    leaves.push(*rect);
+}
+
+fn find_best_gutter(occupancy: &Occupancy, rect: &Rect) -> Option<Gutter> {
+    let (row_counts, col_counts) = occupancy.row_col_counts(rect);
+    let width = rect.end_col - rect.start_col + 1;
+    let height = rect.end_row - rect.start_row + 1;
+
+    let row_blank_runs = find_blank_runs(&row_counts, width);
+    let col_blank_runs = find_blank_runs(&col_counts, height);
+
+    let mut best: Option<(Gutter, u32)> = None;
+
+    if let Some((start, end, len)) = row_blank_runs {
+        let gutter = Gutter::Row {
+            start: rect.start_row + start,
+            end: rect.start_row + end,
+        };
+        best = Some((gutter, len));
+    }
+    if let Some((start, end, len)) = col_blank_runs {
+        let gutter = Gutter::Col {
+            start: rect.start_col + start,
+            end: rect.start_col + end,
+        };
+        if best.map(|(_, l)| len > l).unwrap_or(true) {
+            best = Some((gutter, len));
+        }
+    }
+
+    best.map(|(g, _)| g)
+}
+
+fn find_blank_runs(counts: &[u32], span: u32) -> Option<(u32, u32, u32)> {
+    if counts.is_empty() {
+        return None;
+    }
+    let mut best_start = 0;
+    let mut best_end = 0;
+    let mut best_len = 0;
+    let mut current_start = None;
+    for (idx, count) in counts.iter().enumerate() {
+        let is_blank = *count == 0 || (*count as f32 / span as f32) < 0.05;
+        if is_blank {
+            if current_start.is_none() {
+                current_start = Some(idx as u32);
+            }
+        } else if let Some(start) = current_start.take() {
+            let end = idx as u32 - 1;
+            let len = end - start + 1;
+            if len > best_len && start > 0 && end + 1 < counts.len() as u32 {
+                best_len = len;
+                best_start = start;
+                best_end = end;
+            }
+        }
+    }
+    if let Some(start) = current_start {
+        let end = counts.len() as u32 - 1;
+        let len = end - start + 1;
+        if len > best_len && start > 0 && end + 1 < counts.len() as u32 {
+            best_len = len;
+            best_start = start;
+            best_end = end;
+        }
+    }
+    if best_len >= 2 {
+        Some((best_start, best_end, best_len))
+    } else {
+        None
+    }
+}
+
+fn trim_rect(occupancy: &Occupancy, rect: Rect) -> Option<Rect> {
+    let mut r = rect;
+    loop {
+        let (row_counts, col_counts) = occupancy.row_col_counts(&r);
+        let width = r.end_col - r.start_col + 1;
+        let height = r.end_row - r.start_row + 1;
+        let top_blank = row_counts
+            .first()
+            .map(|c| *c == 0 || (*c as f32 / width as f32) < 0.1)
+            .unwrap_or(false);
+        let bottom_blank = row_counts
+            .last()
+            .map(|c| *c == 0 || (*c as f32 / width as f32) < 0.1)
+            .unwrap_or(false);
+        let left_blank = col_counts
+            .first()
+            .map(|c| *c == 0 || (*c as f32 / height as f32) < 0.1)
+            .unwrap_or(false);
+        let right_blank = col_counts
+            .last()
+            .map(|c| *c == 0 || (*c as f32 / height as f32) < 0.1)
+            .unwrap_or(false);
+
+        let mut changed = false;
+        if top_blank && r.start_row < r.end_row {
+            r.start_row += 1;
+            changed = true;
+        }
+        if bottom_blank && r.end_row > r.start_row {
+            r.end_row -= 1;
+            changed = true;
+        }
+        if left_blank && r.start_col < r.end_col {
+            r.start_col += 1;
+            changed = true;
+        }
+        if right_blank && r.end_col > r.start_col {
+            r.end_col -= 1;
+            changed = true;
+        }
+
+        if !changed {
+            break;
+        }
+        if r.start_row > r.end_row || r.start_col > r.end_col {
+            return None;
+        }
+    }
+    Some(r)
+}
+
+fn build_region(
+    occupancy: &Occupancy,
+    rect: &Rect,
+    metrics: &SheetMetrics,
+    id: u32,
+) -> crate::model::DetectedRegion {
+    let header_info = detect_headers(occupancy, rect);
+    let stats = occupancy.stats_in_rect(rect);
+    let (kind, confidence) = classify_region(rect, &stats, &header_info, metrics);
+    crate::model::DetectedRegion {
+        id,
+        bounds: format!(
+            "{}{}:{}{}",
+            crate::utils::column_number_to_name(rect.start_col),
+            rect.start_row,
+            crate::utils::column_number_to_name(rect.end_col),
+            rect.end_row
+        ),
+        header_row: header_info.header_row,
+        headers: header_info.headers,
+        row_count: rect.end_row - rect.start_row + 1,
+        classification: kind.clone(),
+        region_kind: Some(kind),
+        confidence,
+    }
+}
+
+#[derive(Debug, Default)]
+struct HeaderInfo {
+    header_row: Option<u32>,
+    headers: Vec<String>,
+}
+
+fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
+    let mut candidates = Vec::new();
+    let max_row = rect.start_row.saturating_add(2).min(rect.end_row);
+    for row in rect.start_row..=max_row {
+        let mut text = 0;
+        let mut numbers = 0;
+        let mut non_empty = 0;
+        let mut unique = HashSet::new();
+        for col in rect.start_col..=rect.end_col {
+            if let Some(val) = occupancy.value_at(row, col) {
+                non_empty += 1;
+                match val {
+                    crate::model::CellValue::Text(s) => {
+                        text += 1;
+                        unique.insert(s.clone());
+                    }
+                    crate::model::CellValue::Number(_) => numbers += 1,
+                    crate::model::CellValue::Bool(_) => text += 1,
+                    crate::model::CellValue::Date(_) => text += 1,
+                    crate::model::CellValue::Error(_) => {}
+                }
+            }
+        }
+        if non_empty == 0 {
+            continue;
+        }
+        let score = text as f32 + unique.len() as f32 * 0.2 - numbers as f32 * 0.3;
+        candidates.push((row, score, text, non_empty));
+    }
+
+    let header_candidates: Vec<&(u32, f32, u32, u32)> = candidates
+        .iter()
+        .filter(|(_, _, text, non_empty)| *text >= 1 && *text * 2 >= *non_empty)
+        .collect();
+
+    let best = header_candidates.iter().copied().max_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| b.0.cmp(&a.0))
+    });
+    let earliest = header_candidates
+        .iter()
+        .copied()
+        .min_by(|a, b| a.0.cmp(&b.0));
+
+    let maybe_header = match (best, earliest) {
+        (Some(best_row), Some(early_row)) => {
+            if (best_row.1 - early_row.1).abs() <= 0.3 {
+                Some(early_row.0)
+            } else {
+                Some(best_row.0)
+            }
+        }
+        (Some(best_row), None) => Some(best_row.0),
+        _ => None,
+    };
+
+    let mut header_rows = Vec::new();
+    if let Some(hr) = maybe_header {
+        header_rows.push(hr);
+        if hr < rect.end_row
+            && let Some((_, score_next, text_next, non_empty_next)) =
+                candidates.iter().find(|(r, _, _, _)| *r == hr + 1)
+            && *text_next >= 1
+            && *text_next * 2 >= *non_empty_next
+            && *score_next
+                >= 0.6
+                    * candidates
+                        .iter()
+                        .find(|(r, _, _, _)| *r == hr)
+                        .map(|c| c.1)
+                        .unwrap_or(0.0)
+        {
+            header_rows.push(hr + 1);
+        }
+    }
+
+    let mut headers = Vec::new();
+    for col in rect.start_col..=rect.end_col {
+        let mut parts = Vec::new();
+        for hr in &header_rows {
+            if let Some(val) = occupancy.value_at(*hr, col) {
+                match val {
+                    crate::model::CellValue::Text(s) if !s.trim().is_empty() => {
+                        parts.push(s.trim().to_string())
+                    }
+                    crate::model::CellValue::Number(n) => parts.push(n.to_string()),
+                    crate::model::CellValue::Bool(b) => parts.push(b.to_string()),
+                    crate::model::CellValue::Date(d) => parts.push(d.clone()),
+                    crate::model::CellValue::Error(e) => parts.push(e.clone()),
+                    _ => {}
+                }
+            }
+        }
+        if parts.is_empty() {
+            headers.push(crate::utils::column_number_to_name(col));
+        } else {
+            headers.push(parts.join(" / "));
+        }
+    }
+
+    HeaderInfo {
+        header_row: header_rows.first().copied(),
+        headers,
+    }
+}
+
+fn classify_region(
+    rect: &Rect,
+    stats: &RegionStats,
+    header_info: &HeaderInfo,
+    metrics: &SheetMetrics,
+) -> (crate::model::RegionKind, f32) {
+    let width = rect.end_col - rect.start_col + 1;
+    let height = rect.end_row - rect.start_row + 1;
+    let area = width.max(1) * height.max(1);
+    let density = if area == 0 {
+        0.0
+    } else {
+        stats.non_empty as f32 / area as f32
+    };
+    let formula_ratio = if stats.non_empty == 0 {
+        0.0
+    } else {
+        stats.formulas as f32 / stats.non_empty as f32
+    };
+    let text_ratio = if stats.non_empty == 0 {
+        0.0
+    } else {
+        stats.text as f32 / stats.non_empty as f32
+    };
+
+    let mut kind = crate::model::RegionKind::Data;
+    if formula_ratio > 0.25 && is_outputs_band(rect, metrics, height, width) {
+        kind = crate::model::RegionKind::Outputs;
+    } else if formula_ratio > 0.55 {
+        kind = crate::model::RegionKind::Calculator;
+    } else if height <= 3
+        && width <= 4
+        && text_ratio > 0.5
+        && rect.end_row >= metrics.row_count.saturating_sub(3)
+    {
+        kind = crate::model::RegionKind::Metadata;
+    } else if formula_ratio < 0.25
+        && stats.numbers > 0
+        && stats.text > 0
+        && text_ratio >= 0.3
+        && (width <= 2 || (width <= 3 && header_info.header_row.is_none()))
+    {
+        kind = crate::model::RegionKind::Parameters;
+    } else if height <= 4 && width <= 6 && formula_ratio < 0.2 && text_ratio > 0.4 && density < 0.5
+    {
+        kind = crate::model::RegionKind::Metadata;
+    }
+
+    let mut confidence: f32 = 0.4;
+    if header_info.header_row.is_some() {
+        confidence += 0.2;
+    }
+    confidence += (density * 0.2).min(0.2);
+    confidence += (formula_ratio * 0.2).min(0.2);
+    if matches!(
+        kind,
+        crate::model::RegionKind::Parameters | crate::model::RegionKind::Metadata
+    ) && width <= 4
+    {
+        confidence += 0.1;
+    }
+    if confidence > 1.0 {
+        confidence = 1.0;
+    }
+
+    (kind, confidence)
+}
+
+fn is_outputs_band(rect: &Rect, metrics: &SheetMetrics, height: u32, width: u32) -> bool {
+    let near_bottom = rect.end_row >= metrics.row_count.saturating_sub(6);
+    let near_right = rect.end_col >= metrics.column_count.saturating_sub(3);
+    let is_shallow = height <= 6;
+    let is_narrow_at_edge = width <= 6 && near_right;
+    let not_at_top_left = rect.start_row > 1 || rect.start_col > 1;
+    let sheet_has_depth = metrics.row_count > 10 || metrics.column_count > 6;
+    let is_band = (is_shallow && near_bottom) || is_narrow_at_edge;
+    is_band && not_at_top_left && sheet_has_depth
 }
 
 fn gather_named_ranges(
