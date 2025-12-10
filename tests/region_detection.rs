@@ -411,3 +411,75 @@ fn header_false_positive_guard_uses_text_row() {
         .detected_regions[0];
     assert_eq!(region.header_row, Some(2));
 }
+
+#[test]
+fn key_value_layout_detected_as_parameters() {
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("kv_layout.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("Item");
+        sheet.get_cell_mut("B1").set_value("Widget");
+        sheet.get_cell_mut("A2").set_value("Quantity");
+        sheet.get_cell_mut("B2").set_value_number(150);
+        sheet.get_cell_mut("A3").set_value("Price");
+        sheet.get_cell_mut("B3").set_value_number(44.99);
+        sheet.get_cell_mut("A4").set_value("Category");
+        sheet.get_cell_mut("B4").set_value("Electronics");
+        sheet.get_cell_mut("A5").set_value("Available");
+        sheet.get_cell_mut("B5").set_value("Yes");
+    });
+
+    let config = Arc::new(workspace.config());
+    let ctx = WorkbookContext::load(&config, &path).expect("load");
+    let region = &ctx
+        .get_sheet_metrics("Sheet1")
+        .expect("metrics")
+        .detected_regions[0];
+
+    assert!(
+        matches!(
+            region.region_kind,
+            Some(spreadsheet_read_mcp::model::RegionKind::Parameters)
+        ),
+        "expected Parameters, got {:?}",
+        region.region_kind
+    );
+    assert_eq!(
+        region.header_row, None,
+        "key-value layout should not have header row"
+    );
+    assert!(
+        !region.headers.contains(&"Widget".to_string()),
+        "headers should not contain data values"
+    );
+}
+
+#[test]
+fn proper_noun_penalized_in_header_scoring() {
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("proper_noun.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("Acme Corp");
+        sheet.get_cell_mut("B1").set_value("Globex Inc");
+        sheet.get_cell_mut("C1").set_value("Initech LLC");
+        sheet.get_cell_mut("A2").set_value("Name");
+        sheet.get_cell_mut("B2").set_value("Dept");
+        sheet.get_cell_mut("C2").set_value("Status");
+        sheet.get_cell_mut("A3").set_value("Widget");
+        sheet.get_cell_mut("B3").set_value("Sales");
+        sheet.get_cell_mut("C3").set_value("Active");
+    });
+
+    let config = Arc::new(workspace.config());
+    let ctx = WorkbookContext::load(&config, &path).expect("load");
+    let region = &ctx
+        .get_sheet_metrics("Sheet1")
+        .expect("metrics")
+        .detected_regions[0];
+
+    assert_eq!(
+        region.header_row,
+        Some(2),
+        "row 2 with generic headers should be preferred over row 1 with proper nouns"
+    );
+}

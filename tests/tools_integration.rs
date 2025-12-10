@@ -149,12 +149,14 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     );
 
     let formula_map = sheet_formula_map(
-        state,
+        state.clone(),
         SheetFormulaMapParams {
-            workbook_id,
+            workbook_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             range: Some("D2:D21".to_string()),
             expand: false,
+            limit: None,
+            sort_by: None,
         },
     )
     .await?;
@@ -162,6 +164,29 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     let primary_group = &formula_map.groups[0];
     assert!(primary_group.formula.contains("*"));
     assert!(!primary_group.addresses.is_empty());
+
+    let limited_map = sheet_formula_map(
+        state.clone(),
+        SheetFormulaMapParams {
+            workbook_id: workbook_id.clone(),
+            sheet_name: "Data".to_string(),
+            range: None,
+            expand: false,
+            limit: Some(2),
+            sort_by: Some(spreadsheet_read_mcp::tools::FormulaSortBy::Complexity),
+        },
+    )
+    .await?;
+    assert!(
+        limited_map.groups.len() <= 2,
+        "limit should cap groups to 2"
+    );
+    if limited_map.groups.len() == 2 {
+        assert!(
+            limited_map.groups[0].formula.len() >= limited_map.groups[1].formula.len(),
+            "complexity sort should order by formula length descending"
+        );
+    }
 
     Ok(())
 }
@@ -185,9 +210,15 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
     if !matches!(trace.direction, TraceDirection::Precedents) {
         panic!("expected precedents trace");
     }
-    if let Some(layer) = trace.layers.first() {
-        assert!(layer.summary.total_nodes >= 1);
-    }
+    assert!(
+        !trace.layers.is_empty(),
+        "E21 formula SUM($D$2:D21) should have precedents but got empty layers"
+    );
+    let layer = trace.layers.first().unwrap();
+    assert!(
+        layer.summary.total_nodes >= 1,
+        "expected at least 1 precedent node"
+    );
 
     let matches = find_formula(
         state.clone(),

@@ -136,16 +136,24 @@ pub struct SheetRegion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum RegionKind {
+    #[serde(rename = "likely_table")]
     Table,
+    #[serde(rename = "likely_data")]
     Data,
+    #[serde(rename = "likely_parameters")]
     Parameters,
+    #[serde(rename = "likely_outputs")]
     Outputs,
+    #[serde(rename = "likely_calculator")]
     Calculator,
+    #[serde(rename = "likely_metadata")]
     Metadata,
+    #[serde(rename = "likely_styles")]
     Styles,
+    #[serde(rename = "likely_comments")]
     Comments,
+    #[serde(rename = "unknown")]
     Other,
 }
 
