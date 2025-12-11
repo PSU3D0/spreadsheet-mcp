@@ -81,6 +81,7 @@ impl TestWorkspace {
             enabled_tools: None,
             transport: TransportKind::Http,
             http_bind_address: "127.0.0.1:8079".parse().unwrap(),
+            recalc_enabled: false,
         }
     }
 
