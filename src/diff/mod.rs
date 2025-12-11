@@ -47,9 +47,10 @@ pub fn calculate_changeset(
 
     for (name, path) in sheet_map {
         if let Some(filter) = sheet_filter
-            && name != filter {
-                continue;
-            }
+            && name != filter
+        {
+            continue;
+        }
 
         // 1. Hash Check
         let base_hash = if let Ok(f) = base_zip.by_name(&path) {

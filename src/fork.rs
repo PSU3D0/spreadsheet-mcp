@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 const FORK_DIR: &str = "/tmp/mcp-forks";
 const DEFAULT_TTL_SECS: u64 = 3600;
 const DEFAULT_MAX_FORKS: usize = 10;
+const CLEANUP_TASK_CHECK_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct EditOp {
@@ -106,6 +107,16 @@ impl ForkRegistry {
             forks: Mutex::new(HashMap::new()),
             config,
         })
+    }
+
+    pub fn start_cleanup_task(self: Arc<Self>) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(CLEANUP_TASK_CHECK_SECS));
+            loop {
+                interval.tick().await;
+                self.evict_expired();
+            }
+        });
     }
 
     pub fn create_fork(&self, base_path: &Path, workspace_root: &Path) -> Result<String> {

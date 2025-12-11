@@ -3,7 +3,9 @@ use crate::config::ServerConfig;
 use crate::fork::{ForkConfig, ForkRegistry};
 use crate::model::{WorkbookId, WorkbookListResponse};
 #[cfg(feature = "recalc")]
-use crate::recalc::{LibreOfficeBackend, RecalcBackend, RecalcConfig, create_executor};
+use crate::recalc::{
+    GlobalRecalcLock, LibreOfficeBackend, RecalcBackend, RecalcConfig, create_executor,
+};
 use crate::tools::filters::WorkbookFilter;
 use crate::utils::{hash_path_metadata, make_short_workbook_id};
 use crate::workbook::{WorkbookContext, build_workbook_list};
@@ -27,6 +29,8 @@ pub struct AppState {
     fork_registry: Option<Arc<ForkRegistry>>,
     #[cfg(feature = "recalc")]
     recalc_backend: Option<Arc<dyn RecalcBackend>>,
+    #[cfg(feature = "recalc")]
+    recalc_semaphore: Option<GlobalRecalcLock>,
 }
 
 impl AppState {
@@ -34,12 +38,16 @@ impl AppState {
         let capacity = NonZeroUsize::new(config.cache_capacity.max(1)).unwrap();
 
         #[cfg(feature = "recalc")]
-        let (fork_registry, recalc_backend) = if config.recalc_enabled {
+        let (fork_registry, recalc_backend, recalc_semaphore) = if config.recalc_enabled {
             let fork_config = ForkConfig::default();
             let registry = ForkRegistry::new(fork_config)
                 .map(Arc::new)
                 .map_err(|e| tracing::warn!("failed to init fork registry: {}", e))
                 .ok();
+
+            if let Some(registry) = &registry {
+                registry.clone().start_cleanup_task();
+            }
 
             let executor = create_executor(&RecalcConfig::default());
             let backend: Arc<dyn RecalcBackend> = Arc::new(LibreOfficeBackend::new(executor));
@@ -50,9 +58,11 @@ impl AppState {
                 None
             };
 
-            (registry, backend)
+            let semaphore = GlobalRecalcLock::new(config.max_concurrent_recalcs);
+
+            (registry, backend, Some(semaphore))
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         Self {
@@ -64,6 +74,8 @@ impl AppState {
             fork_registry,
             #[cfg(feature = "recalc")]
             recalc_backend,
+            #[cfg(feature = "recalc")]
+            recalc_semaphore,
         }
     }
 
@@ -79,6 +91,11 @@ impl AppState {
     #[cfg(feature = "recalc")]
     pub fn recalc_backend(&self) -> Option<&Arc<dyn RecalcBackend>> {
         self.recalc_backend.as_ref()
+    }
+
+    #[cfg(feature = "recalc")]
+    pub fn recalc_semaphore(&self) -> Option<&GlobalRecalcLock> {
+        self.recalc_semaphore.as_ref()
     }
 
     pub fn list_workbooks(&self, filter: WorkbookFilter) -> Result<WorkbookListResponse> {
