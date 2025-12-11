@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/spreadsheet-mcp/badge.svg)](https://docs.rs/spreadsheet-mcp)
 [![License](https://img.shields.io/crates/l/spreadsheet-mcp.svg)](https://github.com/PSU3D0/spreadsheet-mcp/blob/main/LICENSE)
 
-![Spreadsheet MCP](assets/banner.jpeg)
+![Spreadsheet MCP](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/banner.jpeg)
 
 MCP server for spreadsheet analysis and editing. Slim, token-efficient tool surface designed for LLM agents.
 
@@ -17,7 +17,7 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 ## Architecture
 
-![Architecture Overview](assets/architecture_overview.jpeg)
+![Architecture Overview](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/architecture_overview.jpeg)
 
 - **LRU cache** keeps recently-accessed workbooks in memory (configurable capacity)
 - **Lazy sheet metrics** computed once per sheet, reused across tools
@@ -37,9 +37,26 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 | `sheet_page` | Fallback pagination; supports `compact`/`values_only` |
 | `formula_trace` | Precedents/dependents with paging |
 
-## Write & Recalc Support (Experimental)
+## Write & Recalc Support
 
-Enabled via `SPREADSHEET_MCP_RECALC_ENABLED=true` (requires `spreadsheet-mcp:full` image).
+Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate formulas via LibreOffice, and diff the results.
+
+### Enabling Write Tools
+
+Use the `:full` Docker image (write tools enabled by default):
+```bash
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+Or with a binary build:
+```bash
+cargo install spreadsheet-mcp --features recalc
+spreadsheet-mcp --workspace-root /path/to/workbooks --recalc-enabled
+```
+
+**Note:** Recalculation requires LibreOffice installed on the host when not using the `:full` Docker image.
+
+### Write Tools
 
 | Tool | Purpose |
 | --- | --- |
@@ -88,7 +105,7 @@ The agent now knows column types, cardinality, and value distributions—without
 
 ## Recommended Agent Workflow
 
-![Token Efficiency Workflow](assets/token_efficiency.jpeg)
+![Token Efficiency Workflow](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/token_efficiency.jpeg)
 
 1. `list_workbooks` → `list_sheets` → `workbook_summary` for orientation
 2. `sheet_overview` to get `detected_regions` (ids/bounds/kind/confidence)
@@ -99,7 +116,7 @@ The agent now knows column types, cardinality, and value distributions—without
 
 ## Region Detection
 
-![Region Detection Visualization](assets/region_detection_viz.jpeg)
+![Region Detection Visualization](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/region_detection_viz.jpeg)
 
 Spreadsheets often contain multiple logical tables, parameter blocks, and output areas on a single sheet. The server detects these automatically:
 
@@ -116,22 +133,34 @@ Regions are cached per sheet. Tools like `read_table` accept a `region_id` to sc
 
 ### Docker (Recommended)
 
-```bash
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
-```
+Two image variants are published:
 
-For stdio mode (e.g., Claude Code):
+| Image | Size | Write/Recalc |
+| --- | --- | --- |
+| `ghcr.io/psu3d0/spreadsheet-mcp:latest` | ~15MB | No |
+| `ghcr.io/psu3d0/spreadsheet-mcp:full` | ~800MB | Yes (includes LibreOffice) |
+
 ```bash
-docker run -i --rm -v /path/to/workbooks:/data ghcr.io/psu3d0/spreadsheet-mcp:latest \
-  --transport stdio
+# Read-only (slim image)
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
+
+# With write/recalc support (full image)
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
 
 ### Cargo Install
 
 ```bash
+# Read-only
 cargo install spreadsheet-mcp
 spreadsheet-mcp --workspace-root /path/to/workbooks
+
+# With write/recalc support
+cargo install spreadsheet-mcp --features recalc
+spreadsheet-mcp --workspace-root /path/to/workbooks --recalc-enabled
 ```
+
+**Note:** The `--recalc-enabled` flag requires LibreOffice installed on the host.
 
 ### Build from Source
 
@@ -143,61 +172,13 @@ Default transport: HTTP streaming at `127.0.0.1:8079`. Endpoint: `POST /mcp`.
 
 Use `--transport stdio` for CLI pipelines.
 
-## Local Development Testing
-
-To test local changes without rebuilding Docker, point your MCP client directly at the cargo build:
-
-### Claude Code (Local Build)
-
-Add to `~/.claude.json` or project `.mcp.json`:
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "cargo",
-      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-mcp/Cargo.toml", "--", "--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-Or build once and run the binary directly:
-```bash
-cargo build --release
-```
-
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "/path/to/spreadsheet-mcp/target/release/spreadsheet-mcp",
-      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### Cursor / VS Code (Local Build)
-
-In `.vscode/settings.json` or user settings:
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "cargo",
-      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-mcp/Cargo.toml", "--", "--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-**Tip:** Use `cargo build --release` first, then point to the binary for faster startup.
-
 ## MCP Client Configuration
 
-### Claude Desktop (Docker)
+### Claude Code / Claude Desktop
 
-Add to `claude_desktop_config.json`:
+Add to `~/.claude.json` or project `.mcp.json`:
+
+**Read-only (slim image):**
 ```json
 {
   "mcpServers": {
@@ -209,8 +190,19 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Claude Desktop (Binary)
+**With write/recalc (full image):**
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio"]
+    }
+  }
+}
+```
 
+**Binary (no Docker):**
 ```json
 {
   "mcpServers": {
@@ -222,8 +214,9 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor / VS Code (Docker)
+### Cursor / VS Code
 
+**Read-only (slim image):**
 ```json
 {
   "mcp.servers": {
@@ -235,8 +228,19 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor / VS Code (Binary)
+**With write/recalc (full image):**
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio"]
+    }
+  }
+}
+```
 
+**Binary (no Docker):**
 ```json
 {
   "mcp.servers": {
@@ -256,6 +260,26 @@ docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-m
 
 Connect via `POST http://localhost:8079/mcp`.
 
+## Local Development
+
+To test local changes without rebuilding Docker:
+
+```bash
+cargo build --release
+```
+
+Then point your MCP client to the binary:
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "/path/to/spreadsheet-mcp/target/release/spreadsheet-mcp",
+      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
+    }
+  }
+}
+```
+
 ## Configuration
 
 | Flag | Env | Description |
@@ -267,6 +291,8 @@ Connect via `POST http://localhost:8079/mcp`.
 | `--enabled-tools <list>` | `SPREADSHEET_MCP_ENABLED_TOOLS` | Whitelist exposed tools |
 | `--transport <http\|stdio>` | `SPREADSHEET_MCP_TRANSPORT` | Transport selection (default: http) |
 | `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address (default: `127.0.0.1:8079`) |
+| `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | Enable write/recalc tools (default: false) |
+| `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | Parallel recalc limit (default: 2) |
 
 ## Performance
 
@@ -286,7 +312,7 @@ Covers: region detection, region-scoped tools, `read_table` edge cases (merged h
 
 ## Behavior & Limits
 
-- **Read-only by default**; write/recalc features require `SPREADSHEET_MCP_RECALC_ENABLED=true`
+- **Read-only by default**; write/recalc features require `--recalc-enabled` or the `:full` image
 - **XLSX supported for write**; `.xls`/`.xlsb` are read-only
 - Bounded in-memory cache honors `cache_capacity`
 - Prefer region-scoped reads and sampling for token/latency efficiency
