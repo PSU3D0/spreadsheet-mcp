@@ -49,6 +49,7 @@ tempfile = "3.10"
 [features]
 default = []
 recalc = ["async-trait", "uuid", "zip", "quick-xml", "xxhash-rust"]
+docker-tests = []
 
 [dev-dependencies]
 assert_matches = "1.5"
