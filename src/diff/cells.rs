@@ -99,11 +99,12 @@ impl<'a, R: BufRead> CellIterator<'a, R> {
         // Post-process value based on type
         if type_str == "s"
             && let Some(ref v) = value
-                && let Ok(idx) = v.parse::<usize>()
-                    && let Some(sst) = self.sst
-                        && let Some(s) = sst.get(idx) {
-                            value = Some(s.to_string());
-                        }
+            && let Ok(idx) = v.parse::<usize>()
+            && let Some(sst) = self.sst
+            && let Some(s) = sst.get(idx)
+        {
+            value = Some(s.to_string());
+        }
 
         Ok(RawCell {
             address,

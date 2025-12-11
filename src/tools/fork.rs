@@ -239,7 +239,17 @@ pub async fn recalculate(
         .recalc_backend()
         .ok_or_else(|| anyhow!("recalc backend not available (soffice not found?)"))?;
 
+    let semaphore = state
+        .recalc_semaphore()
+        .ok_or_else(|| anyhow!("recalc semaphore not available"))?;
+
     let fork_ctx = registry.get_fork(&params.fork_id)?;
+
+    let _permit = semaphore
+        .0
+        .acquire()
+        .await
+        .map_err(|e| anyhow!("failed to acquire recalc permit: {}", e))?;
 
     let result = backend.recalculate(&fork_ctx.work_path).await?;
 

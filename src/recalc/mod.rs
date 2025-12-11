@@ -17,6 +17,19 @@ pub use fire_and_forget::FireAndForgetExecutor;
 use std::path::PathBuf;
 #[cfg(feature = "recalc")]
 use std::sync::Arc;
+#[cfg(feature = "recalc")]
+use tokio::sync::Semaphore;
+
+#[cfg(feature = "recalc")]
+#[derive(Clone)]
+pub struct GlobalRecalcLock(pub Arc<Semaphore>);
+
+#[cfg(feature = "recalc")]
+impl GlobalRecalcLock {
+    pub fn new(permits: usize) -> Self {
+        Self(Arc::new(Semaphore::new(permits)))
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ExecutorStrategy {
