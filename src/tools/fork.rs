@@ -99,6 +99,9 @@ pub async fn edit_batch(
         Ok(ctx.edits.len())
     })?;
 
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
     Ok(EditBatchResponse {
         fork_id: params.fork_id,
         edits_applied: edit_count,
@@ -253,6 +256,9 @@ pub async fn recalculate(
 
     let result = backend.recalculate(&fork_ctx.work_path).await?;
 
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
     Ok(RecalculateResponse {
         fork_id: params.fork_id,
         duration_ms: result.duration_ms,
@@ -328,13 +334,22 @@ pub async fn discard_fork(
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SaveForkParams {
     pub fork_id: String,
+    /// Target path to save to. If omitted, saves to original location (requires --allow-overwrite).
     pub target_path: Option<String>,
+    /// If true, discard the fork after saving. If false, fork remains active for further edits.
+    #[serde(default = "default_drop_fork")]
+    pub drop_fork: bool,
+}
+
+fn default_drop_fork() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SaveForkResponse {
     pub fork_id: String,
     pub saved_to: String,
+    pub fork_dropped: bool,
 }
 
 pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<SaveForkResponse> {
@@ -343,17 +358,34 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
         .ok_or_else(|| anyhow!("fork registry not available"))?;
 
     let fork_ctx = registry.get_fork(&params.fork_id)?;
-    let workspace_root = &state.config().workspace_root;
+    let config = state.config();
+    let workspace_root = &config.workspace_root;
 
-    let target = match params.target_path {
-        Some(p) => state.config().resolve_path(&p),
-        None => fork_ctx.base_path.clone(),
+    let (target, is_overwrite) = match params.target_path {
+        Some(p) => {
+            let resolved = config.resolve_path(&p);
+            let is_overwrite = resolved == fork_ctx.base_path;
+            (resolved, is_overwrite)
+        }
+        None => (fork_ctx.base_path.clone(), true),
     };
 
-    registry.save_fork(&params.fork_id, &target, workspace_root)?;
+    if is_overwrite && !config.allow_overwrite {
+        return Err(anyhow!(
+            "overwriting original file is disabled. Use --allow-overwrite flag or specify a different target_path"
+        ));
+    }
+
+    let base_path = fork_ctx.base_path.clone();
+    registry.save_fork(&params.fork_id, &target, workspace_root, params.drop_fork)?;
+
+    if is_overwrite {
+        state.evict_by_path(&base_path);
+    }
 
     Ok(SaveForkResponse {
         fork_id: params.fork_id,
         saved_to: target.display().to_string(),
+        fork_dropped: params.drop_fork,
     })
 }

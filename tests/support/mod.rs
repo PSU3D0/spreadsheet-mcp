@@ -70,6 +70,12 @@ impl TestWorkspace {
         path
     }
 
+    pub fn copy_workbook(&self, src: &Path, name: &str) -> PathBuf {
+        let dest = self.path(name);
+        std::fs::copy(src, &dest).expect("copy workbook");
+        dest
+    }
+
     pub fn config(&self) -> ServerConfig {
         ServerConfig {
             workspace_root: self.root.clone(),
@@ -84,6 +90,7 @@ impl TestWorkspace {
             http_bind_address: "127.0.0.1:8079".parse().unwrap(),
             recalc_enabled: false,
             max_concurrent_recalcs: 2,
+            allow_overwrite: false,
         }
     }
 

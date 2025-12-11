@@ -43,18 +43,12 @@ Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate f
 
 ### Enabling Write Tools
 
-Use the `:full` Docker image (write tools enabled by default):
+**Always use the `:full` Docker image for write/recalc features:**
 ```bash
 docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
 
-Or with a binary build:
-```bash
-cargo install spreadsheet-mcp --features recalc
-spreadsheet-mcp --workspace-root /path/to/workbooks --recalc-enabled
-```
-
-**Note:** Recalculation requires LibreOffice installed on the host when not using the `:full` Docker image.
+The Docker image includes LibreOffice with pre-configured macros required for reliable recalculation. Running outside Docker requires manual LibreOffice setup (macro trust, headless config) and is not recommended.
 
 ### Write Tools
 
@@ -64,7 +58,9 @@ spreadsheet-mcp --workspace-root /path/to/workbooks --recalc-enabled
 | `edit_batch` | Apply values or formulas to cells in a fork |
 | `recalculate` | Trigger LibreOffice to update formula results |
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
-| `save_fork` | Commit changes to a file (overwrite or new path) |
+| `get_edits` | List all edits applied to a fork |
+| `list_forks` | List all active forks |
+| `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
 | `discard_fork` | Delete the temporary fork |
 
 See [docs/RECALC.md](docs/RECALC.md) for architecture details.
@@ -154,13 +150,9 @@ docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-m
 # Read-only
 cargo install spreadsheet-mcp
 spreadsheet-mcp --workspace-root /path/to/workbooks
-
-# With write/recalc support
-cargo install spreadsheet-mcp --features recalc
-spreadsheet-mcp --workspace-root /path/to/workbooks --recalc-enabled
 ```
 
-**Note:** The `--recalc-enabled` flag requires LibreOffice installed on the host.
+**Note:** For write/recalc features, use the `:full` Docker image instead of cargo install. The Docker image includes LibreOffice with required macro configuration.
 
 ### Build from Source
 
@@ -293,6 +285,7 @@ Then point your MCP client to the binary:
 | `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address (default: `127.0.0.1:8079`) |
 | `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | Enable write/recalc tools (default: false) |
 | `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | Parallel recalc limit (default: 2) |
+| `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | Allow `save_fork` to overwrite original files (default: false) |
 
 ## Performance
 
@@ -309,6 +302,27 @@ cargo test
 ```
 
 Covers: region detection, region-scoped tools, `read_table` edge cases (merged headers, filters, large sheets), workbook summary.
+
+### Local MCP Testing
+
+To test local changes with an MCP client (Claude Code, Cursor, etc.), use the helper script that rebuilds the Docker image on each invocation:
+
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "./scripts/local-docker-mcp.sh"
+    }
+  }
+}
+```
+
+Set `WORKSPACE_ROOT` to override the default test directory:
+```bash
+WORKSPACE_ROOT=/path/to/workbooks ./scripts/local-docker-mcp.sh
+```
+
+This ensures you're always testing against your latest code changes without manual image rebuilds.
 
 ## Behavior & Limits
 

@@ -152,7 +152,28 @@ impl AppState {
         Ok(())
     }
 
+    pub fn evict_by_path(&self, path: &Path) {
+        let index = self.index.read();
+        let workbook_id = index
+            .iter()
+            .find(|(_, p)| *p == path)
+            .map(|(id, _)| id.clone());
+        drop(index);
+
+        if let Some(id) = workbook_id {
+            let mut cache = self.cache.write();
+            cache.pop(&id);
+        }
+    }
+
     fn resolve_workbook_path(&self, workbook_id: &WorkbookId) -> Result<PathBuf> {
+        #[cfg(feature = "recalc")]
+        if let Some(registry) = &self.fork_registry
+            && let Some(fork_path) = registry.get_fork_path(workbook_id.as_str())
+        {
+            return Ok(fork_path);
+        }
+
         if let Some(path) = self.index.read().get(workbook_id).cloned() {
             return Ok(path);
         }
@@ -163,6 +184,13 @@ impl AppState {
     }
 
     fn canonicalize_workbook_id(&self, workbook_id: &WorkbookId) -> Result<WorkbookId> {
+        #[cfg(feature = "recalc")]
+        if let Some(registry) = &self.fork_registry
+            && registry.get_fork_path(workbook_id.as_str()).is_some()
+        {
+            return Ok(workbook_id.clone());
+        }
+
         if self.index.read().contains_key(workbook_id) {
             return Ok(workbook_id.clone());
         }
