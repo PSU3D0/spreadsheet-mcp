@@ -57,9 +57,17 @@ impl SpreadsheetServer {
     }
 
     pub fn from_state(state: Arc<AppState>) -> Self {
+        #[allow(unused_mut)]
+        let mut router = Self::tool_router();
+
+        #[cfg(feature = "recalc")]
+        {
+            router.merge(Self::fork_tool_router());
+        }
+
         Self {
             state,
-            tool_router: Self::tool_router(),
+            tool_router: router,
         }
     }
 
@@ -370,6 +378,114 @@ impl SpreadsheetServer {
         self.ensure_tool_enabled("close_workbook")
             .map_err(to_mcp_error)?;
         tools::close_workbook(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+}
+
+#[cfg(feature = "recalc")]
+#[tool_router(router = fork_tool_router)]
+impl SpreadsheetServer {
+    #[tool(
+        name = "create_fork",
+        description = "Create a temporary editable copy of a workbook for what-if analysis"
+    )]
+    pub async fn create_fork(
+        &self,
+        Parameters(params): Parameters<tools::fork::CreateForkParams>,
+    ) -> Result<Json<tools::fork::CreateForkResponse>, McpError> {
+        self.ensure_recalc_enabled("create_fork")
+            .map_err(to_mcp_error)?;
+        tools::fork::create_fork(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "edit_batch",
+        description = "Apply batch edits (values or formulas) to a fork"
+    )]
+    pub async fn edit_batch(
+        &self,
+        Parameters(params): Parameters<tools::fork::EditBatchParams>,
+    ) -> Result<Json<tools::fork::EditBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("edit_batch")
+            .map_err(to_mcp_error)?;
+        tools::fork::edit_batch(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "get_edits", description = "List all edits applied to a fork")]
+    pub async fn get_edits(
+        &self,
+        Parameters(params): Parameters<tools::fork::GetEditsParams>,
+    ) -> Result<Json<tools::fork::GetEditsResponse>, McpError> {
+        self.ensure_recalc_enabled("get_edits")
+            .map_err(to_mcp_error)?;
+        tools::fork::get_edits(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "recalculate",
+        description = "Recalculate all formulas in a fork using LibreOffice"
+    )]
+    pub async fn recalculate(
+        &self,
+        Parameters(params): Parameters<tools::fork::RecalculateParams>,
+    ) -> Result<Json<tools::fork::RecalculateResponse>, McpError> {
+        self.ensure_recalc_enabled("recalculate")
+            .map_err(to_mcp_error)?;
+        tools::fork::recalculate(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "list_forks", description = "List all active forks")]
+    pub async fn list_forks(
+        &self,
+        Parameters(params): Parameters<tools::fork::ListForksParams>,
+    ) -> Result<Json<tools::fork::ListForksResponse>, McpError> {
+        self.ensure_recalc_enabled("list_forks")
+            .map_err(to_mcp_error)?;
+        tools::fork::list_forks(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "discard_fork", description = "Discard a fork without saving")]
+    pub async fn discard_fork(
+        &self,
+        Parameters(params): Parameters<tools::fork::DiscardForkParams>,
+    ) -> Result<Json<tools::fork::DiscardForkResponse>, McpError> {
+        self.ensure_recalc_enabled("discard_fork")
+            .map_err(to_mcp_error)?;
+        tools::fork::discard_fork(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "save_fork",
+        description = "Save fork changes to target path (defaults to overwriting original)"
+    )]
+    pub async fn save_fork(
+        &self,
+        Parameters(params): Parameters<tools::fork::SaveForkParams>,
+    ) -> Result<Json<tools::fork::SaveForkResponse>, McpError> {
+        self.ensure_recalc_enabled("save_fork")
+            .map_err(to_mcp_error)?;
+        tools::fork::save_fork(self.state.clone(), params)
             .await
             .map(Json)
             .map_err(to_mcp_error)

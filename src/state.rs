@@ -1,5 +1,9 @@
 use crate::config::ServerConfig;
+#[cfg(feature = "recalc")]
+use crate::fork::{ForkConfig, ForkRegistry};
 use crate::model::{WorkbookId, WorkbookListResponse};
+#[cfg(feature = "recalc")]
+use crate::recalc::{LibreOfficeBackend, RecalcBackend, RecalcConfig, create_executor};
 use crate::tools::filters::WorkbookFilter;
 use crate::utils::{hash_path_metadata, make_short_workbook_id};
 use crate::workbook::{WorkbookContext, build_workbook_list};
@@ -19,21 +23,62 @@ pub struct AppState {
     cache: RwLock<LruCache<WorkbookId, Arc<WorkbookContext>>>,
     index: RwLock<HashMap<WorkbookId, PathBuf>>,
     alias_index: RwLock<HashMap<String, WorkbookId>>,
+    #[cfg(feature = "recalc")]
+    fork_registry: Option<Arc<ForkRegistry>>,
+    #[cfg(feature = "recalc")]
+    recalc_backend: Option<Arc<dyn RecalcBackend>>,
 }
 
 impl AppState {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         let capacity = NonZeroUsize::new(config.cache_capacity.max(1)).unwrap();
+
+        #[cfg(feature = "recalc")]
+        let (fork_registry, recalc_backend) = if config.recalc_enabled {
+            let fork_config = ForkConfig::default();
+            let registry = ForkRegistry::new(fork_config)
+                .map(Arc::new)
+                .map_err(|e| tracing::warn!("failed to init fork registry: {}", e))
+                .ok();
+
+            let executor = create_executor(&RecalcConfig::default());
+            let backend: Arc<dyn RecalcBackend> = Arc::new(LibreOfficeBackend::new(executor));
+            let backend = if backend.is_available() {
+                Some(backend)
+            } else {
+                tracing::warn!("recalc backend not available (soffice not found)");
+                None
+            };
+
+            (registry, backend)
+        } else {
+            (None, None)
+        };
+
         Self {
             config,
             cache: RwLock::new(LruCache::new(capacity)),
             index: RwLock::new(HashMap::new()),
             alias_index: RwLock::new(HashMap::new()),
+            #[cfg(feature = "recalc")]
+            fork_registry,
+            #[cfg(feature = "recalc")]
+            recalc_backend,
         }
     }
 
     pub fn config(&self) -> Arc<ServerConfig> {
         self.config.clone()
+    }
+
+    #[cfg(feature = "recalc")]
+    pub fn fork_registry(&self) -> Option<&Arc<ForkRegistry>> {
+        self.fork_registry.as_ref()
+    }
+
+    #[cfg(feature = "recalc")]
+    pub fn recalc_backend(&self) -> Option<&Arc<dyn RecalcBackend>> {
+        self.recalc_backend.as_ref()
     }
 
     pub fn list_workbooks(&self, filter: WorkbookFilter) -> Result<WorkbookListResponse> {
