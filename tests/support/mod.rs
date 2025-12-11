@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub mod builders;
+pub mod docker;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

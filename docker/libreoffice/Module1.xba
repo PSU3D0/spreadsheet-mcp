@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
 <script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">
-Sub RecalculateAndSave()
-    ThisComponent.calculateAll()
-    ThisComponent.store()
-    ThisComponent.close(True)
+Sub RecalculateAndSave(sPath As String)
+    Dim desktop As Object
+    desktop = CreateUnoService("com.sun.star.frame.Desktop")
+
+    Dim args(0) As New com.sun.star.beans.PropertyValue
+    args(0).Name = "Hidden"
+    args(0).Value = True
+
+    Dim doc As Object
+    doc = desktop.loadComponentFromURL(ConvertToURL(sPath), "_blank", 0, args())
+
+    If IsNull(doc) Or IsEmpty(doc) Then
+        Exit Sub
+    End If
+
+    doc.calculateAll()
+    doc.store()
+    doc.close(True)
 End Sub
 </script:module>

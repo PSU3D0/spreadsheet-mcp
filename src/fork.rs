@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -58,16 +58,12 @@ impl ForkContext {
         let current_modified = metadata.modified()?;
 
         if current_modified != self.base_modified {
-            return Err(anyhow!(
-                "base file modified since fork creation"
-            ));
+            return Err(anyhow!("base file modified since fork creation"));
         }
 
         let current_hash = hash_file(&self.base_path)?;
         if current_hash != self.base_hash {
-            return Err(anyhow!(
-                "base file content changed since fork creation"
-            ));
+            return Err(anyhow!("base file content changed since fork creation"));
         }
 
         Ok(())
@@ -138,9 +134,7 @@ impl ForkRegistry {
         }
 
         if !base_path.starts_with(workspace_root) {
-            return Err(anyhow!(
-                "base path must be within workspace root"
-            ));
+            return Err(anyhow!("base path must be within workspace root"));
         }
 
         if !base_path.exists() {
@@ -188,11 +182,14 @@ impl ForkRegistry {
         Ok(())
     }
 
-    pub fn save_fork(&self, fork_id: &str, target_path: &Path, workspace_root: &Path) -> Result<()> {
+    pub fn save_fork(
+        &self,
+        fork_id: &str,
+        target_path: &Path,
+        workspace_root: &Path,
+    ) -> Result<()> {
         if !target_path.starts_with(workspace_root) {
-            return Err(anyhow!(
-                "target path must be within workspace root"
-            ));
+            return Err(anyhow!("target path must be within workspace root"));
         }
 
         let ext = target_path

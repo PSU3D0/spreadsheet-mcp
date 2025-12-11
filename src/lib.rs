@@ -2,6 +2,8 @@ pub mod analysis;
 pub mod caps;
 pub mod config;
 #[cfg(feature = "recalc")]
+pub mod diff;
+#[cfg(feature = "recalc")]
 pub mod fork;
 pub mod model;
 pub mod recalc;

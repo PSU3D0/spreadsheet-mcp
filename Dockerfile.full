@@ -18,9 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /etc/libreoffice/4/user/basic/Standard
+RUN mkdir -p /etc/libreoffice/4/user/basic/Standard \
+    && mkdir -p /root/.config/libreoffice/4/user/basic/Standard
+# Pre-initialize a default profile so the first runtime call doesn't hang on setup.
+RUN soffice --headless --norestore --nodefault --nolockcheck --terminate_after_init || true
+
 COPY docker/libreoffice/Module1.xba /etc/libreoffice/4/user/basic/Standard/
 COPY docker/libreoffice/script.xlb /etc/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/registrymodifications.xcu /etc/libreoffice/4/user/
+COPY docker/libreoffice/Module1.xba /root/.config/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/script.xlb /root/.config/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/registrymodifications.xcu /root/.config/libreoffice/4/user/
 
 COPY --from=builder /build/target/release/spreadsheet-read-mcp /usr/local/bin/spreadsheet-mcp
 

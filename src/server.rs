@@ -382,7 +382,6 @@ impl SpreadsheetServer {
             .map(Json)
             .map_err(to_mcp_error)
     }
-
 }
 
 #[cfg(feature = "recalc")]
@@ -428,6 +427,22 @@ impl SpreadsheetServer {
         self.ensure_recalc_enabled("get_edits")
             .map_err(to_mcp_error)?;
         tools::fork::get_edits(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "get_changeset",
+        description = "Calculate diff between fork and base workbook"
+    )]
+    pub async fn get_changeset(
+        &self,
+        Parameters(params): Parameters<tools::fork::GetChangesetParams>,
+    ) -> Result<Json<tools::fork::GetChangesetResponse>, McpError> {
+        self.ensure_recalc_enabled("get_changeset")
+            .map_err(to_mcp_error)?;
+        tools::fork::get_changeset(self.state.clone(), params)
             .await
             .map(Json)
             .map_err(to_mcp_error)

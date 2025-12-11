@@ -106,11 +106,7 @@ pub async fn edit_batch(
     })
 }
 
-fn apply_edits_to_file(
-    path: &std::path::Path,
-    sheet_name: &str,
-    edits: &[CellEdit],
-) -> Result<()> {
+fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEdit]) -> Result<()> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
     let sheet = book
@@ -150,10 +146,7 @@ pub struct EditRecord {
     pub is_formula: bool,
 }
 
-pub async fn get_edits(
-    state: Arc<AppState>,
-    params: GetEditsParams,
-) -> Result<GetEditsResponse> {
+pub async fn get_edits(state: Arc<AppState>, params: GetEditsParams) -> Result<GetEditsResponse> {
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
@@ -175,6 +168,44 @@ pub async fn get_edits(
     Ok(GetEditsResponse {
         fork_id: params.fork_id,
         edits,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetChangesetParams {
+    pub fork_id: String,
+    pub sheet_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GetChangesetResponse {
+    pub fork_id: String,
+    pub base_workbook: String,
+    pub changes: Vec<crate::diff::DiffResult>,
+}
+
+pub async fn get_changeset(
+    state: Arc<AppState>,
+    params: GetChangesetParams,
+) -> Result<GetChangesetResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+
+    let changes = tokio::task::spawn_blocking({
+        let base_path = fork_ctx.base_path.clone();
+        let work_path = fork_ctx.work_path.clone();
+        let sheet_filter = params.sheet_name.clone();
+        move || crate::diff::calculate_changeset(&base_path, &work_path, sheet_filter.as_deref())
+    })
+    .await??;
+
+    Ok(GetChangesetResponse {
+        fork_id: params.fork_id,
+        base_workbook: fork_ctx.base_path.display().to_string(),
+        changes,
     })
 }
 
@@ -296,10 +327,7 @@ pub struct SaveForkResponse {
     pub saved_to: String,
 }
 
-pub async fn save_fork(
-    state: Arc<AppState>,
-    params: SaveForkParams,
-) -> Result<SaveForkResponse> {
+pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<SaveForkResponse> {
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
