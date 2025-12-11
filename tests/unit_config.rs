@@ -1,7 +1,7 @@
 use std::fs;
 
 use clap::Parser;
-use spreadsheet_read_mcp::{CliArgs, ServerConfig, TransportKind};
+use spreadsheet_mcp::{CliArgs, ServerConfig, TransportKind};
 
 #[test]
 fn merges_config_file_and_cli_overrides() {

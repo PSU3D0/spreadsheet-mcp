@@ -30,15 +30,9 @@ COPY docker/libreoffice/Module1.xba /root/.config/libreoffice/4/user/basic/Stand
 COPY docker/libreoffice/script.xlb /root/.config/libreoffice/4/user/basic/Standard/
 COPY docker/libreoffice/registrymodifications.xcu /root/.config/libreoffice/4/user/
 
-COPY --from=builder /build/target/release/spreadsheet-read-mcp /usr/local/bin/spreadsheet-mcp
+COPY --from=builder /build/target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 WORKDIR /data
-
-LABEL org.opencontainers.image.source="https://github.com/PSU3D0/spreadsheet-read-mcp"
-LABEL org.opencontainers.image.description="MCP server for spreadsheet analysis with write/recalc support"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL io.modelcontextprotocol.server.name="io.github.psu3d0/spreadsheet-mcp"
-
 ENV SPREADSHEET_MCP_RECALC_ENABLED=true
 
 ENTRYPOINT ["spreadsheet-mcp"]

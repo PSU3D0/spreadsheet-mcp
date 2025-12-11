@@ -1,6 +1,6 @@
 use anyhow::Result;
-use spreadsheet_read_mcp::model::SheetPageFormat;
-use spreadsheet_read_mcp::tools::{
+use spreadsheet_mcp::model::SheetPageFormat;
+use spreadsheet_mcp::tools::{
     FindValueParams, ListSheetsParams, RangeValuesParams, ReadTableParams, SheetOverviewParams,
     SheetPageParams, TableProfileParams, find_value, list_workbooks, range_values, read_table,
     sheet_overview, sheet_page, table_profile,
@@ -17,7 +17,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
 
     let workbooks = list_workbooks(
         state.clone(),
-        spreadsheet_read_mcp::tools::ListWorkbooksParams {
+        spreadsheet_mcp::tools::ListWorkbooksParams {
             slug_prefix: None,
             folder: None,
             path_glob: None,
@@ -27,7 +27,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let descriptor = workbooks.workbooks.first().expect("workbook exists");
     let workbook_id = descriptor.workbook_id.clone();
 
-    let sheets = spreadsheet_read_mcp::tools::list_sheets(
+    let sheets = spreadsheet_mcp::tools::list_sheets(
         state.clone(),
         ListSheetsParams {
             workbook_id: workbook_id.clone(),
@@ -65,10 +65,10 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             workbook_id: workbook_id.clone(),
             query: "".into(),
             label: Some("Comp Rate".into()),
-            mode: Some(spreadsheet_read_mcp::model::FindMode::Label),
+            mode: Some(spreadsheet_mcp::model::FindMode::Label),
             sheet_name: Some(target.clone()),
             region_id: None,
-            direction: Some(spreadsheet_read_mcp::model::LabelDirection::Right),
+            direction: Some(spreadsheet_mcp::model::LabelDirection::Right),
             ..Default::default()
         },
     )
@@ -77,7 +77,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         label_matches.matches.iter().any(|m| {
             m.value
                 .as_ref()
-                .map(|v| matches!(v, spreadsheet_read_mcp::model::CellValue::Number(n) if (*n - 175.5).abs() < 0.01))
+                .map(|v| matches!(v, spreadsheet_mcp::model::CellValue::Number(n) if (*n - 175.5).abs() < 0.01))
                 .unwrap_or(false)
         }),
         "label mode should return adjacent value, got: {:?}",
@@ -90,7 +90,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             workbook_id: workbook_id.clone(),
             query: "Widget".into(),
             sheet_name: Some(target.clone()),
-            mode: Some(spreadsheet_read_mcp::model::FindMode::Value),
+            mode: Some(spreadsheet_mcp::model::FindMode::Value),
             ..Default::default()
         },
     )
@@ -179,7 +179,7 @@ async fn find_value_search_headers_only() -> Result<()> {
     let state = workspace.app_state();
     let workbooks = list_workbooks(
         state.clone(),
-        spreadsheet_read_mcp::tools::ListWorkbooksParams {
+        spreadsheet_mcp::tools::ListWorkbooksParams {
             slug_prefix: None,
             folder: None,
             path_glob: None,

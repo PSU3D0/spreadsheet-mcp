@@ -12,6 +12,7 @@ const FORK_DIR: &str = "/tmp/mcp-forks";
 const DEFAULT_TTL_SECS: u64 = 3600;
 const DEFAULT_MAX_FORKS: usize = 10;
 const CLEANUP_TASK_CHECK_SECS: u64 = 60;
+const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
 
 #[derive(Debug, Clone)]
 pub struct EditOp {
@@ -150,6 +151,15 @@ impl ForkRegistry {
 
         if !base_path.exists() {
             return Err(anyhow!("base file does not exist: {:?}", base_path));
+        }
+
+        let metadata = fs::metadata(base_path)?;
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(anyhow!(
+                "base file too large: {} bytes (max {} MB)",
+                metadata.len(),
+                MAX_FILE_SIZE / 1024 / 1024
+            ));
         }
 
         let fork_id = uuid::Uuid::new_v4().to_string();

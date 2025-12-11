@@ -6,6 +6,7 @@ pub mod diff;
 #[cfg(feature = "recalc")]
 pub mod fork;
 pub mod model;
+#[cfg(feature = "recalc")]
 pub mod recalc;
 pub mod server;
 pub mod state;

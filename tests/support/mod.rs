@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use spreadsheet_read_mcp::state::AppState;
-use spreadsheet_read_mcp::{ServerConfig, SpreadsheetServer, TransportKind};
+use spreadsheet_mcp::state::AppState;
+use spreadsheet_mcp::{ServerConfig, SpreadsheetServer, TransportKind};
 use tempfile::{TempDir, tempdir};
 use umya_spreadsheet::{self, Spreadsheet};
 

@@ -1,6 +1,6 @@
 #![cfg(feature = "recalc")]
 
-use spreadsheet_read_mcp::diff::{
+use spreadsheet_mcp::diff::{
     Change, calculate_changeset,
     merge::{CellDiff, ModificationType},
 };

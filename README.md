@@ -1,12 +1,12 @@
-# Spreadsheet Read MCP
+# Spreadsheet MCP
 
-[![Crates.io](https://img.shields.io/crates/v/spreadsheet-read-mcp.svg)](https://crates.io/crates/spreadsheet-read-mcp)
-[![Documentation](https://docs.rs/spreadsheet-read-mcp/badge.svg)](https://docs.rs/spreadsheet-read-mcp)
-[![License](https://img.shields.io/crates/l/spreadsheet-read-mcp.svg)](https://github.com/PSU3D0/spreadsheet-read-mcp/blob/main/LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/spreadsheet-mcp.svg)](https://crates.io/crates/spreadsheet-mcp)
+[![Documentation](https://docs.rs/spreadsheet-mcp/badge.svg)](https://docs.rs/spreadsheet-mcp)
+[![License](https://img.shields.io/crates/l/spreadsheet-mcp.svg)](https://github.com/PSU3D0/spreadsheet-mcp/blob/main/LICENSE)
 
-![Spreadsheet Read MCP](assets/banner.jpeg)
+![Spreadsheet MCP](assets/banner.jpeg)
 
-Read-only MCP server for spreadsheet analysis. Slim, token-efficient tool surface designed for LLM agents.
+MCP server for spreadsheet analysis and editing. Slim, token-efficient tool surface designed for LLM agents.
 
 ## Why?
 
@@ -117,20 +117,20 @@ Regions are cached per sheet. Tools like `read_table` accept a `region_id` to sc
 ### Docker (Recommended)
 
 ```bash
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-read-mcp:latest
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
 ```
 
 For stdio mode (e.g., Claude Code):
 ```bash
-docker run -i --rm -v /path/to/workbooks:/data ghcr.io/psu3d0/spreadsheet-read-mcp:latest \
+docker run -i --rm -v /path/to/workbooks:/data ghcr.io/psu3d0/spreadsheet-mcp:latest \
   --transport stdio
 ```
 
 ### Cargo Install
 
 ```bash
-cargo install spreadsheet-read-mcp
-spreadsheet-read-mcp --workspace-root /path/to/workbooks
+cargo install spreadsheet-mcp
+spreadsheet-mcp --workspace-root /path/to/workbooks
 ```
 
 ### Build from Source
@@ -155,7 +155,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcpServers": {
     "spreadsheet": {
       "command": "cargo",
-      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-read-mcp/Cargo.toml", "--", "--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
+      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-mcp/Cargo.toml", "--", "--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
     }
   }
 }
@@ -170,7 +170,7 @@ cargo build --release
 {
   "mcpServers": {
     "spreadsheet": {
-      "command": "/path/to/spreadsheet-read-mcp/target/release/spreadsheet-read-mcp",
+      "command": "/path/to/spreadsheet-mcp/target/release/spreadsheet-mcp",
       "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
     }
   }
@@ -185,7 +185,7 @@ In `.vscode/settings.json` or user settings:
   "mcp.servers": {
     "spreadsheet": {
       "command": "cargo",
-      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-read-mcp/Cargo.toml", "--", "--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
+      "args": ["run", "--release", "--manifest-path", "/path/to/spreadsheet-mcp/Cargo.toml", "--", "--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
     }
   }
 }
@@ -203,7 +203,7 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-read-mcp:latest", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
     }
   }
 }
@@ -215,7 +215,7 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "spreadsheet": {
-      "command": "spreadsheet-read-mcp",
+      "command": "spreadsheet-mcp",
       "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
     }
   }
@@ -229,7 +229,7 @@ Add to `claude_desktop_config.json`:
   "mcp.servers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-read-mcp:latest", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
     }
   }
 }
@@ -241,7 +241,7 @@ Add to `claude_desktop_config.json`:
 {
   "mcp.servers": {
     "spreadsheet": {
-      "command": "spreadsheet-read-mcp",
+      "command": "spreadsheet-mcp",
       "args": ["--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
     }
   }
@@ -251,7 +251,7 @@ Add to `claude_desktop_config.json`:
 ### HTTP Mode
 
 ```bash
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-read-mcp:latest
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
 ```
 
 Connect via `POST http://localhost:8079/mcp`.
@@ -286,7 +286,7 @@ Covers: region detection, region-scoped tools, `read_table` edge cases (merged h
 
 ## Behavior & Limits
 
-- Strictly read-only; no mutation, recalc, or VBA execution
-- XLSX parsed fully; `.xls`/`.xlsb` discovered but not parsed
+- **Read-only by default**; write/recalc features require `SPREADSHEET_MCP_RECALC_ENABLED=true`
+- **XLSX supported for write**; `.xls`/`.xlsb` are read-only
 - Bounded in-memory cache honors `cache_capacity`
 - Prefer region-scoped reads and sampling for token/latency efficiency

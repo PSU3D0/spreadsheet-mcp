@@ -1,6 +1,6 @@
 #![cfg(feature = "recalc")]
 
-use spreadsheet_read_mcp::diff::{Change, calculate_changeset, names::NameDiff, tables::TableDiff};
+use spreadsheet_mcp::diff::{Change, calculate_changeset, names::NameDiff, tables::TableDiff};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;

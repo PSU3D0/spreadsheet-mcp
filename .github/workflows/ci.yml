@@ -34,13 +34,13 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_suffix: linux
-            binary_path: target/release/spreadsheet-read-mcp
+            binary_path: target/release/spreadsheet-mcp
           - os: macos-latest
             artifact_suffix: macos
-            binary_path: target/release/spreadsheet-read-mcp
+            binary_path: target/release/spreadsheet-mcp
           - os: windows-latest
             artifact_suffix: windows
-            binary_path: target/release/spreadsheet-read-mcp.exe
+            binary_path: target/release/spreadsheet-mcp.exe
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,7 +76,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: spreadsheet-read-mcp-${{ matrix.artifact_suffix }}
+          name: spreadsheet-mcp-${{ matrix.artifact_suffix }}
           path: ${{ matrix.binary_path }}
           if-no-files-found: error
 

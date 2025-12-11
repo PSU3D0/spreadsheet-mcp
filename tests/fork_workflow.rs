@@ -7,17 +7,17 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use spreadsheet_read_mcp::ServerConfig;
-use spreadsheet_read_mcp::diff::Change; // Add Change import
-use spreadsheet_read_mcp::diff::merge::ModificationType;
-use spreadsheet_read_mcp::model::WorkbookId;
-use spreadsheet_read_mcp::state::AppState;
-use spreadsheet_read_mcp::tools::fork::{
+use spreadsheet_mcp::ServerConfig;
+use spreadsheet_mcp::diff::Change; // Add Change import
+use spreadsheet_mcp::diff::merge::ModificationType;
+use spreadsheet_mcp::model::WorkbookId;
+use spreadsheet_mcp::state::AppState;
+use spreadsheet_mcp::tools::fork::{
     CellEdit, CreateForkParams, DiscardForkParams, EditBatchParams, GetChangesetParams,
     GetEditsParams, ListForksParams, SaveForkParams, create_fork, discard_fork, edit_batch,
     get_changeset, get_edits, list_forks, save_fork,
 };
-use spreadsheet_read_mcp::tools::{ListWorkbooksParams, list_workbooks};
+use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
 #[path = "./support/mod.rs"]
 mod support;
@@ -263,13 +263,13 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
         .changes
         .iter()
         .find(|c| {
-            matches!(c, Change::Cell(cell) if matches!(&cell.diff, spreadsheet_read_mcp::diff::merge::CellDiff::Modified { address, .. } if address == "A1"))
+            matches!(c, Change::Cell(cell) if matches!(&cell.diff, spreadsheet_mcp::diff::merge::CellDiff::Modified { address, .. } if address == "A1"))
         })
         .expect("A1 change not found");
 
     if let Change::Cell(c) = a1_change {
         match &c.diff {
-            spreadsheet_read_mcp::diff::merge::CellDiff::Modified {
+            spreadsheet_mcp::diff::merge::CellDiff::Modified {
                 subtype,
                 old_value,
                 new_value,
