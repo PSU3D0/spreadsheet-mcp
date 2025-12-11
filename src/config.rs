@@ -40,6 +40,7 @@ pub struct ServerConfig {
     pub http_bind_address: SocketAddr,
     pub recalc_enabled: bool,
     pub max_concurrent_recalcs: usize,
+    pub allow_overwrite: bool,
 }
 
 impl ServerConfig {
@@ -55,6 +56,7 @@ impl ServerConfig {
             http_bind: cli_http_bind,
             recalc_enabled: cli_recalc_enabled,
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
+            allow_overwrite: cli_allow_overwrite,
         } = args;
 
         let file_config = if let Some(path) = config.as_ref() {
@@ -73,6 +75,7 @@ impl ServerConfig {
             http_bind: file_http_bind,
             recalc_enabled: file_recalc_enabled,
             max_concurrent_recalcs: file_max_concurrent_recalcs,
+            allow_overwrite: file_allow_overwrite,
         } = file_config;
 
         let single_workbook = cli_single_workbook.or(file_single_workbook);
@@ -177,6 +180,8 @@ impl ServerConfig {
             .unwrap_or(DEFAULT_MAX_RECALCS)
             .max(1);
 
+        let allow_overwrite = cli_allow_overwrite || file_allow_overwrite.unwrap_or(false);
+
         Ok(Self {
             workspace_root,
             cache_capacity,
@@ -187,6 +192,7 @@ impl ServerConfig {
             http_bind_address,
             recalc_enabled,
             max_concurrent_recalcs,
+            allow_overwrite,
         })
     }
 
@@ -321,6 +327,13 @@ pub struct CliArgs {
         help = "Max concurrent LibreOffice instances"
     )]
     pub max_concurrent_recalcs: Option<usize>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_ALLOW_OVERWRITE",
+        help = "Allow save_fork to overwrite original workbook files"
+    )]
+    pub allow_overwrite: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -334,6 +347,7 @@ struct PartialConfig {
     http_bind: Option<SocketAddr>,
     recalc_enabled: Option<bool>,
     max_concurrent_recalcs: Option<usize>,
+    allow_overwrite: Option<bool>,
 }
 
 fn load_config_file(path: &Path) -> Result<PartialConfig> {

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM rust:1.91.1-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -5,13 +7,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+
+# Copy manifests first for dependency caching
 COPY Cargo.toml Cargo.lock ./
+
+# Create dummy src to build deps
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+
+# Build dependencies only (cached unless Cargo.toml/lock change)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --locked --features recalc
+
+# Copy actual source
 COPY src ./src
 
-RUN cargo build --release --locked --features recalc
+# Build the real binary
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    touch src/main.rs && \
+    cargo build --release --locked --features recalc && \
+    cp target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 FROM debian:bookworm-slim
 
+# LibreOffice layer (rarely changes, large)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-calc \
     default-jre-headless \
@@ -20,9 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /etc/libreoffice/4/user/basic/Standard \
     && mkdir -p /root/.config/libreoffice/4/user/basic/Standard
-# Pre-initialize a default profile so the first runtime call doesn't hang on setup.
+
+# Pre-initialize profile
 RUN soffice --headless --norestore --nodefault --nolockcheck --terminate_after_init || true
 
+# Macro files (rarely change)
 COPY docker/libreoffice/Module1.xba /etc/libreoffice/4/user/basic/Standard/
 COPY docker/libreoffice/script.xlb /etc/libreoffice/4/user/basic/Standard/
 COPY docker/libreoffice/registrymodifications.xcu /etc/libreoffice/4/user/
@@ -30,10 +52,16 @@ COPY docker/libreoffice/Module1.xba /root/.config/libreoffice/4/user/basic/Stand
 COPY docker/libreoffice/script.xlb /root/.config/libreoffice/4/user/basic/Standard/
 COPY docker/libreoffice/registrymodifications.xcu /root/.config/libreoffice/4/user/
 
-COPY --from=builder /build/target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
+# Binary (changes with code)
+COPY --from=builder /usr/local/bin/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 WORKDIR /data
 ENV SPREADSHEET_MCP_RECALC_ENABLED=true
+
+LABEL org.opencontainers.image.source="https://github.com/PSU3D0/spreadsheet-mcp"
+LABEL org.opencontainers.image.description="MCP server for spreadsheet analysis and editing (full image with LibreOffice for write/recalc)"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL io.modelcontextprotocol.server.name="io.github.psu3d0/spreadsheet-mcp"
 
 ENTRYPOINT ["spreadsheet-mcp"]
 CMD ["--workspace-root", "/data", "--transport", "http", "--http-bind", "0.0.0.0:8079"]

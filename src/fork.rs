@@ -184,6 +184,11 @@ impl ForkRegistry {
             .ok_or_else(|| anyhow!("fork not found: {}", fork_id))
     }
 
+    pub fn get_fork_path(&self, fork_id: &str) -> Option<PathBuf> {
+        let forks = self.forks.lock();
+        forks.get(fork_id).map(|ctx| ctx.work_path.clone())
+    }
+
     pub fn with_fork_mut<F, R>(&self, fork_id: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut ForkContext) -> Result<R>,
@@ -208,6 +213,7 @@ impl ForkRegistry {
         fork_id: &str,
         target_path: &Path,
         workspace_root: &Path,
+        drop_fork: bool,
     ) -> Result<()> {
         if !target_path.starts_with(workspace_root) {
             return Err(anyhow!("target path must be within workspace root"));
@@ -231,7 +237,7 @@ impl ForkRegistry {
 
         fs::copy(&ctx.work_path, target_path)?;
 
-        if let Some(ctx) = forks.remove(fork_id) {
+        if drop_fork && let Some(ctx) = forks.remove(fork_id) {
             let _ = fs::remove_file(&ctx.work_path);
         }
 

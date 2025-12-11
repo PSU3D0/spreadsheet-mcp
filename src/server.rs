@@ -53,7 +53,7 @@ WORKFLOW:
 2) edit_batch: Apply cell changes (values or formulas) to the fork.
 3) recalculate: Trigger LibreOffice to recompute all formulas.
 4) get_changeset: Diff fork against original. Shows cell/table/name changes.
-5) save_fork: Write changes to file (overwrite original or new path).
+5) save_fork: Write changes to file.
 6) discard_fork: Delete fork without saving.
 
 TOOL DETAILS:
@@ -65,9 +65,12 @@ May take several seconds for complex workbooks.
 - get_changeset: Returns cell-level diffs with modification types: \
 ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
 Use sheet_name param to filter to specific sheet.
-- save_fork: Use output_path for new file, omit to overwrite original. \
+- save_fork: Requires target_path for new file location. \
+Overwriting original requires server --allow-overwrite flag. \
+Use drop_fork=false to keep fork active after saving (default: true drops fork). \
 Validates base file unchanged since fork creation.
-- list_forks: See all active forks for a workbook.
+- get_edits: List all edits applied to a fork (before recalculate).
+- list_forks: See all active forks.
 
 BEST PRACTICES:
 - Always recalculate after edit_batch before get_changeset.
