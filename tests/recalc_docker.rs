@@ -2,6 +2,7 @@
 //!
 //! These tests spawn the full Docker container and communicate via the MCP protocol,
 //! exercising the same pathway that real AI clients use.
+#![cfg(feature = "docker-tests")]
 
 mod support;
 
