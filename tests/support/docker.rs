@@ -7,7 +7,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 const IMAGE_HASH: &str = include_str!("../../docker/image.hash");
-const IMAGE_NAME: &str = "gridbench-full";
+const IMAGE_NAME: &str = "spreadsheet-mcp-full";
 
 pub fn image_tag() -> String {
     let hash = IMAGE_HASH.trim();

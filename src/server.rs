@@ -19,8 +19,8 @@ use rmcp::{
 use std::sync::Arc;
 use thiserror::Error;
 
-const SERVER_INSTRUCTIONS: &str = "\
-Spreadsheet Read MCP: optimized for read-only spreadsheet analysis.
+const BASE_INSTRUCTIONS: &str = "\
+Spreadsheet MCP: optimized for spreadsheet analysis.
 
 WORKFLOW:
 1) list_workbooks → list_sheets → workbook_summary for orientation
@@ -41,7 +41,49 @@ Use direction='right' or 'below' hints.
 
 DATES: Cells with date formats return ISO-8601 strings (YYYY-MM-DD).
 
-Keep payloads small. Page through large sheets. Read-only, no mutations.";
+Keep payloads small. Page through large sheets.";
+
+const WRITE_INSTRUCTIONS: &str = "
+
+WRITE/RECALC TOOLS (enabled):
+Fork-based editing allows 'what-if' analysis without modifying original files.
+
+WORKFLOW:
+1) create_fork: Create editable copy of a workbook. Returns fork_id.
+2) edit_batch: Apply cell changes (values or formulas) to the fork.
+3) recalculate: Trigger LibreOffice to recompute all formulas.
+4) get_changeset: Diff fork against original. Shows cell/table/name changes.
+5) save_fork: Write changes to file (overwrite original or new path).
+6) discard_fork: Delete fork without saving.
+
+TOOL DETAILS:
+- create_fork: Only .xlsx supported. Returns fork_id for subsequent operations.
+- edit_batch: Accepts array of {sheet, cell, value} or {sheet, cell, formula}. \
+Formulas should NOT include leading '='.
+- recalculate: Required after edit_batch to update formula results. \
+May take several seconds for complex workbooks.
+- get_changeset: Returns cell-level diffs with modification types: \
+ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
+Use sheet_name param to filter to specific sheet.
+- save_fork: Use output_path for new file, omit to overwrite original. \
+Validates base file unchanged since fork creation.
+- list_forks: See all active forks for a workbook.
+
+BEST PRACTICES:
+- Always recalculate after edit_batch before get_changeset.
+- Review changeset before save_fork to verify expected changes.
+- Discard forks when done to free resources (auto-cleanup after 1 hour).
+- For large edits, batch multiple cells in single edit_batch call.";
+
+fn build_instructions(recalc_enabled: bool) -> String {
+    let mut instructions = BASE_INSTRUCTIONS.to_string();
+    if recalc_enabled {
+        instructions.push_str(WRITE_INSTRUCTIONS);
+    } else {
+        instructions.push_str("\n\nRead-only mode. Write/recalc tools disabled.");
+    }
+    instructions
+}
 
 #[derive(Clone)]
 pub struct SpreadsheetServer {
@@ -510,10 +552,21 @@ impl SpreadsheetServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SpreadsheetServer {
     fn get_info(&self) -> ServerInfo {
+        let recalc_enabled = {
+            #[cfg(feature = "recalc")]
+            {
+                self.state.config().recalc_enabled
+            }
+            #[cfg(not(feature = "recalc"))]
+            {
+                false
+            }
+        };
+
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some(SERVER_INSTRUCTIONS.to_string()),
+            instructions: Some(build_instructions(recalc_enabled)),
             ..ServerInfo::default()
         }
     }

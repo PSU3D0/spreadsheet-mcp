@@ -118,7 +118,7 @@ jobs:
       - name: Build Docker image
         run: |
           TAG=$(cat docker/image.hash | tr -d '\n' | head -c 12)
-          docker build -f Dockerfile.full -t gridbench-full:$TAG .
+          docker build -f Dockerfile.full -t spreadsheet-mcp-full:$TAG .
 
       - name: Run docker integration tests
         run: cargo test --features recalc --test recalc_docker -- --ignored
