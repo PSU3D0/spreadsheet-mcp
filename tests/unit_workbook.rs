@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use spreadsheet_read_mcp::tools::filters::WorkbookFilter;
-use spreadsheet_read_mcp::workbook::{WorkbookContext, build_workbook_list};
+use spreadsheet_mcp::tools::filters::WorkbookFilter;
+use spreadsheet_mcp::workbook::{WorkbookContext, build_workbook_list};
 
 mod support;
 
@@ -81,7 +81,7 @@ fn build_workbook_list_single_mode_filters_properly() {
 
 #[test]
 fn date_cells_return_iso_format() {
-    use spreadsheet_read_mcp::workbook::cell_to_value;
+    use spreadsheet_mcp::workbook::cell_to_value;
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("dates.xlsx", |book| {
@@ -108,24 +108,21 @@ fn date_cells_return_iso_format() {
 
     let val_a1 = cell_to_value(sheet.get_cell("A1").unwrap());
     assert!(
-        matches!(&val_a1, Some(spreadsheet_read_mcp::model::CellValue::Date(d)) if d == "2024-11-01"),
+        matches!(&val_a1, Some(spreadsheet_mcp::model::CellValue::Date(d)) if d == "2024-11-01"),
         "expected Date(2024-11-01), got {:?}",
         val_a1
     );
 
     let val_b1 = cell_to_value(sheet.get_cell("B1").unwrap());
     assert!(
-        matches!(&val_b1, Some(spreadsheet_read_mcp::model::CellValue::Date(d)) if d == "2023-03-01"),
+        matches!(&val_b1, Some(spreadsheet_mcp::model::CellValue::Date(d)) if d == "2023-03-01"),
         "expected Date(2023-03-01), got {:?}",
         val_b1
     );
 
     let val_c1 = cell_to_value(sheet.get_cell("C1").unwrap());
     assert!(
-        matches!(
-            val_c1,
-            Some(spreadsheet_read_mcp::model::CellValue::Number(_))
-        ),
+        matches!(val_c1, Some(spreadsheet_mcp::model::CellValue::Number(_))),
         "expected Number, got {:?}",
         val_c1
     );
@@ -133,7 +130,7 @@ fn date_cells_return_iso_format() {
 
 #[test]
 fn excel_serial_date_conversion_edge_cases() {
-    use spreadsheet_read_mcp::workbook::cell_to_value;
+    use spreadsheet_mcp::workbook::cell_to_value;
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("edge_dates.xlsx", |book| {
@@ -165,14 +162,14 @@ fn excel_serial_date_conversion_edge_cases() {
 
     let val_a1 = cell_to_value(sheet.get_cell("A1").unwrap());
     assert!(
-        matches!(&val_a1, Some(spreadsheet_read_mcp::model::CellValue::Date(d)) if d == "1900-01-01"),
+        matches!(&val_a1, Some(spreadsheet_mcp::model::CellValue::Date(d)) if d == "1900-01-01"),
         "serial 1 should be 1900-01-01, got {:?}",
         val_a1
     );
 
     let val_c1 = cell_to_value(sheet.get_cell("C1").unwrap());
     assert!(
-        matches!(&val_c1, Some(spreadsheet_read_mcp::model::CellValue::Date(d)) if d == "1900-03-01"),
+        matches!(&val_c1, Some(spreadsheet_mcp::model::CellValue::Date(d)) if d == "1900-03-01"),
         "serial 61 should be 1900-03-01, got {:?}",
         val_c1
     );
@@ -180,7 +177,7 @@ fn excel_serial_date_conversion_edge_cases() {
 
 #[test]
 fn formula_graph_extracts_precedents() {
-    use spreadsheet_read_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
+    use spreadsheet_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("formulas.xlsx", |book| {
@@ -234,7 +231,7 @@ fn formula_graph_extracts_precedents() {
 
 #[test]
 fn large_range_dependents_found_via_containment() {
-    use spreadsheet_read_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
+    use spreadsheet_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("large_range.xlsx", |book| {
@@ -279,7 +276,7 @@ fn large_range_dependents_found_via_containment() {
 
 #[test]
 fn cross_sheet_dependents_traced() {
-    use spreadsheet_read_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
+    use spreadsheet_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("cross_sheet.xlsx", |book| {
@@ -321,7 +318,7 @@ fn cross_sheet_dependents_traced() {
 
 #[test]
 fn dependents_are_deduplicated() {
-    use spreadsheet_read_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
+    use spreadsheet_mcp::analysis::formula::{FormulaAtlas, FormulaGraph};
 
     let workspace = support::TestWorkspace::new();
     let path = workspace.create_workbook("dedup.xlsx", |book| {
@@ -360,7 +357,7 @@ fn dependents_are_deduplicated() {
 }
 
 mod date_conversion {
-    use spreadsheet_read_mcp::workbook::{excel_serial_to_iso, excel_serial_to_iso_with_leap_bug};
+    use spreadsheet_mcp::workbook::{excel_serial_to_iso, excel_serial_to_iso_with_leap_bug};
 
     #[test]
     fn excel_1900_system_basic_dates() {

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use spreadsheet_read_mcp::model::{TraceDirection, WorkbookId};
-use spreadsheet_read_mcp::state::AppState;
-use spreadsheet_read_mcp::tools::{
+use spreadsheet_mcp::model::{TraceDirection, WorkbookId};
+use spreadsheet_mcp::state::AppState;
+use spreadsheet_mcp::tools::{
     DescribeWorkbookParams, FindFormulaParams, FormulaTraceParams, ListSheetsParams,
     ListWorkbooksParams, ManifestStubParams, NamedRangesParams, ScanVolatilesParams,
     SheetFormulaMapParams, SheetOverviewParams, SheetPageParams, SheetStatisticsParams,
@@ -173,7 +173,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             range: None,
             expand: false,
             limit: Some(2),
-            sort_by: Some(spreadsheet_read_mcp::tools::FormulaSortBy::Complexity),
+            sort_by: Some(spreadsheet_mcp::tools::FormulaSortBy::Complexity),
         },
     )
     .await?;

@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::{Duration, SystemTime};
 
-use spreadsheet_read_mcp::utils::{
+use spreadsheet_mcp::utils::{
     cell_address, column_number_to_name, hash_path_metadata, make_short_workbook_id,
     system_time_to_rfc3339,
 };

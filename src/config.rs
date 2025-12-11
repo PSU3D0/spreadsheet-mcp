@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_CACHE_CAPACITY: usize = 5;
+const DEFAULT_MAX_RECALCS: usize = 2;
 const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xls", "xlsb"];
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8079";
 
@@ -37,6 +38,8 @@ pub struct ServerConfig {
     pub enabled_tools: Option<HashSet<String>>,
     pub transport: TransportKind,
     pub http_bind_address: SocketAddr,
+    pub recalc_enabled: bool,
+    pub max_concurrent_recalcs: usize,
 }
 
 impl ServerConfig {
@@ -50,6 +53,8 @@ impl ServerConfig {
             enabled_tools: cli_enabled_tools,
             transport: cli_transport,
             http_bind: cli_http_bind,
+            recalc_enabled: cli_recalc_enabled,
+            max_concurrent_recalcs: cli_max_concurrent_recalcs,
         } = args;
 
         let file_config = if let Some(path) = config.as_ref() {
@@ -66,6 +71,8 @@ impl ServerConfig {
             enabled_tools: file_enabled_tools,
             transport: file_transport,
             http_bind: file_http_bind,
+            recalc_enabled: file_recalc_enabled,
+            max_concurrent_recalcs: file_max_concurrent_recalcs,
         } = file_config;
 
         let single_workbook = cli_single_workbook.or(file_single_workbook);
@@ -163,6 +170,13 @@ impl ServerConfig {
                 .expect("default bind address valid")
         });
 
+        let recalc_enabled = cli_recalc_enabled || file_recalc_enabled.unwrap_or(false);
+
+        let max_concurrent_recalcs = cli_max_concurrent_recalcs
+            .or(file_max_concurrent_recalcs)
+            .unwrap_or(DEFAULT_MAX_RECALCS)
+            .max(1);
+
         Ok(Self {
             workspace_root,
             cache_capacity,
@@ -171,6 +185,8 @@ impl ServerConfig {
             enabled_tools,
             transport,
             http_bind_address,
+            recalc_enabled,
+            max_concurrent_recalcs,
         })
     }
 
@@ -291,6 +307,20 @@ pub struct CliArgs {
         help = "HTTP bind address when using http transport"
     )]
     pub http_bind: Option<SocketAddr>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_RECALC_ENABLED",
+        help = "Enable write/recalc tools (requires LibreOffice)"
+    )]
+    pub recalc_enabled: bool,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS",
+        help = "Max concurrent LibreOffice instances"
+    )]
+    pub max_concurrent_recalcs: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -302,6 +332,8 @@ struct PartialConfig {
     enabled_tools: Option<Vec<String>>,
     transport: Option<TransportKind>,
     http_bind: Option<SocketAddr>,
+    recalc_enabled: Option<bool>,
+    max_concurrent_recalcs: Option<usize>,
 }
 
 fn load_config_file(path: &Path) -> Result<PartialConfig> {

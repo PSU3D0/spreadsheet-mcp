@@ -1,5 +1,5 @@
 use clap::Parser;
-use spreadsheet_read_mcp::{CliArgs, ServerConfig, run_server};
+use spreadsheet_mcp::{CliArgs, ServerConfig, run_server};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]

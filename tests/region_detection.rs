@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use spreadsheet_read_mcp::workbook::WorkbookContext;
+use spreadsheet_mcp::workbook::WorkbookContext;
 
 mod support;
 
@@ -35,8 +35,8 @@ fn single_table_no_gutters() {
     assert_eq!(region.header_row, Some(1));
     assert!(matches!(
         region.region_kind,
-        Some(spreadsheet_read_mcp::model::RegionKind::Data)
-            | Some(spreadsheet_read_mcp::model::RegionKind::Table)
+        Some(spreadsheet_mcp::model::RegionKind::Data)
+            | Some(spreadsheet_mcp::model::RegionKind::Table)
     ));
 }
 
@@ -131,7 +131,7 @@ fn parameters_block_classified() {
         .detected_regions[0];
     assert!(matches!(
         region.region_kind,
-        Some(spreadsheet_read_mcp::model::RegionKind::Parameters)
+        Some(spreadsheet_mcp::model::RegionKind::Parameters)
     ));
     assert_eq!(region.bounds, "A1:B5");
 }
@@ -159,7 +159,7 @@ fn calculator_region_detected() {
         .detected_regions[0];
     assert!(matches!(
         region.region_kind,
-        Some(spreadsheet_read_mcp::model::RegionKind::Calculator)
+        Some(spreadsheet_mcp::model::RegionKind::Calculator)
     ));
 }
 
@@ -191,7 +191,7 @@ fn metadata_footer_split() {
     let meta = regions.iter().find(|r| r.bounds.contains("9")).unwrap();
     assert!(matches!(
         meta.region_kind,
-        Some(spreadsheet_read_mcp::model::RegionKind::Metadata)
+        Some(spreadsheet_mcp::model::RegionKind::Metadata)
     ));
 }
 
@@ -308,7 +308,7 @@ fn outputs_band_detected() {
     assert!(
         matches!(
             outputs_region.region_kind,
-            Some(spreadsheet_read_mcp::model::RegionKind::Outputs)
+            Some(spreadsheet_mcp::model::RegionKind::Outputs)
         ),
         "expected Outputs, got {:?}",
         outputs_region.region_kind
@@ -439,7 +439,7 @@ fn key_value_layout_detected_as_parameters() {
     assert!(
         matches!(
             region.region_kind,
-            Some(spreadsheet_read_mcp::model::RegionKind::Parameters)
+            Some(spreadsheet_mcp::model::RegionKind::Parameters)
         ),
         "expected Parameters, got {:?}",
         region.region_kind
