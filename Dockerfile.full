@@ -1,0 +1,39 @@
+FROM rust:1.91.1-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+RUN cargo build --release --locked --features recalc
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-calc \
+    default-jre-headless \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/libreoffice/4/user/basic/Standard \
+    && mkdir -p /root/.config/libreoffice/4/user/basic/Standard
+# Pre-initialize a default profile so the first runtime call doesn't hang on setup.
+RUN soffice --headless --norestore --nodefault --nolockcheck --terminate_after_init || true
+
+COPY docker/libreoffice/Module1.xba /etc/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/script.xlb /etc/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/registrymodifications.xcu /etc/libreoffice/4/user/
+COPY docker/libreoffice/Module1.xba /root/.config/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/script.xlb /root/.config/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/registrymodifications.xcu /root/.config/libreoffice/4/user/
+
+COPY --from=builder /build/target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
+
+WORKDIR /data
+ENV SPREADSHEET_MCP_RECALC_ENABLED=true
+
+ENTRYPOINT ["spreadsheet-mcp"]
+CMD ["--workspace-root", "/data", "--transport", "http", "--http-bind", "0.0.0.0:8079"]

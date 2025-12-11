@@ -51,7 +51,7 @@ fn parse_cell_ref(cell_ref: &str) -> (u32, u32) {
     (col, row)
 }
 
-fn set_cell(sheet: &mut Worksheet, col: u32, row: u32, val: &CellVal) {
+pub fn set_cell(sheet: &mut Worksheet, col: u32, row: u32, val: &CellVal) {
     match val {
         CellVal::Text(s) => {
             sheet.get_cell_mut((col, row)).set_value(s.clone());

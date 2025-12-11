@@ -1,5 +1,5 @@
 use anyhow::Result;
-use spreadsheet_read_mcp::tools::{
+use spreadsheet_mcp::tools::{
     ListWorkbooksParams, WorkbookSummaryParams, list_workbooks, workbook_summary,
 };
 use umya_spreadsheet::Spreadsheet;

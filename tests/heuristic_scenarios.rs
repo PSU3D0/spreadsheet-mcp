@@ -1,5 +1,5 @@
-use spreadsheet_read_mcp::model::RegionKind;
-use spreadsheet_read_mcp::workbook::WorkbookContext;
+use spreadsheet_mcp::model::RegionKind;
+use spreadsheet_mcp::workbook::WorkbookContext;
 use support::builders::{
     CellVal, apply_date_format, fill_horizontal_kv, fill_key_value, fill_sparse, fill_table,
     set_header_style,

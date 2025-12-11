@@ -1,5 +1,5 @@
 use anyhow::Result;
-use spreadsheet_read_mcp::tools::{
+use spreadsheet_mcp::tools::{
     FindValueParams, ListWorkbooksParams, ReadTableParams, SheetOverviewParams, find_value,
     list_workbooks, read_table, sheet_overview,
 };
@@ -63,11 +63,11 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
         .iter()
         .filter_map(|row| {
             row.get("Month").and_then(|v| match v {
-                Some(spreadsheet_read_mcp::model::CellValue::Text(s)) => Some(s.clone()),
-                Some(spreadsheet_read_mcp::model::CellValue::Number(n)) => Some(n.to_string()),
-                Some(spreadsheet_read_mcp::model::CellValue::Bool(b)) => Some(b.to_string()),
-                Some(spreadsheet_read_mcp::model::CellValue::Date(d)) => Some(d.clone()),
-                Some(spreadsheet_read_mcp::model::CellValue::Error(e)) => Some(e.clone()),
+                Some(spreadsheet_mcp::model::CellValue::Text(s)) => Some(s.clone()),
+                Some(spreadsheet_mcp::model::CellValue::Number(n)) => Some(n.to_string()),
+                Some(spreadsheet_mcp::model::CellValue::Bool(b)) => Some(b.to_string()),
+                Some(spreadsheet_mcp::model::CellValue::Date(d)) => Some(d.clone()),
+                Some(spreadsheet_mcp::model::CellValue::Error(e)) => Some(e.clone()),
                 None => None,
             })
         })

@@ -1,10 +1,8 @@
 use anyhow::Result;
 use serde_json::json;
-use spreadsheet_read_mcp::model::CellValue;
-use spreadsheet_read_mcp::tools::TableFilter;
-use spreadsheet_read_mcp::tools::{
-    ListWorkbooksParams, ReadTableParams, list_workbooks, read_table,
-};
+use spreadsheet_mcp::model::CellValue;
+use spreadsheet_mcp::tools::TableFilter;
+use spreadsheet_mcp::tools::{ListWorkbooksParams, ReadTableParams, list_workbooks, read_table};
 
 mod support;
 
@@ -36,9 +34,9 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
     let workbook_id = descriptor.workbook_id;
 
     // get region id via sheet_overview to ensure detection ran
-    let overview = spreadsheet_read_mcp::tools::sheet_overview(
+    let overview = spreadsheet_mcp::tools::sheet_overview(
         state.clone(),
-        spreadsheet_read_mcp::tools::SheetOverviewParams {
+        spreadsheet_mcp::tools::SheetOverviewParams {
             workbook_id: workbook_id.clone(),
             sheet_name: "Sheet1".into(),
         },
@@ -134,7 +132,7 @@ async fn read_table_handles_multi_row_headers_and_filters() -> Result<()> {
     let only = table.rows.first().unwrap();
     assert!(matches!(
         only.get("Group / Y").and_then(|v| v.as_ref()),
-        Some(spreadsheet_read_mcp::model::CellValue::Number(n)) if (*n - 20.0).abs() < 0.01
+        Some(spreadsheet_mcp::model::CellValue::Number(n)) if (*n - 20.0).abs() < 0.01
     ));
 
     Ok(())

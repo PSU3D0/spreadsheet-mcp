@@ -1,8 +1,8 @@
 [package]
-name = "spreadsheet-read-mcp"
-version = "0.4.0"
+name = "spreadsheet-mcp"
+version = "0.5.0"
 edition = "2024"
-description = "An MCP server that lets LLM agents explore spreadsheet workbooks safely and deterministically"
+description = "An MCP server that lets LLM agents explore and edit spreadsheet workbooks"
 authors = ["Frankie Colson"]
 repository = "https://github.com/PSU3D0/spreadsheet-read-mcp"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ serde_with = "3.8"
 serde_yaml = "0.9"
 rmcp = { version = "0.11.0", features = ["transport-io", "transport-streamable-http-server"] }
 rmcp-macros = "0.11.0"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal", "net"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal", "net", "process"] }
 parking_lot = "0.12"
 lru = "0.12"
 ahash = "0.8"
@@ -39,7 +39,21 @@ clap = { version = "4.5", features = ["derive", "env"] }
 axum = { version = "0.8", default-features = false, features = ["macros", "tokio", "http1"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
+async-trait = { version = "0.1", optional = true }
+uuid = { version = "1.10", features = ["v4"], optional = true }
+zip = { version = "0.6", optional = true }
+quick-xml = { version = "0.31", optional = true }
+xxhash-rust = { version = "0.8", features = ["xxh64"], optional = true }
+tempfile = "3.10"
+
+[features]
+default = []
+recalc = ["async-trait", "uuid", "zip", "quick-xml", "xxhash-rust"]
+
 [dev-dependencies]
 assert_matches = "1.5"
 serde_json = "1.0"
-tempfile = "3.10"
+testcontainers = "0.23"
+bollard = "0.18"
+reqwest = { version = "0.12", features = ["json"] }
+serial_test = "3.2"

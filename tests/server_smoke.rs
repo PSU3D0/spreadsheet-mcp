@@ -4,8 +4,8 @@ use rmcp::model::ErrorCode;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use spreadsheet_read_mcp::tools::{ListWorkbooksParams, SheetPageParams};
-use spreadsheet_read_mcp::{SpreadsheetServer, startup_scan};
+use spreadsheet_mcp::tools::{ListWorkbooksParams, SheetPageParams};
+use spreadsheet_mcp::{SpreadsheetServer, startup_scan};
 
 mod support;
 

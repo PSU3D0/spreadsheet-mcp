@@ -3,3 +3,4 @@ target/
 opencode.json
 .opencode/
 stest/
+private_planning/

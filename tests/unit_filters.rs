@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use spreadsheet_read_mcp::tools::filters::WorkbookFilter;
+use spreadsheet_mcp::tools::filters::WorkbookFilter;
 
 #[test]
 fn matches_slug_folder_and_glob_case_insensitive() {
