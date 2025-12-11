@@ -2,10 +2,13 @@
 //!
 //! These tests exercise the full fork workflow without requiring LibreOffice for recalculation.
 
+#![cfg(feature = "recalc")]
+
 use std::sync::Arc;
 
 use anyhow::Result;
 use spreadsheet_read_mcp::ServerConfig;
+use spreadsheet_read_mcp::diff::Change; // Add Change import
 use spreadsheet_read_mcp::diff::merge::ModificationType;
 use spreadsheet_read_mcp::model::WorkbookId;
 use spreadsheet_read_mcp::state::AppState;
@@ -260,22 +263,26 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
         .changes
         .iter()
         .find(|c| {
-            matches!(&c.diff, spreadsheet_read_mcp::diff::merge::CellDiff::Modified { address, .. } if address == "A1")
+            matches!(c, Change::Cell(cell) if matches!(&cell.diff, spreadsheet_read_mcp::diff::merge::CellDiff::Modified { address, .. } if address == "A1"))
         })
         .expect("A1 change not found");
 
-    match &a1_change.diff {
-        spreadsheet_read_mcp::diff::merge::CellDiff::Modified {
-            subtype,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert!(matches!(subtype, ModificationType::ValueEdit));
-            assert_eq!(old_value.as_deref(), Some("100"));
-            assert_eq!(new_value.as_deref(), Some("200"));
+    if let Change::Cell(c) = a1_change {
+        match &c.diff {
+            spreadsheet_read_mcp::diff::merge::CellDiff::Modified {
+                subtype,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert!(matches!(subtype, ModificationType::ValueEdit));
+                assert_eq!(old_value.as_deref(), Some("100"));
+                assert_eq!(new_value.as_deref(), Some("200"));
+            }
+            _ => panic!("Expected Modified diff"),
         }
-        _ => panic!("Expected Modified diff"),
+    } else {
+        panic!("Expected cell change");
     }
 
     Ok(())
@@ -338,7 +345,12 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
     .await?;
 
     assert_eq!(changeset.changes.len(), 1);
-    assert_eq!(changeset.changes[0].sheet, "Sheet1");
+
+    if let Change::Cell(c) = &changeset.changes[0] {
+        assert_eq!(c.sheet, "Sheet1");
+    } else {
+        panic!("Expected cell change");
+    }
 
     Ok(())
 }
