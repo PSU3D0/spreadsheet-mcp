@@ -16,7 +16,7 @@ serde_with = "3.8"
 serde_yaml = "0.9"
 rmcp = { version = "0.11.0", features = ["transport-io", "transport-streamable-http-server"] }
 rmcp-macros = "0.11.0"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal", "net"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal", "net", "process"] }
 parking_lot = "0.12"
 lru = "0.12"
 ahash = "0.8"
@@ -38,6 +38,13 @@ schemars = { version = "1.0", features = ["derive"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 axum = { version = "0.8", default-features = false, features = ["macros", "tokio", "http1"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+
+async-trait = { version = "0.1", optional = true }
+uuid = { version = "1.10", features = ["v4"], optional = true }
+
+[features]
+default = []
+recalc = ["async-trait", "uuid"]
 
 [dev-dependencies]
 assert_matches = "1.5"

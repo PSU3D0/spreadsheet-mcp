@@ -1,0 +1,37 @@
+FROM rust:1.91.1-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+RUN cargo build --release --locked --features recalc
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-calc \
+    default-jre-headless \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/libreoffice/4/user/basic/Standard
+COPY docker/libreoffice/Module1.xba /etc/libreoffice/4/user/basic/Standard/
+COPY docker/libreoffice/script.xlb /etc/libreoffice/4/user/basic/Standard/
+
+COPY --from=builder /build/target/release/spreadsheet-read-mcp /usr/local/bin/spreadsheet-mcp
+
+WORKDIR /data
+
+LABEL org.opencontainers.image.source="https://github.com/PSU3D0/spreadsheet-read-mcp"
+LABEL org.opencontainers.image.description="MCP server for spreadsheet analysis with write/recalc support"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL io.modelcontextprotocol.server.name="io.github.psu3d0/spreadsheet-mcp"
+
+ENV SPREADSHEET_MCP_RECALC_ENABLED=true
+
+ENTRYPOINT ["spreadsheet-mcp"]
+CMD ["--workspace-root", "/data", "--transport", "http", "--http-bind", "0.0.0.0:8079"]

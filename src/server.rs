@@ -84,6 +84,16 @@ impl SpreadsheetServer {
             Err(ToolDisabledError::new(tool).into())
         }
     }
+
+    #[cfg(feature = "recalc")]
+    fn ensure_recalc_enabled(&self, tool: &str) -> Result<()> {
+        self.ensure_tool_enabled(tool)?;
+        if self.state.config().recalc_enabled {
+            Ok(())
+        } else {
+            Err(RecalcDisabledError.into())
+        }
+    }
 }
 
 #[tool_router]
@@ -399,3 +409,8 @@ impl ToolDisabledError {
         }
     }
 }
+
+#[cfg(feature = "recalc")]
+#[derive(Debug, Error)]
+#[error("recalc/write tools are disabled (set SPREADSHEET_MCP_RECALC_ENABLED=true)")]
+struct RecalcDisabledError;

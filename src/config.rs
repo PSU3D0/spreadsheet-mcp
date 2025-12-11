@@ -37,6 +37,7 @@ pub struct ServerConfig {
     pub enabled_tools: Option<HashSet<String>>,
     pub transport: TransportKind,
     pub http_bind_address: SocketAddr,
+    pub recalc_enabled: bool,
 }
 
 impl ServerConfig {
@@ -50,6 +51,7 @@ impl ServerConfig {
             enabled_tools: cli_enabled_tools,
             transport: cli_transport,
             http_bind: cli_http_bind,
+            recalc_enabled: cli_recalc_enabled,
         } = args;
 
         let file_config = if let Some(path) = config.as_ref() {
@@ -66,6 +68,7 @@ impl ServerConfig {
             enabled_tools: file_enabled_tools,
             transport: file_transport,
             http_bind: file_http_bind,
+            recalc_enabled: file_recalc_enabled,
         } = file_config;
 
         let single_workbook = cli_single_workbook.or(file_single_workbook);
@@ -163,6 +166,8 @@ impl ServerConfig {
                 .expect("default bind address valid")
         });
 
+        let recalc_enabled = cli_recalc_enabled || file_recalc_enabled.unwrap_or(false);
+
         Ok(Self {
             workspace_root,
             cache_capacity,
@@ -171,6 +176,7 @@ impl ServerConfig {
             enabled_tools,
             transport,
             http_bind_address,
+            recalc_enabled,
         })
     }
 
@@ -291,6 +297,13 @@ pub struct CliArgs {
         help = "HTTP bind address when using http transport"
     )]
     pub http_bind: Option<SocketAddr>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_RECALC_ENABLED",
+        help = "Enable write/recalc tools (requires LibreOffice)"
+    )]
+    pub recalc_enabled: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -302,6 +315,7 @@ struct PartialConfig {
     enabled_tools: Option<Vec<String>>,
     transport: Option<TransportKind>,
     http_bind: Option<SocketAddr>,
+    recalc_enabled: Option<bool>,
 }
 
 fn load_config_file(path: &Path) -> Result<PartialConfig> {

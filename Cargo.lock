@@ -1656,6 +1656,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "assert_matches",
+ "async-trait",
  "axum",
  "chrono",
  "clap",
@@ -1684,6 +1685,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "umya-spreadsheet",
+ "uuid",
  "walkdir",
 ]
 
