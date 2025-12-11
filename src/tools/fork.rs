@@ -181,7 +181,7 @@ pub struct GetChangesetParams {
 pub struct GetChangesetResponse {
     pub fork_id: String,
     pub base_workbook: String,
-    pub changes: Vec<crate::diff::DiffResult>,
+    pub changes: Vec<crate::diff::Change>,
 }
 
 pub async fn get_changeset(

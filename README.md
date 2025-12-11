@@ -37,7 +37,20 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 | `sheet_page` | Fallback pagination; supports `compact`/`values_only` |
 | `formula_trace` | Precedents/dependents with paging |
 
-Hidden/optional: `sheet_styles`, `sheet_statistics`, `scan_volatiles`, `get_manifest_stub`, `close_workbook`.
+## Write & Recalc Support (Experimental)
+
+Enabled via `SPREADSHEET_MCP_RECALC_ENABLED=true` (requires `spreadsheet-mcp:full` image).
+
+| Tool | Purpose |
+| --- | --- |
+| `create_fork` | Create a temporary editable copy for "what-if" analysis |
+| `edit_batch` | Apply values or formulas to cells in a fork |
+| `recalculate` | Trigger LibreOffice to update formula results |
+| `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
+| `save_fork` | Commit changes to a file (overwrite or new path) |
+| `discard_fork` | Delete the temporary fork |
+
+See [docs/RECALC.md](docs/RECALC.md) for architecture details.
 
 ## Example
 

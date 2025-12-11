@@ -1,12 +1,12 @@
+#![cfg(feature = "recalc")]
+
 use spreadsheet_read_mcp::diff::{
-    calculate_changeset,
+    Change, calculate_changeset,
     merge::{CellDiff, ModificationType},
 };
 use std::path::PathBuf;
 use umya_spreadsheet::Spreadsheet;
 
-// We need to bring in the support module.
-// Since this is an integration test in `tests/`, `tests/support/mod.rs` should be available via `mod support`.
 #[path = "./support/mod.rs"]
 mod support;
 
@@ -47,7 +47,7 @@ impl DiffScenario {
             .expect("failed to write fork");
     }
 
-    fn run_diff(&self, sheet_filter: Option<&str>) -> Vec<spreadsheet_read_mcp::diff::DiffResult> {
+    fn run_diff(&self, sheet_filter: Option<&str>) -> Vec<Change> {
         calculate_changeset(&self.base_path, &self.fork_path, sheet_filter).expect("diff failed")
     }
 }
@@ -99,67 +99,79 @@ fn test_basic_edits() {
 
     // Sort by address for stable assertions
     let mut diffs = diffs;
-    diffs.sort_by(|a, b| match (&a.diff, &b.diff) {
-        (
-            CellDiff::Modified {
-                address: a_addr, ..
-            },
-            CellDiff::Modified {
-                address: b_addr, ..
-            },
-        ) => a_addr.cmp(b_addr),
+    diffs.sort_by(|a, b| match (a, b) {
+        (Change::Cell(ca), Change::Cell(cb)) => match (&ca.diff, &cb.diff) {
+            (
+                CellDiff::Modified {
+                    address: a_addr, ..
+                },
+                CellDiff::Modified {
+                    address: b_addr, ..
+                },
+            ) => a_addr.cmp(b_addr),
+            _ => std::cmp::Ordering::Equal,
+        },
         _ => std::cmp::Ordering::Equal,
     });
 
     // A1: 10 -> 20 (ValueEdit)
-    match &diffs[0].diff {
-        CellDiff::Modified {
-            address,
-            subtype,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(address, "A1");
-            assert!(matches!(subtype, ModificationType::ValueEdit));
-            assert_eq!(old_value.as_deref(), Some("10"));
-            assert_eq!(new_value.as_deref(), Some("20"));
-        }
-        _ => panic!("Unexpected diff at A1"),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                subtype,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(address, "A1");
+                assert!(matches!(subtype, ModificationType::ValueEdit));
+                assert_eq!(old_value.as_deref(), Some("10"));
+                assert_eq!(new_value.as_deref(), Some("20"));
+            }
+            _ => panic!("Unexpected diff at A1"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 
     // A2: "foo" -> "bar" (ValueEdit)
-    match &diffs[1].diff {
-        CellDiff::Modified {
-            address,
-            subtype,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(address, "A2");
-            assert!(matches!(subtype, ModificationType::ValueEdit));
-            assert_eq!(old_value.as_deref(), Some("foo"));
-            assert_eq!(new_value.as_deref(), Some("bar"));
-        }
-        _ => panic!("Unexpected diff at A2"),
+    match &diffs[1] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                subtype,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(address, "A2");
+                assert!(matches!(subtype, ModificationType::ValueEdit));
+                assert_eq!(old_value.as_deref(), Some("foo"));
+                assert_eq!(new_value.as_deref(), Some("bar"));
+            }
+            _ => panic!("Unexpected diff at A2"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 
     // A3: Formula changed (FormulaEdit)
-    match &diffs[2].diff {
-        CellDiff::Modified {
-            address,
-            subtype,
-            old_formula,
-            new_formula,
-            ..
-        } => {
-            assert_eq!(address, "A3");
-            assert!(matches!(subtype, ModificationType::FormulaEdit));
-            assert_eq!(old_formula.as_deref(), Some("SUM(A1)"));
-            assert_eq!(new_formula.as_deref(), Some("SUM(A1)+1"));
-        }
-        _ => panic!("Unexpected diff at A3"),
+    match &diffs[2] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                subtype,
+                old_formula,
+                new_formula,
+                ..
+            } => {
+                assert_eq!(address, "A3");
+                assert!(matches!(subtype, ModificationType::FormulaEdit));
+                assert_eq!(old_formula.as_deref(), Some("SUM(A1)"));
+                assert_eq!(new_formula.as_deref(), Some("SUM(A1)+1"));
+            }
+            _ => panic!("Unexpected diff at A3"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
@@ -184,13 +196,23 @@ fn test_structural_changes() {
     // Check for Added B1
     let _added = diffs
         .iter()
-        .find(|d| matches!(d.diff, CellDiff::Added { ref address, .. } if address == "B1"))
+        .find(|d| match d {
+            Change::Cell(c) => {
+                matches!(c.diff, CellDiff::Added { ref address, .. } if address == "B1")
+            }
+            _ => false,
+        })
         .expect("Missing B1 add");
 
     // Check for Deleted A1
     let _deleted = diffs
         .iter()
-        .find(|d| matches!(d.diff, CellDiff::Deleted { ref address, .. } if address == "A1"))
+        .find(|d| match d {
+            Change::Cell(c) => {
+                matches!(c.diff, CellDiff::Deleted { ref address, .. } if address == "A1")
+            }
+            _ => false,
+        })
         .expect("Missing A1 delete");
 }
 
@@ -214,7 +236,10 @@ fn test_sheet_filtering() {
     // Filter for Sheet1
     let diffs = scenario.run_diff(Some("Sheet1"));
     assert_eq!(diffs.len(), 1);
-    assert_eq!(diffs[0].sheet, "Sheet1");
+    match &diffs[0] {
+        Change::Cell(c) => assert_eq!(c.sheet, "Sheet1"),
+        _ => panic!("Expected cell diff"),
+    }
 }
 
 #[test]
@@ -223,12 +248,6 @@ fn test_sst_resolution() {
 
     // Base: A1="Apple", B1="Apple" (Shared)
     // Fork: A1="Banana", B1="Apple"
-    // In Base SST: ["Apple"] (idx 0)
-    // In Fork SST: ["Banana", "Apple"] (idx 0, 1) or ["Apple", "Banana"]
-    // B1 in Base -> idx 0. B1 in Fork -> idx 1 (if Apple is 1).
-    // The raw XML index changes, but the dereferenced value should be same.
-    // So B1 should NOT appear in diff.
-
     scenario.setup(
         |book| {
             let s = book.get_sheet_mut(&0).unwrap();
@@ -246,18 +265,21 @@ fn test_sst_resolution() {
 
     // Only A1 should change
     assert_eq!(diffs.len(), 1);
-    match &diffs[0].diff {
-        CellDiff::Modified {
-            address,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(address, "A1");
-            assert_eq!(old_value.as_deref(), Some("Apple"));
-            assert_eq!(new_value.as_deref(), Some("Banana"));
-        }
-        _ => panic!("Wrong diff type"),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(address, "A1");
+                assert_eq!(old_value.as_deref(), Some("Apple"));
+                assert_eq!(new_value.as_deref(), Some("Banana"));
+            }
+            _ => panic!("Wrong diff type"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
@@ -286,18 +308,21 @@ fn test_large_dataset() {
     println!("Diff time: {:?}", diff_time);
 
     assert_eq!(diffs.len(), 1);
-    match &diffs[0].diff {
-        CellDiff::Modified {
-            address,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(address, &format!("A{}", rows));
-            assert_eq!(old_value.as_deref(), Some("5000"));
-            assert_eq!(new_value.as_deref(), Some("9999"));
-        }
-        _ => panic!("Wrong diff"),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(address, &format!("A{}", rows));
+                assert_eq!(old_value.as_deref(), Some("5000"));
+                assert_eq!(new_value.as_deref(), Some("9999"));
+            }
+            _ => panic!("Wrong diff"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
@@ -307,7 +332,6 @@ fn test_recalc_result_classification() {
 
     // Base: A1=10, B1=SUM(A1) with cached value 10
     // Fork: A1=10, B1=SUM(A1) with cached value 20 (simulated recalc)
-    // Formula unchanged, value changed -> RecalcResult
     scenario.setup(
         |book| {
             let sheet = book.get_sheet_mut(&0).unwrap();
@@ -328,27 +352,30 @@ fn test_recalc_result_classification() {
     let diffs = scenario.run_diff(None);
     assert_eq!(diffs.len(), 1);
 
-    match &diffs[0].diff {
-        CellDiff::Modified {
-            address,
-            subtype,
-            old_value,
-            new_value,
-            old_formula,
-            new_formula,
-        } => {
-            assert_eq!(address, "B1");
-            assert!(
-                matches!(subtype, ModificationType::RecalcResult),
-                "expected RecalcResult, got {:?}",
-                subtype
-            );
-            assert_eq!(old_value.as_deref(), Some("10"));
-            assert_eq!(new_value.as_deref(), Some("20"));
-            assert_eq!(old_formula.as_deref(), Some("SUM(A1)"));
-            assert_eq!(new_formula.as_deref(), Some("SUM(A1)"));
-        }
-        _ => panic!("Expected Modified diff, got {:?}", diffs[0].diff),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                subtype,
+                old_value,
+                new_value,
+                old_formula,
+                new_formula,
+            } => {
+                assert_eq!(address, "B1");
+                assert!(
+                    matches!(subtype, ModificationType::RecalcResult),
+                    "expected RecalcResult, got {:?}",
+                    subtype
+                );
+                assert_eq!(old_value.as_deref(), Some("10"));
+                assert_eq!(new_value.as_deref(), Some("20"));
+                assert_eq!(old_formula.as_deref(), Some("SUM(A1)"));
+                assert_eq!(new_formula.as_deref(), Some("SUM(A1)"));
+            }
+            _ => panic!("Expected Modified diff, got {:?}", c.diff),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
@@ -357,7 +384,6 @@ fn test_float_epsilon_comparison() {
     let scenario = DiffScenario::new();
 
     // 0.1 + 0.2 = 0.30000000000000004 in IEEE 754
-    // These should be considered equal within epsilon
     scenario.setup(
         |book| {
             let sheet = book.get_sheet_mut(&0).unwrap();
@@ -425,28 +451,28 @@ fn test_pure_numeric_sheet_no_sst() {
     let diffs = scenario.run_diff(None);
     assert_eq!(diffs.len(), 1);
 
-    match &diffs[0].diff {
-        CellDiff::Modified {
-            address,
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(address, "A5");
-            assert_eq!(old_value.as_deref(), Some("5"));
-            assert_eq!(new_value.as_deref(), Some("999"));
-        }
-        _ => panic!("Wrong diff type"),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                address,
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(address, "A5");
+                assert_eq!(old_value.as_deref(), Some("5"));
+                assert_eq!(new_value.as_deref(), Some("999"));
+            }
+            _ => panic!("Wrong diff type"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
 #[test]
 fn test_empty_sheet() {
     let scenario = DiffScenario::new();
-
-    // Both sheets empty
     scenario.setup(|_book| {}, |_book| {});
-
     let diffs = scenario.run_diff(None);
     assert!(diffs.is_empty());
 }
@@ -467,12 +493,15 @@ fn test_empty_to_populated() {
     let diffs = scenario.run_diff(None);
     assert_eq!(diffs.len(), 1);
 
-    match &diffs[0].diff {
-        CellDiff::Added { address, value, .. } => {
-            assert_eq!(address, "A1");
-            assert_eq!(value.as_deref(), Some("42"));
-        }
-        _ => panic!("Expected Added diff"),
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Added { address, value, .. } => {
+                assert_eq!(address, "A1");
+                assert_eq!(value.as_deref(), Some("42"));
+            }
+            _ => panic!("Expected Added diff"),
+        },
+        _ => panic!("Expected cell diff"),
     }
 }
 
@@ -527,11 +556,6 @@ fn test_rich_text_changed() {
 
     let scenario = DiffScenario::new();
 
-    // NOTE: We add B1 with different values to force sheet XML to differ,
-    // otherwise both sheets would have <v>0</v> referencing different SST entries,
-    // and the hash check would incorrectly skip the diff.
-    // This is a known limitation: SST-only changes with identical sheet structure
-    // require SST-aware hash comparison.
     scenario.setup(
         |book| {
             let sheet = book.get_sheet_mut(&0).unwrap();
@@ -567,21 +591,27 @@ fn test_rich_text_changed() {
 
     let a1_diff = diffs
         .iter()
-        .find(|d| match &d.diff {
-            CellDiff::Modified { address, .. } => address == "A1",
+        .find(|d| match d {
+            Change::Cell(c) => match &c.diff {
+                CellDiff::Modified { address, .. } => address == "A1",
+                _ => false,
+            },
             _ => false,
         })
         .expect("A1 diff not found");
 
-    match &a1_diff.diff {
-        CellDiff::Modified {
-            old_value,
-            new_value,
-            ..
-        } => {
-            assert_eq!(old_value.as_deref(), Some("Hello"));
-            assert_eq!(new_value.as_deref(), Some("Goodbye"));
-        }
+    match a1_diff {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                old_value,
+                new_value,
+                ..
+            } => {
+                assert_eq!(old_value.as_deref(), Some("Hello"));
+                assert_eq!(new_value.as_deref(), Some("Goodbye"));
+            }
+            _ => unreachable!(),
+        },
         _ => unreachable!(),
     }
 }
