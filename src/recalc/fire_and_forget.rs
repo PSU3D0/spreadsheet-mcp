@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use tokio::fs;
 use tokio::process::Command;
 use tokio::time;
 
@@ -35,40 +34,6 @@ impl RecalcExecutor for FireAndForgetExecutor {
             .canonicalize()
             .map_err(|e| anyhow!("failed to canonicalize path: {}", e))?;
 
-        let profile_dir = format!("/tmp/lo-profile-{}", uuid::Uuid::new_v4());
-        fs::create_dir_all(&profile_dir)
-            .await
-            .map_err(|e| anyhow!("failed to create profile dir: {}", e))?;
-
-        // Seed profile with macro security + shipped macros so the macro call works from a clean profile.
-        let profile_basic = format!("{}/user/basic/Standard", profile_dir);
-        fs::create_dir_all(&profile_basic)
-            .await
-            .map_err(|e| anyhow!("failed to create profile basic dir: {}", e))?;
-        fs::copy(
-            "/etc/libreoffice/4/user/basic/Standard/Module1.xba",
-            format!("{}/Module1.xba", profile_basic),
-        )
-        .await
-        .map_err(|e| anyhow!("failed to copy Module1.xba into temp profile: {}", e))?;
-        fs::copy(
-            "/etc/libreoffice/4/user/basic/Standard/script.xlb",
-            format!("{}/script.xlb", profile_basic),
-        )
-        .await
-        .map_err(|e| anyhow!("failed to copy script.xlb into temp profile: {}", e))?;
-        fs::copy(
-            "/etc/libreoffice/4/user/registrymodifications.xcu",
-            format!("{}/user/registrymodifications.xcu", profile_dir),
-        )
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "failed to copy registrymodifications.xcu into temp profile: {}",
-                e
-            )
-        })?;
-
         let file_url = format!("file://{}", abs_path.to_str().unwrap());
         let macro_uri = format!(
             "macro:///Standard.Module1.RecalculateAndSave(\"{}\")",
@@ -85,7 +50,6 @@ impl RecalcExecutor for FireAndForgetExecutor {
                     "--nofirststartwizard",
                     "--nolockcheck",
                     "--calc",
-                    &format!("-env:UserInstallation=file://{}", profile_dir),
                     &macro_uri,
                 ])
                 .stdout(Stdio::piped())
@@ -97,8 +61,6 @@ impl RecalcExecutor for FireAndForgetExecutor {
         .and_then(|res| res.map_err(|e| anyhow!("failed to spawn soffice: {}", e)));
 
         let output = output_result?;
-
-        let _ = fs::remove_dir_all(&profile_dir).await;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
