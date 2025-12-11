@@ -45,7 +45,7 @@ jobs:
         run: cargo fetch --locked
 
       - name: Run tests
-        run: cargo test --all --locked
+        run: cargo test --all --locked -- --skip recalc_docker
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -85,4 +85,4 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Run docker integration tests
-        run: cargo test --features recalc --test recalc_docker -- --ignored
+        run: cargo test --test recalc_docker --locked
