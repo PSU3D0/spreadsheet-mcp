@@ -38,9 +38,9 @@ jobs:
           - os: macos-latest
             artifact_suffix: macos
             binary_path: target/release/spreadsheet-mcp
-          - os: windows-latest
-            artifact_suffix: windows
-            binary_path: target/release/spreadsheet-mcp.exe
+          # - os: windows-latest
+          #   artifact_suffix: windows
+          #   binary_path: target/release/spreadsheet-mcp.exe
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
