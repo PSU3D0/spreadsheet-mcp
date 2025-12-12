@@ -404,7 +404,7 @@ impl SpreadsheetServer {
 
     #[tool(
         name = "sheet_styles",
-        description = "Summarise style usage for a sheet"
+        description = "Summarise style usage and properties for a sheet"
     )]
     pub async fn sheet_styles(
         &self,
