@@ -38,6 +38,7 @@ schemars = { version = "1.0", features = ["derive"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 axum = { version = "0.8", default-features = false, features = ["macros", "tokio", "http1"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 async-trait = { version = "0.1", optional = true }
 uuid = { version = "1.10", features = ["v4"], optional = true }
@@ -48,7 +49,7 @@ tempfile = "3.10"
 
 [features]
 default = []
-recalc = ["async-trait", "uuid", "zip", "quick-xml", "xxhash-rust"]
+recalc = ["async-trait", "uuid", "zip", "quick-xml", "xxhash-rust", "image"]
 docker-tests = []
 
 [dev-dependencies]

@@ -7,148 +7,12 @@
 mod support;
 
 use anyhow::Result;
-use rmcp::{
-    ServiceExt,
-    model::CallToolRequestParam,
-    transport::{ConfigureCommandExt, TokioChildProcess},
-};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::path::Path;
-use std::process::Stdio;
-use support::docker::ensure_image;
-use tokio::process::Command;
-
-fn call_tool(name: &'static str, args: Value) -> CallToolRequestParam {
-    CallToolRequestParam {
-        name: name.into(),
-        arguments: args.as_object().cloned(),
-    }
-}
-
-struct McpTestClient {
-    workspace: support::TestWorkspace,
-    workspace_path: String,
-    allow_overwrite: bool,
-}
-
-impl McpTestClient {
-    fn new() -> Self {
-        let workspace = support::TestWorkspace::new();
-        let workspace_path = workspace.root().to_str().unwrap().to_string();
-        Self {
-            workspace,
-            workspace_path,
-            allow_overwrite: false,
-        }
-    }
-
-    fn with_allow_overwrite(mut self) -> Self {
-        self.allow_overwrite = true;
-        self
-    }
-
-    fn workspace(&self) -> &support::TestWorkspace {
-        &self.workspace
-    }
-
-    async fn connect(&self) -> Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
-        let image_tag = ensure_image().await?;
-        let workspace_path = self.workspace_path.clone();
-        let allow_overwrite = self.allow_overwrite;
-
-        let (transport, stderr) =
-            TokioChildProcess::builder(Command::new("docker").configure(move |cmd| {
-                let volume_mount = format!("{}:/data", workspace_path);
-                let mut args = vec![
-                    "run",
-                    "--rm",
-                    "-i",
-                    "-v",
-                    volume_mount.as_str(),
-                    image_tag.as_str(),
-                    "--transport",
-                    "stdio",
-                    "--recalc-enabled",
-                    "--workspace-root",
-                    "/data",
-                ];
-                if allow_overwrite {
-                    args.push("--allow-overwrite");
-                }
-                cmd.args(args);
-            }))
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        if let Some(stderr) = stderr {
-            tokio::spawn(async move {
-                use tokio::io::{AsyncBufReadExt, BufReader};
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    eprintln!("[container] {}", line);
-                }
-            });
-        }
-
-        let client = ().serve(transport).await?;
-        Ok(client)
-    }
-}
-
-fn extract_json(result: &rmcp::model::CallToolResult) -> Result<Value> {
-    result
-        .structured_content
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("no structured content in response"))
-}
-
-fn cell_value(page: &Value, row: usize, col: usize) -> Option<String> {
-    let cell = &page["rows"][row]["cells"][col];
-    let value = &cell["value"];
-
-    match value["kind"].as_str()? {
-        "Number" => value["value"].as_f64().map(|n| {
-            if n.fract() == 0.0 {
-                format!("{}", n as i64)
-            } else {
-                format!("{}", n)
-            }
-        }),
-        "String" | "Text" => value["value"].as_str().map(|s| s.to_string()),
-        "Bool" => value["value"].as_bool().map(|b| b.to_string()),
-        _ => None,
-    }
-}
-
-fn cell_value_f64(page: &Value, row: usize, col: usize) -> Option<f64> {
-    let cell = &page["rows"][row]["cells"][col];
-    cell["value"]["value"].as_f64()
-}
-
-fn cell_is_error(page: &Value, row: usize, col: usize) -> bool {
-    let cell = &page["rows"][row]["cells"][col];
-    let kind = cell["value"]["kind"].as_str();
-    if kind == Some("Error") {
-        return true;
-    }
-    if let Some(val) = cell["value"]["value"].as_str() {
-        return val.starts_with("#");
-    }
-    false
-}
-
-fn cell_error_type(page: &Value, row: usize, col: usize) -> Option<String> {
-    let cell = &page["rows"][row]["cells"][col];
-    if cell["value"]["kind"].as_str() == Some("Error") {
-        return cell["value"]["value"].as_str().map(|s| s.to_string());
-    }
-    if let Some(val) = cell["value"]["value"].as_str()
-        && val.starts_with("#")
-    {
-        return Some(val.to_string());
-    }
-    None
-}
+use support::mcp::{
+    McpTestClient, call_tool, cell_error_type, cell_is_error, cell_value, cell_value_f64,
+    extract_json,
+};
 
 // ============================================================================
 // Basic Connectivity Test
@@ -2268,3 +2132,5 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
     client.cancel().await?;
     Ok(())
 }
+
+// Screenshot tests live in `tests/screenshot_docker.rs`.
