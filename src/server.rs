@@ -4,7 +4,8 @@ use crate::model::{
     ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
     SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
     SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse, WorkbookSummaryResponse,
+    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    WorkbookSummaryResponse,
 };
 use crate::state::AppState;
 use crate::tools;

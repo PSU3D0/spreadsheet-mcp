@@ -638,7 +638,11 @@ pub async fn structure_batch(
     let fork_ctx = registry.get_fork(&params.fork_id)?;
     let work_path = fork_ctx.work_path.clone();
 
-    let mode = params.mode.as_deref().unwrap_or("apply").to_ascii_lowercase();
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
 
     if mode == "preview" {
         let change_id = Uuid::new_v4().to_string();
@@ -758,6 +762,9 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     sheet.insert_new_row(at_row, count);
                 }
                 rewrite_formulas_for_sheet_row_insert(&mut book, sheet_name, *at_row, *count)?;
+                rewrite_defined_name_formulas_for_sheet_row_insert(
+                    &mut book, sheet_name, *at_row, *count,
+                )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("rows_inserted".to_string())
@@ -779,6 +786,9 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     sheet.remove_row(start_row, count);
                 }
                 rewrite_formulas_for_sheet_row_delete(&mut book, sheet_name, *start_row, *count)?;
+                rewrite_defined_name_formulas_for_sheet_row_delete(
+                    &mut book, sheet_name, *start_row, *count,
+                )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("rows_deleted".to_string())
@@ -803,6 +813,9 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     sheet.insert_new_column(&col_letters, count);
                 }
                 rewrite_formulas_for_sheet_col_insert(&mut book, sheet_name, root_col, *count)?;
+                rewrite_defined_name_formulas_for_sheet_col_insert(
+                    &mut book, sheet_name, root_col, *count,
+                )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("cols_inserted".to_string())
@@ -827,6 +840,9 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     sheet.remove_column(&col_letters, count);
                 }
                 rewrite_formulas_for_sheet_col_delete(&mut book, sheet_name, root_col, *count)?;
+                rewrite_defined_name_formulas_for_sheet_col_delete(
+                    &mut book, sheet_name, root_col, *count,
+                )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("cols_deleted".to_string())
@@ -849,6 +865,7 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     .map_err(|e| anyhow!("failed to rename sheet '{}': {}", old_name, e))?;
 
                 rewrite_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
+                rewrite_defined_name_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
 
                 affected_sheets.insert(old_name.to_string());
                 affected_sheets.insert(new_name.to_string());
@@ -1081,9 +1098,9 @@ fn copy_or_move_range_on_sheet(
 
             if include_formulas && src_cell.is_formula() {
                 let src_formula = src_cell.get_formula().to_string();
-                match parse_base_formula(&src_formula)
-                    .and_then(|ast| shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel))
-                {
+                match parse_base_formula(&src_formula).and_then(|ast| {
+                    shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                }) {
                     Ok(shifted) => {
                         let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
                         dest_formula = Some(shifted);
@@ -1200,6 +1217,200 @@ fn rewrite_formulas_for_sheet_rename(
 
             let new_formula = out.strip_prefix('=').unwrap_or(&out);
             cell.set_formula(new_formula.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn rewrite_defined_name_formulas_for_sheet_rename(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let new_prefix = format_sheet_prefix_for_formula(new_name);
+
+    for defined in book.get_defined_names_mut() {
+        let refers_to = defined.get_address();
+        let trimmed = refers_to.trim();
+        let had_equals = trimmed.starts_with('=');
+        let looks_like_formula = had_equals || trimmed.contains('(');
+        if !looks_like_formula {
+            continue;
+        }
+
+        let formula_in = if had_equals {
+            trimmed.to_string()
+        } else {
+            format!("={}", trimmed)
+        };
+
+        let tokenizer = Tokenizer::new(&formula_in)
+            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+        let tokens = tokenizer.items;
+
+        let mut out = String::with_capacity(formula_in.len());
+        let mut cursor = 0usize;
+        let mut changed = false;
+
+        for token in &tokens {
+            if token.start > cursor {
+                out.push_str(&formula_in[cursor..token.start]);
+            }
+
+            let mut value = token.value.clone();
+            if token.subtype == formualizer_parse::TokenSubType::Range
+                && value.contains('!')
+                && let Some((sheet_part, tail)) = value.split_once('!')
+                && sheet_part_matches(sheet_part, old_name)
+            {
+                value = format!("{}{}", new_prefix, tail);
+                changed = true;
+            }
+
+            out.push_str(&value);
+            cursor = token.end;
+        }
+
+        if cursor < formula_in.len() {
+            out.push_str(&formula_in[cursor..]);
+        }
+
+        if changed {
+            let out_final = if had_equals {
+                out
+            } else {
+                out.strip_prefix('=').unwrap_or(&out).to_string()
+            };
+            defined.set_address(out_final);
+        }
+    }
+
+    Ok(())
+}
+
+fn rewrite_defined_name_formulas_for_sheet_col_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Insert { at: at_col, count },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_col_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Delete {
+            start: start_col,
+            count,
+        },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_row_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Insert { at: at_row, count },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_row_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Delete {
+            start: start_row,
+            count,
+        },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_structure_change(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    axis: StructureAxis,
+    edit: StructureEdit,
+) -> Result<()> {
+    for defined in book.get_defined_names_mut() {
+        let refers_to = defined.get_address();
+        let trimmed = refers_to.trim();
+        let had_equals = trimmed.starts_with('=');
+        let looks_like_formula = had_equals || trimmed.contains('(');
+        if !looks_like_formula {
+            continue;
+        }
+
+        let formula_in = if had_equals {
+            trimmed.to_string()
+        } else {
+            format!("={}", trimmed)
+        };
+
+        let tokenizer = Tokenizer::new(&formula_in)
+            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+        let tokens = tokenizer.items;
+
+        let mut out = String::with_capacity(formula_in.len());
+        let mut cursor = 0usize;
+        let mut changed = false;
+
+        for token in &tokens {
+            if token.start > cursor {
+                out.push_str(&formula_in[cursor..token.start]);
+            }
+
+            let mut value = token.value.clone();
+            if token.subtype == formualizer_parse::TokenSubType::Range
+                && value.contains('!')
+                && let Some((sheet_part, coord_part)) = value.split_once('!')
+                && sheet_part_matches(sheet_part, sheet_name)
+            {
+                let adjusted = adjust_ref_coord_part(coord_part, axis, edit)?;
+                value = format!("{sheet_part}!{adjusted}");
+                changed = true;
+            }
+
+            out.push_str(&value);
+            cursor = token.end;
+        }
+
+        if cursor < formula_in.len() {
+            out.push_str(&formula_in[cursor..]);
+        }
+
+        if changed {
+            let out_final = if had_equals {
+                out
+            } else {
+                out.strip_prefix('=').unwrap_or(&out).to_string()
+            };
+            defined.set_address(out_final);
         }
     }
 
@@ -1344,7 +1555,11 @@ fn rewrite_formulas_for_sheet_structure_change(
     Ok(())
 }
 
-fn adjust_ref_coord_part(coord_part: &str, axis: StructureAxis, edit: StructureEdit) -> Result<String> {
+fn adjust_ref_coord_part(
+    coord_part: &str,
+    axis: StructureAxis,
+    edit: StructureEdit,
+) -> Result<String> {
     if coord_part == "#REF!" {
         return Ok(coord_part.to_string());
     }
@@ -1361,7 +1576,9 @@ fn adjust_ref_coord_part(coord_part: &str, axis: StructureAxis, edit: StructureE
 }
 
 fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -> Result<String> {
-    use umya_spreadsheet::helper::coordinate::{coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index};
+    use umya_spreadsheet::helper::coordinate::{
+        coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
+    };
 
     let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
     let mut col = col;
@@ -1399,19 +1616,23 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
         )),
         (Some(c), None) => {
             let col_str = string_from_column_index(&c);
-            Ok(format!("{}{}", if col_lock.unwrap_or(false) { "$" } else { "" }, col_str))
+            Ok(format!(
+                "{}{}",
+                if col_lock.unwrap_or(false) { "$" } else { "" },
+                col_str
+            ))
         }
-        (None, Some(r)) => Ok(format!("{}{}", if row_lock.unwrap_or(false) { "$" } else { "" }, r)),
+        (None, Some(r)) => Ok(format!(
+            "{}{}",
+            if row_lock.unwrap_or(false) { "$" } else { "" },
+            r
+        )),
         (None, None) => Ok("#REF!".to_string()),
     }
 }
 
 fn adjust_insert(value: u32, at: u32, count: u32) -> u32 {
-    if value >= at {
-        value + count
-    } else {
-        value
-    }
+    if value >= at { value + count } else { value }
 }
 
 fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {

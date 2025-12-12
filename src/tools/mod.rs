@@ -2017,8 +2017,9 @@ pub async fn sheet_styles(
     );
 
     let bounds = match &params.scope {
-        Some(SheetStylesScope::Range { range }) => parse_range(range)
-            .ok_or_else(|| anyhow!("invalid range: {}", range))?,
+        Some(SheetStylesScope::Range { range }) => {
+            parse_range(range).ok_or_else(|| anyhow!("invalid range: {}", range))?
+        }
         Some(SheetStylesScope::Region { region_id }) => {
             let region = workbook.detected_region(&params.sheet_name, *region_id)?;
             parse_range(&region.bounds)
@@ -2033,7 +2034,10 @@ pub async fn sheet_styles(
         .unwrap_or("runs")
         .to_ascii_lowercase();
     if granularity != "runs" && granularity != "cells" {
-        return Err(anyhow!("invalid granularity: {} (expected runs|cells)", granularity));
+        return Err(anyhow!(
+            "invalid granularity: {} (expected runs|cells)",
+            granularity
+        ));
     }
 
     let max_items = params
@@ -2041,82 +2045,83 @@ pub async fn sheet_styles(
         .unwrap_or(STYLE_RANGE_LIMIT)
         .clamp(1, MAX_MAX_ITEMS);
 
-    let (styles, total_styles, styles_truncated) = workbook.with_sheet(&params.sheet_name, |sheet| {
-        let mut acc: HashMap<String, StyleAccum> = HashMap::new();
+    let (styles, total_styles, styles_truncated) =
+        workbook.with_sheet(&params.sheet_name, |sheet| {
+            let mut acc: HashMap<String, StyleAccum> = HashMap::new();
 
-        for cell in sheet.get_cell_collection() {
-            let address = cell.get_coordinate().get_coordinate().to_string();
-            let Some((col, row)) = parse_address(&address) else {
-                continue;
-            };
-            if col < bounds.0.0 || col > bounds.1.0 || row < bounds.0.1 || row > bounds.1.1 {
-                continue;
-            }
-
-            let descriptor = crate::styles::descriptor_from_style(cell.get_style());
-            let style_id = crate::styles::stable_style_id(&descriptor);
-
-            let entry = acc
-                .entry(style_id.clone())
-                .or_insert_with(|| StyleAccum::new(descriptor.clone()));
-            entry.occurrences += 1;
-            if entry.example_cells.len() < STYLE_EXAMPLE_LIMIT {
-                entry.example_cells.push(address.clone());
-            }
-
-            if let Some((_, tagging)) = crate::analysis::style::tag_cell(cell) {
-                for tag in tagging.tags {
-                    entry.tags.insert(tag);
-                }
-            }
-
-            entry.positions.push((row, col));
-        }
-
-        let mut summaries: Vec<StyleSummary> = acc
-            .into_iter()
-            .map(|(style_id, mut entry)| {
-                entry.positions.sort_unstable();
-                entry.positions.dedup();
-
-                let (cell_ranges, ranges_truncated) = if granularity == "cells" {
-                    let mut out = Vec::new();
-                    for (row, col) in entry.positions.iter().take(max_items) {
-                        out.push(crate::utils::cell_address(*col, *row));
-                    }
-                    (out, entry.positions.len() > max_items)
-                } else {
-                    crate::styles::compress_positions_to_ranges(&entry.positions, max_items)
+            for cell in sheet.get_cell_collection() {
+                let address = cell.get_coordinate().get_coordinate().to_string();
+                let Some((col, row)) = parse_address(&address) else {
+                    continue;
                 };
-
-                StyleSummary {
-                    style_id,
-                    occurrences: entry.occurrences,
-                    tags: entry.tags.into_iter().collect(),
-                    example_cells: entry.example_cells,
-                    descriptor: Some(entry.descriptor),
-                    cell_ranges,
-                    ranges_truncated,
+                if col < bounds.0.0 || col > bounds.1.0 || row < bounds.0.1 || row > bounds.1.1 {
+                    continue;
                 }
-            })
-            .collect();
 
-        summaries.sort_by(|a, b| {
-            b.occurrences
-                .cmp(&a.occurrences)
-                .then_with(|| a.style_id.cmp(&b.style_id))
-        });
+                let descriptor = crate::styles::descriptor_from_style(cell.get_style());
+                let style_id = crate::styles::stable_style_id(&descriptor);
 
-        let total = summaries.len() as u32;
-        let truncated = if summaries.len() > STYLE_LIMIT {
-            summaries.truncate(STYLE_LIMIT);
-            true
-        } else {
-            false
-        };
+                let entry = acc
+                    .entry(style_id.clone())
+                    .or_insert_with(|| StyleAccum::new(descriptor.clone()));
+                entry.occurrences += 1;
+                if entry.example_cells.len() < STYLE_EXAMPLE_LIMIT {
+                    entry.example_cells.push(address.clone());
+                }
 
-        Ok::<_, anyhow::Error>((summaries, total, truncated))
-    })??;
+                if let Some((_, tagging)) = crate::analysis::style::tag_cell(cell) {
+                    for tag in tagging.tags {
+                        entry.tags.insert(tag);
+                    }
+                }
+
+                entry.positions.push((row, col));
+            }
+
+            let mut summaries: Vec<StyleSummary> = acc
+                .into_iter()
+                .map(|(style_id, mut entry)| {
+                    entry.positions.sort_unstable();
+                    entry.positions.dedup();
+
+                    let (cell_ranges, ranges_truncated) = if granularity == "cells" {
+                        let mut out = Vec::new();
+                        for (row, col) in entry.positions.iter().take(max_items) {
+                            out.push(crate::utils::cell_address(*col, *row));
+                        }
+                        (out, entry.positions.len() > max_items)
+                    } else {
+                        crate::styles::compress_positions_to_ranges(&entry.positions, max_items)
+                    };
+
+                    StyleSummary {
+                        style_id,
+                        occurrences: entry.occurrences,
+                        tags: entry.tags.into_iter().collect(),
+                        example_cells: entry.example_cells,
+                        descriptor: Some(entry.descriptor),
+                        cell_ranges,
+                        ranges_truncated,
+                    }
+                })
+                .collect();
+
+            summaries.sort_by(|a, b| {
+                b.occurrences
+                    .cmp(&a.occurrences)
+                    .then_with(|| a.style_id.cmp(&b.style_id))
+            });
+
+            let total = summaries.len() as u32;
+            let truncated = if summaries.len() > STYLE_LIMIT {
+                summaries.truncate(STYLE_LIMIT);
+                true
+            } else {
+                false
+            };
+
+            Ok::<_, anyhow::Error>((summaries, total, truncated))
+        })??;
 
     Ok(SheetStylesResponse {
         workbook_id: workbook.id.clone(),
@@ -2128,7 +2133,6 @@ pub async fn sheet_styles(
         styles_truncated,
     })
 }
-
 
 pub async fn range_values(
     state: Arc<AppState>,
