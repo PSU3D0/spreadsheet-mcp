@@ -1713,24 +1713,100 @@ pub struct SheetStylesParams {
     pub sheet_name: String,
 }
 
+#[derive(Debug)]
+struct StyleAccum {
+    descriptor: StyleDescriptor,
+    occurrences: u32,
+    tags: HashSet<String>,
+    example_cells: Vec<String>,
+    positions: Vec<(u32, u32)>,
+}
+
+impl StyleAccum {
+    fn new(descriptor: StyleDescriptor) -> Self {
+        Self {
+            descriptor,
+            occurrences: 0,
+            tags: HashSet::new(),
+            example_cells: Vec::new(),
+            positions: Vec::new(),
+        }
+    }
+}
+
 pub async fn sheet_styles(
     state: Arc<AppState>,
     params: SheetStylesParams,
 ) -> Result<SheetStylesResponse> {
     let workbook = state.open_workbook(&params.workbook_id).await?;
-    let entry = workbook.get_sheet_metrics(&params.sheet_name)?;
+    const STYLE_EXAMPLE_LIMIT: usize = 5;
+    const STYLE_RANGE_LIMIT: usize = 50;
+    const STYLE_LIMIT: usize = 200;
 
-    let styles = entry
-        .metrics
-        .style_map
-        .iter()
-        .map(|(style_id, usage)| StyleSummary {
-            style_id: style_id.clone(),
-            occurrences: usage.occurrences,
-            tags: usage.tags.clone(),
-            example_cells: usage.example_cells.clone(),
-        })
-        .collect();
+    let (styles, total_styles, styles_truncated) =
+        workbook.with_sheet(&params.sheet_name, |sheet| {
+            let mut acc: HashMap<String, StyleAccum> = HashMap::new();
+
+            for cell in sheet.get_cell_collection() {
+                let address = cell.get_coordinate().get_coordinate().to_string();
+                let descriptor = crate::styles::descriptor_from_style(cell.get_style());
+                let style_id = crate::styles::stable_style_id(&descriptor);
+
+                let entry = acc
+                    .entry(style_id.clone())
+                    .or_insert_with(|| StyleAccum::new(descriptor.clone()));
+                entry.occurrences += 1;
+                if entry.example_cells.len() < STYLE_EXAMPLE_LIMIT {
+                    entry.example_cells.push(address.clone());
+                }
+
+                if let Some((_, tagging)) = crate::analysis::style::tag_cell(cell) {
+                    for tag in tagging.tags {
+                        entry.tags.insert(tag);
+                    }
+                }
+
+                if let Some((col, row)) = parse_address(&address) {
+                    entry.positions.push((row, col));
+                }
+            }
+
+            let mut summaries: Vec<StyleSummary> = acc
+                .into_iter()
+                .map(|(style_id, entry)| {
+                    let (cell_ranges, ranges_truncated) =
+                        crate::styles::compress_positions_to_ranges(
+                            &entry.positions,
+                            STYLE_RANGE_LIMIT,
+                        );
+                    StyleSummary {
+                        style_id,
+                        occurrences: entry.occurrences,
+                        tags: entry.tags.into_iter().collect(),
+                        example_cells: entry.example_cells,
+                        descriptor: Some(entry.descriptor),
+                        cell_ranges,
+                        ranges_truncated,
+                    }
+                })
+                .collect();
+
+            summaries.sort_by(|a, b| {
+                b.occurrences
+                    .cmp(&a.occurrences)
+                    .then_with(|| a.style_id.cmp(&b.style_id))
+            });
+
+            let total = summaries.len() as u32;
+            let truncated = if summaries.len() > STYLE_LIMIT {
+                summaries.truncate(STYLE_LIMIT);
+                true
+            } else {
+                false
+            };
+
+            (summaries, total, truncated)
+        })?;
 
     let response = SheetStylesResponse {
         workbook_id: workbook.id.clone(),
@@ -1738,6 +1814,8 @@ pub async fn sheet_styles(
         sheet_name: params.sheet_name.clone(),
         styles,
         conditional_rules: Vec::new(),
+        total_styles,
+        styles_truncated,
     };
     Ok(response)
 }

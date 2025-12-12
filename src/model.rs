@@ -430,6 +430,79 @@ pub struct VolatileScanResponse {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct StyleDescriptor {
+    pub font: Option<FontDescriptor>,
+    pub fill: Option<FillDescriptor>,
+    pub borders: Option<BordersDescriptor>,
+    pub alignment: Option<AlignmentDescriptor>,
+    pub number_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct FontDescriptor {
+    pub name: Option<String>,
+    pub size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<String>,
+    pub strikethrough: Option<bool>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FillDescriptor {
+    Pattern(PatternFillDescriptor),
+    Gradient(GradientFillDescriptor),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct PatternFillDescriptor {
+    pub pattern_type: Option<String>,
+    pub foreground_color: Option<String>,
+    pub background_color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct GradientFillDescriptor {
+    pub degree: Option<f64>,
+    pub stops: Vec<GradientStopDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientStopDescriptor {
+    pub position: f64,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BordersDescriptor {
+    pub left: Option<BorderSideDescriptor>,
+    pub right: Option<BorderSideDescriptor>,
+    pub top: Option<BorderSideDescriptor>,
+    pub bottom: Option<BorderSideDescriptor>,
+    pub diagonal: Option<BorderSideDescriptor>,
+    pub vertical: Option<BorderSideDescriptor>,
+    pub horizontal: Option<BorderSideDescriptor>,
+    pub diagonal_up: Option<bool>,
+    pub diagonal_down: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BorderSideDescriptor {
+    pub style: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AlignmentDescriptor {
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: Option<bool>,
+    pub text_rotation: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetStylesResponse {
     pub workbook_id: WorkbookId,
@@ -437,6 +510,8 @@ pub struct SheetStylesResponse {
     pub sheet_name: String,
     pub styles: Vec<StyleSummary>,
     pub conditional_rules: Vec<String>,
+    pub total_styles: u32,
+    pub styles_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -445,6 +520,9 @@ pub struct StyleSummary {
     pub occurrences: u32,
     pub tags: Vec<String>,
     pub example_cells: Vec<String>,
+    pub descriptor: Option<StyleDescriptor>,
+    pub cell_ranges: Vec<String>,
+    pub ranges_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

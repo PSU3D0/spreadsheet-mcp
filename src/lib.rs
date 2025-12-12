@@ -10,6 +10,7 @@ pub mod model;
 pub mod recalc;
 pub mod server;
 pub mod state;
+pub mod styles;
 pub mod tools;
 pub mod utils;
 pub mod workbook;
