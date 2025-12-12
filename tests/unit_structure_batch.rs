@@ -2,11 +2,11 @@
 
 use anyhow::Result;
 use spreadsheet_mcp::model::WorkbookId;
-use spreadsheet_mcp::tools::fork::{
-    ApplyStagedChangeParams, CreateForkParams, StructureBatchParams, StructureOp, apply_staged_change,
-    create_fork, structure_batch,
-};
 use spreadsheet_mcp::styles::descriptor_from_style;
+use spreadsheet_mcp::tools::fork::{
+    ApplyStagedChangeParams, CreateForkParams, StructureBatchParams, StructureOp,
+    apply_staged_change, create_fork, structure_batch,
+};
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
 mod support;
@@ -57,7 +57,9 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let values = fork_wb.with_sheet("Sheet1", |sheet| {
         let a1 = sheet.get_cell("A1").unwrap().get_value().to_string();
         let a2 = sheet
@@ -122,7 +124,9 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let (src_formula, dest_formula, dest_bold) = fork_wb.with_sheet("Sheet1", |sheet| {
         let src = sheet.get_cell("C1").expect("C1").get_formula().to_string();
         let dest = sheet.get_cell("D1").expect("D1").get_formula().to_string();
@@ -176,7 +180,9 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let (a1_val, c3_val, c3_bold) = fork_wb.with_sheet("Sheet1", |sheet| {
         let a1 = sheet
             .get_cell("A1")
@@ -184,7 +190,11 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             .unwrap_or_default();
         let c3 = sheet.get_cell("C3").expect("C3");
         let desc = descriptor_from_style(c3.get_style());
-        (a1, c3.get_value().to_string(), desc.font.and_then(|f| f.bold).unwrap_or(false))
+        (
+            a1,
+            c3.get_value().to_string(),
+            desc.font.and_then(|f| f.bold).unwrap_or(false),
+        )
     })?;
 
     assert_eq!(a1_val, "");
@@ -238,7 +248,6 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test(flavor = "current_thread")]
 async fn structure_batch_preview_stages_and_apply() -> Result<()> {
     let workspace = support::TestWorkspace::new();
@@ -277,7 +286,9 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
     let change_id = preview.change_id.clone().expect("change_id");
 
     // Preview should not mutate the fork.
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let b1 = fork_wb.with_sheet("Sheet1", |sheet| {
         sheet.get_cell("B1").unwrap().get_value().to_string()
     })?;
@@ -292,7 +303,9 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let moved = fork_wb.with_sheet("Sheet1", |sheet| {
         (
             sheet
@@ -345,10 +358,7 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
     .await?;
 
     assert!(
-        preview
-            .summary
-            .counts
-            .contains_key("preview_change_items"),
+        preview.summary.counts.contains_key("preview_change_items"),
         "preview should include preview_change_items"
     );
 
@@ -396,7 +406,9 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let formula = fork_wb.with_sheet("Calc", |sheet| {
         sheet.get_cell("A1").unwrap().get_formula().to_string()
     })?;
@@ -437,7 +449,9 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
     )
     .await?;
 
-    let fork_wb = state.open_workbook(&WorkbookId(fork.fork_id.clone())).await?;
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
     let sheets = fork_wb.sheet_names();
     assert_eq!(sheets[0], "First");
 

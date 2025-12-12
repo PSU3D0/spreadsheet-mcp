@@ -236,7 +236,6 @@ impl WorkbookContext {
             .map(|sheet| sheet.get_name().to_string())
             .collect();
         let mut items = Vec::new();
-
         for defined in book.get_defined_names() {
             let refers_to = defined.get_address();
             let scope = if defined.has_local_sheet_id() {
