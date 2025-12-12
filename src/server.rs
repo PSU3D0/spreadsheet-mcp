@@ -25,10 +25,12 @@ Spreadsheet MCP: optimized for spreadsheet analysis.
 WORKFLOW:
 1) list_workbooks → list_sheets → workbook_summary for orientation
 2) sheet_overview for region detection (ids/bounds/kind/confidence)
-3) For structured data: read_table with region_id, filters, sampling
+3) For structured data: table_profile for quick column sense, then read_table with region_id/range, filters, sampling
 4) For spot checks: range_values or find_value (label mode for key-value sheets)
 
 TOOL SELECTION:
+- table_profile: Fast column/type summary before wide reads.
+- read_table: Structured table extraction. Prefer region_id or tight range; use limit + sample_mode.
 - sheet_formula_map: Get formula overview. Use limit param for large sheets (e.g., limit=10). \
 Use sort_by='complexity' for most complex formulas first, or 'count' for most repeated. \
 Use range param to scope to specific region.
@@ -38,6 +40,8 @@ to dive deep on specific outputs (e.g., trace the total cell to understand calc 
 unstructured sheets. Prefer read_table for tabular data.
 - find_value with mode='label': For key-value layouts (label in col A, value in col B). \
 Use direction='right' or 'below' hints.
+
+RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 
 DATES: Cells with date formats return ISO-8601 strings (YYYY-MM-DD).
 
@@ -53,18 +57,22 @@ WORKFLOW:
 2) edit_batch: Apply cell changes (values or formulas) to the fork.
 3) recalculate: Trigger LibreOffice to recompute all formulas.
 4) get_changeset: Diff fork against original. Shows cell/table/name changes.
+   Optional: screenshot_sheet to capture a visual view of a range (original or fork).
 5) save_fork: Write changes to file.
 6) discard_fork: Delete fork without saving.
 
 TOOL DETAILS:
 - create_fork: Only .xlsx supported. Returns fork_id for subsequent operations.
-- edit_batch: Accepts array of {sheet, cell, value} or {sheet, cell, formula}. \
+- edit_batch: {fork_id, sheet_name, edits:[{address, value, is_formula}]}. \
 Formulas should NOT include leading '='.
 - recalculate: Required after edit_batch to update formula results. \
 May take several seconds for complex workbooks.
 - get_changeset: Returns cell-level diffs with modification types: \
 ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
 Use sheet_name param to filter to specific sheet.
+- screenshot_sheet: {workbook_id, sheet_name, range?}. Renders a cropped PNG to `screenshots/` and returns a file URI. \
+Max range 100x30; if too large or pixel-guarded, the error includes suggested tiled sub-ranges. \
+Pass fork_id as workbook_id to screenshot edits (recalculate first if formulas changed).
 - save_fork: Requires target_path for new file location. \
 Overwriting original requires server --allow-overwrite flag. \
 Use drop_fork=false to keep fork active after saving (default: true drops fork). \
@@ -546,6 +554,23 @@ impl SpreadsheetServer {
         self.ensure_recalc_enabled("save_fork")
             .map_err(to_mcp_error)?;
         tools::fork::save_fork(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "screenshot_sheet",
+        description = "Capture a visual screenshot of a spreadsheet region as PNG. \
+Returns file URI. Max range: 100 rows x 30 columns. Default: A1:M40."
+    )]
+    pub async fn screenshot_sheet(
+        &self,
+        Parameters(params): Parameters<tools::fork::ScreenshotSheetParams>,
+    ) -> Result<Json<tools::fork::ScreenshotSheetResponse>, McpError> {
+        self.ensure_recalc_enabled("screenshot_sheet")
+            .map_err(to_mcp_error)?;
+        tools::fork::screenshot_sheet(self.state.clone(), params)
             .await
             .map(Json)
             .map_err(to_mcp_error)

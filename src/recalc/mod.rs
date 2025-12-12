@@ -6,6 +6,8 @@ mod executor;
 mod fire_and_forget;
 #[cfg(feature = "recalc")]
 mod pooled;
+#[cfg(feature = "recalc")]
+mod screenshot;
 
 #[cfg(feature = "recalc")]
 pub use backend::{LibreOfficeBackend, RecalcBackend};
@@ -13,6 +15,8 @@ pub use backend::{LibreOfficeBackend, RecalcBackend};
 pub use executor::{RecalcExecutor, RecalcResult};
 #[cfg(feature = "recalc")]
 pub use fire_and_forget::FireAndForgetExecutor;
+#[cfg(feature = "recalc")]
+pub use screenshot::{ScreenshotExecutor, ScreenshotResult};
 
 use std::path::PathBuf;
 #[cfg(feature = "recalc")]

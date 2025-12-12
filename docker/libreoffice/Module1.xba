@@ -20,4 +20,82 @@ Sub RecalculateAndSave(sPath As String)
     doc.store()
     doc.close(True)
 End Sub
+
+Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As String, sRange As String)
+    Dim desktop As Object
+    desktop = CreateUnoService("com.sun.star.frame.Desktop")
+
+    Dim args(0) As New com.sun.star.beans.PropertyValue
+    args(0).Name = "Hidden"
+    args(0).Value = True
+
+    Dim doc As Object
+    doc = desktop.loadComponentFromURL(ConvertToURL(sInputPath), "_blank", 0, args())
+
+    If IsNull(doc) Or IsEmpty(doc) Then
+        Exit Sub
+    End If
+
+    Dim oSheets As Object
+    oSheets = doc.getSheets()
+    If Not oSheets.hasByName(sSheetName) Then
+        doc.close(True)
+        Exit Sub
+    End If
+
+    Dim oSheet As Object
+    oSheet = oSheets.getByName(sSheetName)
+    
+    Dim oController As Object
+    oController = doc.getCurrentController()
+    oController.setActiveSheet(oSheet)
+
+    Dim oRange As Object
+    If sRange &lt;&gt; "" Then
+        oRange = oSheet.getCellRangeByName(sRange)
+    Else
+        oRange = oSheet.getCellRangeByName("A1:M40")
+    End If
+
+    Dim oPageStyle As Object
+    Dim sStyleName As String
+    sStyleName = oSheet.PageStyle
+    oPageStyle = doc.StyleFamilies.getByName("PageStyles").getByName(sStyleName)
+    oPageStyle.PrintHeaders = True
+    oPageStyle.PrintGrid = True
+    ' Fit print area to a single page and remove margins to reduce whitespace
+    oPageStyle.ScaleToPages = 1
+    oPageStyle.ScaleToPagesX = 1
+    oPageStyle.ScaleToPagesY = 1
+    oPageStyle.LeftMargin = 0
+    oPageStyle.RightMargin = 0
+    oPageStyle.TopMargin = 0
+    oPageStyle.BottomMargin = 0
+    oPageStyle.HeaderIsOn = False
+    oPageStyle.FooterIsOn = False
+
+    Dim aPrintAreas(0) As New com.sun.star.table.CellRangeAddress
+    aPrintAreas(0) = oRange.getRangeAddress()
+    oSheet.setPrintAreas(aPrintAreas())
+
+    ' Select range for SelectionOnly export (matches macro recorder behavior)
+    oController.Select(oRange)
+
+    Dim aExportArgs(2) As New com.sun.star.beans.PropertyValue
+    aExportArgs(0).Name = "FilterName"
+    aExportArgs(0).Value = "calc_pdf_Export"
+    aExportArgs(1).Name = "FilterData"
+    aExportArgs(1).Value = Array( _
+        Array("Compression", 0, 9, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
+        Array("Interlaced", 0, 0, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
+        Array("Translucent", 0, 0, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
+        Array("PixelWidth", 0, 1920, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
+        Array("PixelHeight", 0, 1080, com.sun.star.beans.PropertyState.DIRECT_VALUE) _
+    )
+    aExportArgs(2).Name = "SelectionOnly"
+    aExportArgs(2).Value = True
+
+    doc.storeToURL(ConvertToURL(sOutputPath), aExportArgs())
+    doc.close(True)
+End Sub
 </script:module>

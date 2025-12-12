@@ -34,8 +34,13 @@ FROM debian:bookworm-slim
 # LibreOffice layer (rarely changes, large)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-calc \
+    poppler-utils \
     default-jre-headless \
     fonts-liberation \
+    fonts-noto-core \
+    fonts-noto-cjk \
+    fontconfig \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/libreoffice/4/user/basic/Standard \

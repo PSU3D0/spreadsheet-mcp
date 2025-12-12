@@ -389,3 +389,274 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
         fork_dropped: params.drop_fork,
     })
 }
+
+const MAX_SCREENSHOT_ROWS: u32 = 100;
+const MAX_SCREENSHOT_COLS: u32 = 30;
+const DEFAULT_SCREENSHOT_RANGE: &str = "A1:M40";
+const DEFAULT_MAX_PNG_DIM_PX: u32 = 4096;
+const DEFAULT_MAX_PNG_AREA_PX: u64 = 12_000_000;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenshotSheetParams {
+    pub workbook_id: WorkbookId,
+    pub sheet_name: String,
+    #[serde(default)]
+    pub range: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScreenshotSheetResponse {
+    pub workbook_id: String,
+    pub sheet_name: String,
+    pub range: String,
+    pub output_path: String,
+    pub size_bytes: u64,
+    pub duration_ms: u64,
+}
+
+pub async fn screenshot_sheet(
+    state: Arc<AppState>,
+    params: ScreenshotSheetParams,
+) -> Result<ScreenshotSheetResponse> {
+    let range = params.range.as_deref().unwrap_or(DEFAULT_SCREENSHOT_RANGE);
+    let bounds = validate_screenshot_range(range)?;
+
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook_path = workbook.path.clone();
+
+    let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
+
+    let safe_range = range.replace(':', "-");
+    let filename = format!(
+        "{}_{}_{}.png",
+        workbook.slug,
+        params.sheet_name.replace(' ', "_"),
+        safe_range
+    );
+
+    let screenshot_dir = state.config().workspace_root.join("screenshots");
+    tokio::fs::create_dir_all(&screenshot_dir).await?;
+    let output_path = screenshot_dir.join(&filename);
+
+    let executor = crate::recalc::ScreenshotExecutor::new(&crate::recalc::RecalcConfig::default());
+    let result = executor
+        .screenshot(
+            &workbook_path,
+            &output_path,
+            &params.sheet_name,
+            Some(range),
+        )
+        .await?;
+
+    enforce_png_pixel_limits(&result.output_path, range, &bounds).await?;
+
+    Ok(ScreenshotSheetResponse {
+        workbook_id: params.workbook_id.0,
+        sheet_name: params.sheet_name,
+        range: range.to_string(),
+        output_path: format!("file://{}", result.output_path.display()),
+        size_bytes: result.size_bytes,
+        duration_ms: result.duration_ms,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScreenshotBounds {
+    min_col: u32,
+    max_col: u32,
+    min_row: u32,
+    max_row: u32,
+    rows: u32,
+    cols: u32,
+}
+
+fn validate_screenshot_range(range: &str) -> Result<ScreenshotBounds> {
+    let bounds = parse_range_bounds(range)?;
+
+    if bounds.rows > MAX_SCREENSHOT_ROWS || bounds.cols > MAX_SCREENSHOT_COLS {
+        let row_tiles = div_ceil(bounds.rows, MAX_SCREENSHOT_ROWS);
+        let col_tiles = div_ceil(bounds.cols, MAX_SCREENSHOT_COLS);
+        let total_tiles = row_tiles * col_tiles;
+
+        let display_limit = 50usize;
+        let display_ranges = suggest_tiled_ranges(
+            &bounds,
+            MAX_SCREENSHOT_ROWS,
+            MAX_SCREENSHOT_COLS,
+            Some(display_limit),
+        );
+
+        let mut msg = format!(
+            "Requested range {range} is too large for a single screenshot ({} rows x {} cols; max {} x {}). \
+Split into {} tile(s) ({} row tiles x {} col tiles). Suggested ranges: {}",
+            bounds.rows,
+            bounds.cols,
+            MAX_SCREENSHOT_ROWS,
+            MAX_SCREENSHOT_COLS,
+            total_tiles,
+            row_tiles,
+            col_tiles,
+            display_ranges.join(", ")
+        );
+        if total_tiles as usize > display_limit {
+            msg.push_str(&format!(
+                " ... and {} more.",
+                total_tiles as usize - display_limit
+            ));
+        }
+        return Err(anyhow!(msg));
+    }
+
+    Ok(bounds)
+}
+
+fn parse_cell_ref(cell: &str) -> Result<(u32, u32)> {
+    use umya_spreadsheet::helper::coordinate::index_from_coordinate;
+    let (col, row, _, _) = index_from_coordinate(cell);
+    match (col, row) {
+        (Some(c), Some(r)) => Ok((c, r)),
+        _ => Err(anyhow!("Invalid cell reference: {}", cell)),
+    }
+}
+
+fn parse_range_bounds(range: &str) -> Result<ScreenshotBounds> {
+    let parts: Vec<&str> = range.split(':').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!("Invalid range format. Expected 'A1:Z99'"));
+    }
+
+    let start = parse_cell_ref(parts[0])?;
+    let end = parse_cell_ref(parts[1])?;
+
+    let min_col = start.0.min(end.0);
+    let max_col = start.0.max(end.0);
+    let min_row = start.1.min(end.1);
+    let max_row = start.1.max(end.1);
+
+    let rows = max_row - min_row + 1;
+    let cols = max_col - min_col + 1;
+
+    Ok(ScreenshotBounds {
+        min_col,
+        max_col,
+        min_row,
+        max_row,
+        rows,
+        cols,
+    })
+}
+
+fn div_ceil(n: u32, d: u32) -> u32 {
+    n.div_ceil(d)
+}
+
+fn suggest_tiled_ranges(
+    bounds: &ScreenshotBounds,
+    max_rows: u32,
+    max_cols: u32,
+    limit: Option<usize>,
+) -> Vec<String> {
+    use umya_spreadsheet::helper::coordinate::coordinate_from_index;
+
+    let mut out = Vec::new();
+    let mut row_start = bounds.min_row;
+    while row_start <= bounds.max_row {
+        let row_end = (row_start + max_rows - 1).min(bounds.max_row);
+        let mut col_start = bounds.min_col;
+        while col_start <= bounds.max_col {
+            let col_end = (col_start + max_cols - 1).min(bounds.max_col);
+            let start_cell = coordinate_from_index(&col_start, &row_start);
+            let end_cell = coordinate_from_index(&col_end, &row_end);
+            out.push(format!("{start_cell}:{end_cell}"));
+            if let Some(lim) = limit
+                && out.len() >= lim
+            {
+                return out;
+            }
+            col_start = col_end + 1;
+        }
+        row_start = row_end + 1;
+        if let Some(lim) = limit
+            && out.len() >= lim
+        {
+            return out;
+        }
+    }
+    out
+}
+
+fn suggest_split_single_tile(bounds: &ScreenshotBounds) -> Vec<String> {
+    use umya_spreadsheet::helper::coordinate::coordinate_from_index;
+
+    if bounds.rows >= bounds.cols && bounds.rows > 1 {
+        let mid_row = bounds.min_row + (bounds.rows / 2) - 1;
+        let start1 = coordinate_from_index(&bounds.min_col, &bounds.min_row);
+        let end1 = coordinate_from_index(&bounds.max_col, &mid_row);
+        let start2 = coordinate_from_index(&bounds.min_col, &(mid_row + 1));
+        let end2 = coordinate_from_index(&bounds.max_col, &bounds.max_row);
+        vec![format!("{start1}:{end1}"), format!("{start2}:{end2}")]
+    } else if bounds.cols > 1 {
+        let mid_col = bounds.min_col + (bounds.cols / 2) - 1;
+        let start1 = coordinate_from_index(&bounds.min_col, &bounds.min_row);
+        let end1 = coordinate_from_index(&mid_col, &bounds.max_row);
+        let start2 = coordinate_from_index(&(mid_col + 1), &bounds.min_row);
+        let end2 = coordinate_from_index(&bounds.max_col, &bounds.max_row);
+        vec![format!("{start1}:{end1}"), format!("{start2}:{end2}")]
+    } else {
+        vec![range_from_bounds(bounds)]
+    }
+}
+
+fn range_from_bounds(bounds: &ScreenshotBounds) -> String {
+    use umya_spreadsheet::helper::coordinate::coordinate_from_index;
+    let start = coordinate_from_index(&bounds.min_col, &bounds.min_row);
+    let end = coordinate_from_index(&bounds.max_col, &bounds.max_row);
+    format!("{start}:{end}")
+}
+
+async fn enforce_png_pixel_limits(
+    path: &std::path::Path,
+    range: &str,
+    bounds: &ScreenshotBounds,
+) -> Result<()> {
+    use image::GenericImageView;
+    use image::ImageReader;
+
+    let max_dim_px = std::env::var("SPREADSHEET_MCP_MAX_PNG_DIM_PX")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MAX_PNG_DIM_PX);
+    let max_area_px = std::env::var("SPREADSHEET_MCP_MAX_PNG_AREA_PX")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_PNG_AREA_PX);
+
+    let img = ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| anyhow!("failed to read png {}: {}", path.display(), e))?
+        .decode()
+        .map_err(|e| anyhow!("failed to decode png {}: {}", path.display(), e))?;
+    let (w, h) = img.dimensions();
+    let area = (w as u64) * (h as u64);
+
+    if w > max_dim_px || h > max_dim_px || area > max_area_px {
+        let _ = tokio::fs::remove_file(path).await;
+
+        let mut suggestions =
+            suggest_tiled_ranges(bounds, MAX_SCREENSHOT_ROWS, MAX_SCREENSHOT_COLS, Some(50));
+        let row_tiles = div_ceil(bounds.rows, MAX_SCREENSHOT_ROWS);
+        let col_tiles = div_ceil(bounds.cols, MAX_SCREENSHOT_COLS);
+        let total_tiles = row_tiles * col_tiles;
+        if total_tiles == 1 {
+            suggestions = suggest_split_single_tile(bounds);
+        }
+
+        return Err(anyhow!(
+            "Rendered PNG for range {range} is {w}x{h}px (area {area}px), exceeding limits (max_dim={max_dim_px}px, max_area={max_area_px}px). \
+Try smaller ranges. Suggested ranges: {}",
+            suggestions.join(", ")
+        ));
+    }
+
+    Ok(())
+}
