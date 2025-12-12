@@ -1,11 +1,15 @@
-use crate::fork::{ChangeSummary, EditOp};
-use crate::model::WorkbookId;
+use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
+use crate::model::{StylePatch, WorkbookId};
 use crate::state::AppState;
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateForkParams {
@@ -127,6 +131,246 @@ fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEd
 
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
     Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StyleBatchParams {
+    pub fork_id: String,
+    pub ops: Vec<StyleOp>,
+    #[serde(default)]
+    pub mode: Option<String>, // "preview" | "apply" (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StyleOp {
+    pub sheet_name: String,
+    pub target: StyleTarget,
+    pub patch: StylePatch,
+    #[serde(default)]
+    pub op_mode: Option<String>, // "merge" | "set" | "clear"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StyleTarget {
+    Range { range: String },
+    Region { region_id: u32 },
+    Cells { cells: Vec<String> },
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StyleBatchResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StyleBatchStagedPayload {
+    ops: Vec<StyleOp>,
+}
+
+pub async fn style_batch(
+    state: Arc<AppState>,
+    params: StyleBatchParams,
+) -> Result<StyleBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    // Resolve any region targets against current fork regions.
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let mut resolved_ops = Vec::with_capacity(params.ops.len());
+    for op in &params.ops {
+        let mut resolved = op.clone();
+        if let StyleTarget::Region { region_id } = &op.target {
+            let metrics = workbook.get_sheet_metrics(&op.sheet_name)?;
+            let region = metrics
+                .detected_regions
+                .iter()
+                .find(|r| r.id == *region_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "region_id {} not found on sheet '{}'",
+                        region_id,
+                        op.sheet_name
+                    )
+                })?;
+            resolved.target = StyleTarget::Range {
+                range: region.bounds.clone(),
+            };
+        }
+        resolved_ops.push(resolved);
+    }
+
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_path_for_apply = snapshot_path.clone();
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            move || apply_style_ops_to_file(&snapshot_path_for_apply, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["style_batch".to_string()];
+
+        let staged_op = StagedOp {
+            kind: "style_batch".to_string(),
+            payload: serde_json::to_value(StyleBatchStagedPayload {
+                ops: resolved_ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(StyleBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: resolved_ops.len(),
+            summary,
+        })
+    } else {
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            let work_path = work_path.clone();
+            move || apply_style_ops_to_file(&work_path, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["style_batch".to_string()];
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(StyleBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
+}
+
+struct StyleApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
+    PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
+}
+
+fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
+    use crate::styles::{StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id};
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let mut sheets: BTreeSet<String> = BTreeSet::new();
+    let mut affected_bounds: Vec<String> = Vec::new();
+    let mut cells_touched: u64 = 0;
+    let mut cells_style_changed: u64 = 0;
+
+    for op in ops {
+        let sheet = book
+            .get_sheet_by_name_mut(&op.sheet_name)
+            .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
+        sheets.insert(op.sheet_name.clone());
+
+        let op_mode = match op.op_mode.as_deref().unwrap_or("merge").to_ascii_lowercase().as_str()
+        {
+            "set" => StylePatchMode::Set,
+            "clear" => StylePatchMode::Clear,
+            _ => StylePatchMode::Merge,
+        };
+
+        match &op.target {
+            StyleTarget::Range { range } => {
+                let bounds = parse_range_bounds(range)?;
+                affected_bounds.push(range.clone());
+                for row in bounds.min_row..=bounds.max_row {
+                    for col in bounds.min_col..=bounds.max_col {
+                        let addr = crate::utils::cell_address(col, row);
+                        let cell = sheet.get_cell_mut(addr.as_str());
+                        let before = stable_style_id(&descriptor_from_style(cell.get_style()));
+                        let next_style = apply_style_patch(cell.get_style(), &op.patch, op_mode);
+                        cell.set_style(next_style);
+                        let after = stable_style_id(&descriptor_from_style(cell.get_style()));
+                        cells_touched += 1;
+                        if before != after {
+                            cells_style_changed += 1;
+                        }
+                    }
+                }
+            }
+            StyleTarget::Cells { cells } => {
+                affected_bounds.extend(cells.iter().cloned());
+                for addr in cells {
+                    let cell = sheet.get_cell_mut(addr.as_str());
+                    let before = stable_style_id(&descriptor_from_style(cell.get_style()));
+                    let next_style = apply_style_patch(cell.get_style(), &op.patch, op_mode);
+                    cell.set_style(next_style);
+                    let after = stable_style_id(&descriptor_from_style(cell.get_style()));
+                    cells_touched += 1;
+                    if before != after {
+                        cells_style_changed += 1;
+                    }
+                }
+            }
+            StyleTarget::Region { .. } => {
+                return Err(anyhow!(
+                    "region_id targets must be resolved before apply_style_ops_to_file"
+                ));
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_touched".to_string(), cells_touched);
+    counts.insert("cells_style_changed".to_string(), cells_style_changed);
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["style_batch".to_string()],
+        affected_sheets: sheets.into_iter().collect(),
+        affected_bounds,
+        counts,
+        warnings: Vec::new(),
+    };
+
+    Ok(StyleApplyResult {
+        ops_applied: ops.len(),
+        summary,
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -647,6 +891,20 @@ pub async fn apply_staged_change(
                     ctx.edits.extend(edits_to_apply);
                     Ok(())
                 })?;
+
+                ops_applied += 1;
+            }
+            "style_batch" => {
+                let payload: StyleBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid style_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_style_ops_to_file(&work_path, &ops)
+                })
+                .await??;
 
                 ops_applied += 1;
             }

@@ -1,11 +1,14 @@
 use crate::model::{
     AlignmentDescriptor, BorderSideDescriptor, BordersDescriptor, FillDescriptor, FontDescriptor,
-    GradientFillDescriptor, GradientStopDescriptor, PatternFillDescriptor, StyleDescriptor,
+    AlignmentPatch, BorderSidePatch, BordersPatch, FillPatch, FontPatch, GradientFillDescriptor,
+    GradientFillPatch, GradientStopDescriptor, PatternFillDescriptor,
+    PatternFillPatch, StyleDescriptor, StylePatch,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use umya_spreadsheet::structs::{EnumTrait, HorizontalAlignmentValues, VerticalAlignmentValues};
-use umya_spreadsheet::{Border, Fill, Font, Style};
+use umya_spreadsheet::{Border, Fill, Font, PatternValues, Style};
 
 pub fn descriptor_from_style(style: &Style) -> StyleDescriptor {
     let font = style.get_font().and_then(descriptor_from_font);
@@ -333,5 +336,417 @@ impl IsEmpty for AlignmentDescriptor {
             && self.vertical.is_none()
             && self.wrap_text.is_none()
             && self.text_rotation.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StylePatchMode {
+    Merge,
+    Set,
+    Clear,
+}
+
+pub fn apply_style_patch(current: &Style, patch: &StylePatch, mode: StylePatchMode) -> Style {
+    match mode {
+        StylePatchMode::Clear => Style::default(),
+        StylePatchMode::Set | StylePatchMode::Merge => {
+            let mut desc = match mode {
+                StylePatchMode::Merge => descriptor_from_style(current),
+                StylePatchMode::Set => StyleDescriptor::default(),
+                StylePatchMode::Clear => StyleDescriptor::default(),
+            };
+            merge_style_patch(&mut desc, patch);
+            let mut style = Style::default();
+            apply_descriptor_to_style(&mut style, &desc);
+            style
+        }
+    }
+}
+
+fn merge_style_patch(desc: &mut StyleDescriptor, patch: &StylePatch) {
+    if let Some(font_patch) = &patch.font {
+        match font_patch {
+            None => desc.font = None,
+            Some(p) => {
+                let mut font_desc = desc.font.take().unwrap_or_default();
+                apply_font_patch(&mut font_desc, p);
+                if font_desc.is_empty() {
+                    desc.font = None;
+                } else {
+                    desc.font = Some(font_desc);
+                }
+            }
+        }
+    }
+
+    if let Some(fill_patch) = &patch.fill {
+        match fill_patch {
+            None => desc.fill = None,
+            Some(p) => {
+                let fill_desc = apply_fill_patch(desc.fill.take(), p);
+                desc.fill = fill_desc;
+            }
+        }
+    }
+
+    if let Some(borders_patch) = &patch.borders {
+        match borders_patch {
+            None => desc.borders = None,
+            Some(p) => {
+                let mut borders_desc = desc.borders.take().unwrap_or_default();
+                apply_borders_patch(&mut borders_desc, p);
+                if borders_desc.is_empty() {
+                    desc.borders = None;
+                } else {
+                    desc.borders = Some(borders_desc);
+                }
+            }
+        }
+    }
+
+    if let Some(alignment_patch) = &patch.alignment {
+        match alignment_patch {
+            None => desc.alignment = None,
+            Some(p) => {
+                let mut align_desc = desc.alignment.take().unwrap_or_default();
+                apply_alignment_patch(&mut align_desc, p);
+                if align_desc.is_empty() {
+                    desc.alignment = None;
+                } else {
+                    desc.alignment = Some(align_desc);
+                }
+            }
+        }
+    }
+
+    if let Some(nf_patch) = &patch.number_format {
+        match nf_patch {
+            None => desc.number_format = None,
+            Some(fmt) => {
+                let fmt = fmt.trim();
+                if fmt.is_empty() || fmt.eq_ignore_ascii_case("general") {
+                    desc.number_format = None;
+                } else {
+                    desc.number_format = Some(fmt.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn apply_font_patch(desc: &mut FontDescriptor, patch: &FontPatch) {
+    apply_double(&mut desc.name, &patch.name);
+    if desc.name.as_deref().is_some_and(|s| s.trim().is_empty()) {
+        desc.name = None;
+    }
+
+    apply_double(&mut desc.size, &patch.size);
+    if desc.size.is_some_and(|s| s <= 0.0) {
+        desc.size = None;
+    }
+
+    apply_double(&mut desc.bold, &patch.bold);
+    if desc.bold == Some(false) {
+        desc.bold = None;
+    }
+
+    apply_double(&mut desc.italic, &patch.italic);
+    if desc.italic == Some(false) {
+        desc.italic = None;
+    }
+
+    apply_double(&mut desc.underline, &patch.underline);
+    if desc
+        .underline
+        .as_deref()
+        .is_some_and(|u| u.trim().is_empty() || u.eq_ignore_ascii_case("none"))
+    {
+        desc.underline = None;
+    }
+
+    apply_double(&mut desc.strikethrough, &patch.strikethrough);
+    if desc.strikethrough == Some(false) {
+        desc.strikethrough = None;
+    }
+
+    apply_double(&mut desc.color, &patch.color);
+    if desc.color.as_deref().is_some_and(|c| c.trim().is_empty()) {
+        desc.color = None;
+    }
+}
+
+fn apply_fill_patch(existing: Option<FillDescriptor>, patch: &FillPatch) -> Option<FillDescriptor> {
+    match patch {
+        FillPatch::Pattern(patch_pattern) => {
+            let mut desc = match existing {
+                Some(FillDescriptor::Pattern(p)) => p,
+                _ => PatternFillDescriptor::default(),
+            };
+            apply_pattern_fill_patch(&mut desc, patch_pattern);
+            if desc.pattern_type.is_none()
+                && desc.foreground_color.is_none()
+                && desc.background_color.is_none()
+            {
+                None
+            } else {
+                Some(FillDescriptor::Pattern(desc))
+            }
+        }
+        FillPatch::Gradient(patch_gradient) => {
+            let mut desc = match existing {
+                Some(FillDescriptor::Gradient(g)) => g,
+                _ => GradientFillDescriptor::default(),
+            };
+            apply_gradient_fill_patch(&mut desc, patch_gradient);
+            if desc.degree.is_none() && desc.stops.is_empty() {
+                None
+            } else {
+                Some(FillDescriptor::Gradient(desc))
+            }
+        }
+    }
+}
+
+fn apply_pattern_fill_patch(desc: &mut PatternFillDescriptor, patch: &PatternFillPatch) {
+    apply_double(&mut desc.pattern_type, &patch.pattern_type);
+    if desc
+        .pattern_type
+        .as_deref()
+        .is_some_and(|p| p.trim().is_empty() || p.eq_ignore_ascii_case("none"))
+    {
+        desc.pattern_type = None;
+    }
+
+    apply_double(&mut desc.foreground_color, &patch.foreground_color);
+    if desc
+        .foreground_color
+        .as_deref()
+        .is_some_and(|c| c.trim().is_empty())
+    {
+        desc.foreground_color = None;
+    }
+
+    apply_double(&mut desc.background_color, &patch.background_color);
+    if desc
+        .background_color
+        .as_deref()
+        .is_some_and(|c| c.trim().is_empty())
+    {
+        desc.background_color = None;
+    }
+}
+
+fn apply_gradient_fill_patch(desc: &mut GradientFillDescriptor, patch: &GradientFillPatch) {
+    apply_double(&mut desc.degree, &patch.degree);
+    if desc.degree == Some(0.0) {
+        desc.degree = None;
+    }
+
+    if let Some(stops) = &patch.stops {
+        desc.stops = stops
+            .iter()
+            .map(|s| GradientStopDescriptor {
+                position: s.position,
+                color: s.color.clone(),
+            })
+            .collect();
+    }
+}
+
+fn apply_borders_patch(desc: &mut BordersDescriptor, patch: &BordersPatch) {
+    apply_border_side_patch(&mut desc.left, &patch.left);
+    apply_border_side_patch(&mut desc.right, &patch.right);
+    apply_border_side_patch(&mut desc.top, &patch.top);
+    apply_border_side_patch(&mut desc.bottom, &patch.bottom);
+    apply_border_side_patch(&mut desc.diagonal, &patch.diagonal);
+    apply_border_side_patch(&mut desc.vertical, &patch.vertical);
+    apply_border_side_patch(&mut desc.horizontal, &patch.horizontal);
+
+    apply_double(&mut desc.diagonal_up, &patch.diagonal_up);
+    if desc.diagonal_up == Some(false) {
+        desc.diagonal_up = None;
+    }
+    apply_double(&mut desc.diagonal_down, &patch.diagonal_down);
+    if desc.diagonal_down == Some(false) {
+        desc.diagonal_down = None;
+    }
+}
+
+fn apply_border_side_patch(
+    target: &mut Option<BorderSideDescriptor>,
+    patch: &Option<Option<BorderSidePatch>>,
+) {
+    match patch {
+        None => {}
+        Some(None) => *target = None,
+        Some(Some(p)) => {
+            let mut side = target.take().unwrap_or_default();
+            apply_double(&mut side.style, &p.style);
+            if side
+                .style
+                .as_deref()
+                .is_some_and(|s| s.trim().is_empty() || s.eq_ignore_ascii_case("none"))
+            {
+                side.style = None;
+            }
+            apply_double(&mut side.color, &p.color);
+            if side.color.as_deref().is_some_and(|c| c.trim().is_empty()) {
+                side.color = None;
+            }
+            if side.is_empty() {
+                *target = None;
+            } else {
+                *target = Some(side);
+            }
+        }
+    }
+}
+
+fn apply_alignment_patch(desc: &mut AlignmentDescriptor, patch: &AlignmentPatch) {
+    apply_double(&mut desc.horizontal, &patch.horizontal);
+    if desc
+        .horizontal
+        .as_deref()
+        .is_some_and(|h| h.trim().is_empty() || h.eq_ignore_ascii_case("general"))
+    {
+        desc.horizontal = None;
+    }
+
+    apply_double(&mut desc.vertical, &patch.vertical);
+    if desc
+        .vertical
+        .as_deref()
+        .is_some_and(|v| v.trim().is_empty() || v.eq_ignore_ascii_case("bottom"))
+    {
+        desc.vertical = None;
+    }
+
+    apply_double(&mut desc.wrap_text, &patch.wrap_text);
+    if desc.wrap_text == Some(false) {
+        desc.wrap_text = None;
+    }
+
+    apply_double(&mut desc.text_rotation, &patch.text_rotation);
+    if desc.text_rotation == Some(0) {
+        desc.text_rotation = None;
+    }
+}
+
+fn apply_descriptor_to_style(style: &mut Style, desc: &StyleDescriptor) {
+    if let Some(font_desc) = &desc.font {
+        let font = style.get_font_mut();
+        if let Some(name) = &font_desc.name {
+            font.set_name(name.clone());
+        }
+        if let Some(size) = font_desc.size {
+            font.set_size(size);
+        }
+        if let Some(bold) = font_desc.bold {
+            font.set_bold(bold);
+        }
+        if let Some(italic) = font_desc.italic {
+            font.set_italic(italic);
+        }
+        if let Some(underline) = &font_desc.underline {
+            font.set_underline(underline.clone());
+        }
+        if let Some(strike) = font_desc.strikethrough {
+            font.set_strikethrough(strike);
+        }
+        if let Some(color) = &font_desc.color {
+            font.get_color_mut().set_argb(color.clone());
+        }
+    }
+
+    if let Some(fill_desc) = &desc.fill {
+        match fill_desc {
+            FillDescriptor::Pattern(p) => {
+                let pat = style.get_fill_mut().get_pattern_fill_mut();
+                if let Some(kind) = &p.pattern_type {
+                    if let Ok(pv) = PatternValues::from_str(kind) {
+                        pat.set_pattern_type(pv);
+                    }
+                }
+                if let Some(fg) = &p.foreground_color {
+                    pat.get_foreground_color_mut().set_argb(fg.clone());
+                }
+                if let Some(bg) = &p.background_color {
+                    pat.get_background_color_mut().set_argb(bg.clone());
+                }
+            }
+            FillDescriptor::Gradient(g) => {
+                let grad = style.get_fill_mut().get_gradient_fill_mut();
+                if let Some(deg) = g.degree {
+                    grad.set_degree(deg);
+                }
+                grad.get_gradient_stop_mut().clear();
+                for stop in &g.stops {
+                    let mut st = umya_spreadsheet::GradientStop::default();
+                    st.set_position(stop.position);
+                    st.get_color_mut().set_argb(stop.color.clone());
+                    grad.set_gradient_stop(st);
+                }
+            }
+        }
+    }
+
+    if let Some(border_desc) = &desc.borders {
+        let borders = style.get_borders_mut();
+        apply_border_side_descriptor(borders.get_left_border_mut(), &border_desc.left);
+        apply_border_side_descriptor(borders.get_right_border_mut(), &border_desc.right);
+        apply_border_side_descriptor(borders.get_top_border_mut(), &border_desc.top);
+        apply_border_side_descriptor(borders.get_bottom_border_mut(), &border_desc.bottom);
+        apply_border_side_descriptor(borders.get_diagonal_border_mut(), &border_desc.diagonal);
+        apply_border_side_descriptor(borders.get_vertical_border_mut(), &border_desc.vertical);
+        apply_border_side_descriptor(borders.get_horizontal_border_mut(), &border_desc.horizontal);
+        if let Some(up) = border_desc.diagonal_up {
+            borders.set_diagonal_up(up);
+        }
+        if let Some(down) = border_desc.diagonal_down {
+            borders.set_diagonal_down(down);
+        }
+    }
+
+    if let Some(align_desc) = &desc.alignment {
+        let align = style.get_alignment_mut();
+        if let Some(h) = &align_desc.horizontal {
+            if let Ok(val) = HorizontalAlignmentValues::from_str(h) {
+                align.set_horizontal(val);
+            }
+        }
+        if let Some(v) = &align_desc.vertical {
+            if let Ok(val) = VerticalAlignmentValues::from_str(v) {
+                align.set_vertical(val);
+            }
+        }
+        if let Some(wrap) = align_desc.wrap_text {
+            align.set_wrap_text(wrap);
+        }
+        if let Some(rot) = align_desc.text_rotation {
+            align.set_text_rotation(rot);
+        }
+    }
+
+    if let Some(fmt) = &desc.number_format {
+        style.get_number_format_mut().set_format_code(fmt.clone());
+    }
+}
+
+fn apply_border_side_descriptor(border: &mut Border, desc: &Option<BorderSideDescriptor>) {
+    if let Some(side) = desc {
+        if let Some(style_name) = &side.style {
+            border.set_border_style(style_name.clone());
+        }
+        if let Some(color) = &side.color {
+            border.get_color_mut().set_argb(color.clone());
+        }
+    }
+}
+
+fn apply_double<T: Clone>(target: &mut Option<T>, patch: &Option<Option<T>>) {
+    match patch {
+        None => {}
+        Some(None) => *target = None,
+        Some(Some(v)) => *target = Some(v.clone()),
     }
 }

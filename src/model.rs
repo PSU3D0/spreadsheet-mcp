@@ -503,6 +503,115 @@ pub struct AlignmentDescriptor {
     pub text_rotation: Option<u32>,
 }
 
+// Patch variants for write tools (Phase 2+). Double-option fields distinguish:
+// - missing field => no change (merge mode)
+// - null => clear to default
+// - value => set/merge that value
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct StylePatch {
+    #[serde(default)]
+    pub font: Option<Option<FontPatch>>,
+    #[serde(default)]
+    pub fill: Option<Option<FillPatch>>,
+    #[serde(default)]
+    pub borders: Option<Option<BordersPatch>>,
+    #[serde(default)]
+    pub alignment: Option<Option<AlignmentPatch>>,
+    #[serde(default)]
+    pub number_format: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct FontPatch {
+    #[serde(default)]
+    pub name: Option<Option<String>>,
+    #[serde(default)]
+    pub size: Option<Option<f64>>,
+    #[serde(default)]
+    pub bold: Option<Option<bool>>,
+    #[serde(default)]
+    pub italic: Option<Option<bool>>,
+    #[serde(default)]
+    pub underline: Option<Option<String>>,
+    #[serde(default)]
+    pub strikethrough: Option<Option<bool>>,
+    #[serde(default)]
+    pub color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FillPatch {
+    Pattern(PatternFillPatch),
+    Gradient(GradientFillPatch),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct PatternFillPatch {
+    #[serde(default)]
+    pub pattern_type: Option<Option<String>>,
+    #[serde(default)]
+    pub foreground_color: Option<Option<String>>,
+    #[serde(default)]
+    pub background_color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct GradientFillPatch {
+    #[serde(default)]
+    pub degree: Option<Option<f64>>,
+    #[serde(default)]
+    pub stops: Option<Vec<GradientStopPatch>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientStopPatch {
+    pub position: f64,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BordersPatch {
+    #[serde(default)]
+    pub left: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub right: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub top: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub bottom: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub diagonal: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub vertical: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub horizontal: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub diagonal_up: Option<Option<bool>>,
+    #[serde(default)]
+    pub diagonal_down: Option<Option<bool>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BorderSidePatch {
+    #[serde(default)]
+    pub style: Option<Option<String>>,
+    #[serde(default)]
+    pub color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AlignmentPatch {
+    #[serde(default)]
+    pub horizontal: Option<Option<String>>,
+    #[serde(default)]
+    pub vertical: Option<Option<String>>,
+    #[serde(default)]
+    pub wrap_text: Option<Option<bool>>,
+    #[serde(default)]
+    pub text_rotation: Option<Option<u32>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetStylesResponse {
     pub workbook_id: WorkbookId,

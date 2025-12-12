@@ -10,6 +10,7 @@ pub struct RawCell {
     pub address: CellAddress,
     pub value: Option<String>,
     pub formula: Option<String>,
+    pub style_id: Option<u32>,
 }
 
 pub struct CellIterator<'a, R: BufRead> {
@@ -47,6 +48,7 @@ impl<'a, R: BufRead> CellIterator<'a, R> {
     fn parse_cell(&mut self, e: &BytesStart) -> Result<RawCell> {
         let mut address_str = String::new();
         let mut type_str = String::new();
+        let mut style_id: Option<u32> = None;
 
         for attr in e.attributes() {
             let attr = attr?;
@@ -54,6 +56,9 @@ impl<'a, R: BufRead> CellIterator<'a, R> {
                 address_str = String::from_utf8_lossy(&attr.value).to_string();
             } else if attr.key.as_ref() == b"t" {
                 type_str = String::from_utf8_lossy(&attr.value).to_string();
+            } else if attr.key.as_ref() == b"s" {
+                let s = String::from_utf8_lossy(&attr.value).to_string();
+                style_id = s.parse::<u32>().ok();
             }
         }
 
@@ -110,6 +115,7 @@ impl<'a, R: BufRead> CellIterator<'a, R> {
             address,
             value,
             formula,
+            style_id,
         })
     }
 }
