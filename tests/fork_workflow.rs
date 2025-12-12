@@ -56,7 +56,11 @@ async fn test_create_fork_basic() -> Result<()> {
         sheet.get_cell_mut("B1").set_formula("A1*2");
     });
 
-    let state = app_state_with_recalc(&workspace);
+    let config = Arc::new(workspace.config_with(|cfg| {
+        cfg.recalc_enabled = true;
+        cfg.allow_overwrite = true;
+    }));
+    let state = Arc::new(AppState::new(config));
     let workbook_id = discover_workbook(state.clone()).await?;
 
     let response = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
@@ -74,7 +78,11 @@ async fn test_create_fork_rejects_non_xlsx() -> Result<()> {
 
     support::touch_file(&workspace.path("data.xls"));
 
-    let state = app_state_with_recalc(&workspace);
+    let config = Arc::new(workspace.config_with(|cfg| {
+        cfg.recalc_enabled = true;
+        cfg.allow_overwrite = true;
+    }));
+    let state = Arc::new(AppState::new(config));
 
     let list = list_workbooks(
         state.clone(),
@@ -434,7 +442,11 @@ async fn test_save_fork_overwrites_original() -> Result<()> {
         sheet.get_cell_mut("A1").set_value_number(1);
     });
 
-    let state = app_state_with_recalc(&workspace);
+    let config = Arc::new(workspace.config_with(|cfg| {
+        cfg.recalc_enabled = true;
+        cfg.allow_overwrite = true;
+    }));
+    let state = Arc::new(AppState::new(config));
     let workbook_id = discover_workbook(state.clone()).await?;
 
     let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
@@ -458,6 +470,7 @@ async fn test_save_fork_overwrites_original() -> Result<()> {
         SaveForkParams {
             fork_id: fork.fork_id.clone(),
             target_path: None, // Overwrite original
+            drop_fork: true,
         },
     )
     .await?;
@@ -510,6 +523,7 @@ async fn test_save_fork_to_new_path() -> Result<()> {
         SaveForkParams {
             fork_id: fork.fork_id.clone(),
             target_path: Some("copy.xlsx".to_string()),
+            drop_fork: true,
         },
     )
     .await?;
@@ -608,6 +622,7 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
         SaveForkParams {
             fork_id: fork.fork_id.clone(),
             target_path: Some("workflow_updated.xlsx".to_string()),
+            drop_fork: true,
         },
     )
     .await?;

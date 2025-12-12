@@ -1,4 +1,4 @@
-use crate::fork::EditOp;
+use crate::fork::{ChangeSummary, EditOp};
 use crate::model::WorkbookId;
 use crate::state::AppState;
 use anyhow::{Result, anyhow};
@@ -387,6 +387,314 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
         fork_id: params.fork_id,
         saved_to: target.display().to_string(),
         fork_dropped: params.drop_fork,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CheckpointForkParams {
+    pub fork_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CheckpointInfo {
+    pub checkpoint_id: String,
+    pub created_at: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CheckpointForkResponse {
+    pub fork_id: String,
+    pub checkpoint: CheckpointInfo,
+    pub total_checkpoints: usize,
+}
+
+pub async fn checkpoint_fork(
+    state: Arc<AppState>,
+    params: CheckpointForkParams,
+) -> Result<CheckpointForkResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.get_fork(&params.fork_id)?;
+    let checkpoint = registry.create_checkpoint(&params.fork_id, params.label.clone())?;
+    let total = registry.list_checkpoints(&params.fork_id)?.len();
+
+    Ok(CheckpointForkResponse {
+        fork_id: params.fork_id,
+        checkpoint: CheckpointInfo {
+            checkpoint_id: checkpoint.checkpoint_id,
+            created_at: checkpoint.created_at.to_rfc3339(),
+            label: checkpoint.label,
+        },
+        total_checkpoints: total,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListCheckpointsParams {
+    pub fork_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListCheckpointsResponse {
+    pub fork_id: String,
+    pub checkpoints: Vec<CheckpointInfo>,
+}
+
+pub async fn list_checkpoints(
+    state: Arc<AppState>,
+    params: ListCheckpointsParams,
+) -> Result<ListCheckpointsResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let checkpoints = registry.list_checkpoints(&params.fork_id)?;
+    let checkpoints = checkpoints
+        .into_iter()
+        .map(|cp| CheckpointInfo {
+            checkpoint_id: cp.checkpoint_id,
+            created_at: cp.created_at.to_rfc3339(),
+            label: cp.label,
+        })
+        .collect();
+
+    Ok(ListCheckpointsResponse {
+        fork_id: params.fork_id,
+        checkpoints,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RestoreCheckpointParams {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RestoreCheckpointResponse {
+    pub fork_id: String,
+    pub restored_checkpoint: CheckpointInfo,
+}
+
+pub async fn restore_checkpoint(
+    state: Arc<AppState>,
+    params: RestoreCheckpointParams,
+) -> Result<RestoreCheckpointResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let checkpoint = registry.restore_checkpoint(&params.fork_id, &params.checkpoint_id)?;
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(RestoreCheckpointResponse {
+        fork_id: params.fork_id,
+        restored_checkpoint: CheckpointInfo {
+            checkpoint_id: checkpoint.checkpoint_id,
+            created_at: checkpoint.created_at.to_rfc3339(),
+            label: checkpoint.label,
+        },
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteCheckpointParams {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeleteCheckpointResponse {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+    pub deleted: bool,
+}
+
+pub async fn delete_checkpoint(
+    state: Arc<AppState>,
+    params: DeleteCheckpointParams,
+) -> Result<DeleteCheckpointResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.delete_checkpoint(&params.fork_id, &params.checkpoint_id)?;
+
+    Ok(DeleteCheckpointResponse {
+        fork_id: params.fork_id,
+        checkpoint_id: params.checkpoint_id,
+        deleted: true,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListStagedChangesParams {
+    pub fork_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StagedChangeInfo {
+    pub change_id: String,
+    pub created_at: String,
+    pub label: Option<String>,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListStagedChangesResponse {
+    pub fork_id: String,
+    pub staged_changes: Vec<StagedChangeInfo>,
+}
+
+pub async fn list_staged_changes(
+    state: Arc<AppState>,
+    params: ListStagedChangesParams,
+) -> Result<ListStagedChangesResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let staged = registry.list_staged_changes(&params.fork_id)?;
+    let staged_changes = staged
+        .into_iter()
+        .map(|c| StagedChangeInfo {
+            change_id: c.change_id,
+            created_at: c.created_at.to_rfc3339(),
+            label: c.label,
+            summary: c.summary,
+        })
+        .collect();
+
+    Ok(ListStagedChangesResponse {
+        fork_id: params.fork_id,
+        staged_changes,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApplyStagedChangeParams {
+    pub fork_id: String,
+    pub change_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApplyStagedChangeResponse {
+    pub fork_id: String,
+    pub change_id: String,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditBatchStagedPayload {
+    sheet_name: String,
+    edits: Vec<CellEdit>,
+}
+
+pub async fn apply_staged_change(
+    state: Arc<AppState>,
+    params: ApplyStagedChangeParams,
+) -> Result<ApplyStagedChangeResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let staged_list = registry.list_staged_changes(&params.fork_id)?;
+    let staged = staged_list
+        .iter()
+        .find(|c| c.change_id == params.change_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("staged change not found: {}", params.change_id))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let mut ops_applied = 0usize;
+
+    for op in &staged.ops {
+        match op.kind.as_str() {
+            "edit_batch" => {
+                let payload: EditBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid edit_batch payload: {}", e))?;
+
+                let edits_to_apply: Vec<_> = payload
+                    .edits
+                    .iter()
+                    .map(|e| EditOp {
+                        timestamp: Utc::now(),
+                        sheet: payload.sheet_name.clone(),
+                        address: e.address.clone(),
+                        value: e.value.clone(),
+                        is_formula: e.is_formula,
+                    })
+                    .collect();
+
+                tokio::task::spawn_blocking({
+                    let sheet_name = payload.sheet_name.clone();
+                    let edits = payload.edits.clone();
+                    let work_path = work_path.clone();
+                    move || apply_edits_to_file(&work_path, &sheet_name, &edits)
+                })
+                .await??;
+
+                registry.with_fork_mut(&params.fork_id, |ctx| {
+                    ctx.edits.extend(edits_to_apply);
+                    Ok(())
+                })?;
+
+                ops_applied += 1;
+            }
+            other => {
+                return Err(anyhow!("unsupported staged op kind: {}", other));
+            }
+        }
+    }
+
+    registry.discard_staged_change(&params.fork_id, &params.change_id)?;
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(ApplyStagedChangeResponse {
+        fork_id: params.fork_id,
+        change_id: params.change_id,
+        ops_applied,
+        summary: staged.summary,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiscardStagedChangeParams {
+    pub fork_id: String,
+    pub change_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DiscardStagedChangeResponse {
+    pub fork_id: String,
+    pub change_id: String,
+    pub discarded: bool,
+}
+
+pub async fn discard_staged_change(
+    state: Arc<AppState>,
+    params: DiscardStagedChangeParams,
+) -> Result<DiscardStagedChangeResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.discard_staged_change(&params.fork_id, &params.change_id)?;
+
+    Ok(DiscardStagedChangeResponse {
+        fork_id: params.fork_id,
+        change_id: params.change_id,
+        discarded: true,
     })
 }
 

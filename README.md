@@ -39,7 +39,7 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 ## Write & Recalc Support
 
-Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate formulas via LibreOffice, and diff the results.
+Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate formulas via LibreOffice, and diff the results. For safety, you can create checkpoints for high‑fidelity rollback and apply previewed (staged) changes explicitly.
 
 ### Enabling Write Tools
 
@@ -61,6 +61,13 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
 | `get_edits` | List all edits applied to a fork |
 | `list_forks` | List all active forks |
+| `checkpoint_fork` | Create a snapshot checkpoint for rollback |
+| `list_checkpoints` | List checkpoints for a fork |
+| `restore_checkpoint` | Restore a fork to a checkpoint |
+| `delete_checkpoint` | Delete a checkpoint |
+| `list_staged_changes` | List previewed/staged changes for a fork |
+| `apply_staged_change` | Apply a staged change |
+| `discard_staged_change` | Discard a staged change |
 | `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
 | `discard_fork` | Delete the temporary fork |
 
