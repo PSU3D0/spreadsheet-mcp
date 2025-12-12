@@ -4,6 +4,7 @@ use crate::model::{StylePatch, WorkbookId};
 use crate::state::AppState;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
+use formualizer_parse::tokenizer::Tokenizer;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -550,6 +551,459 @@ fn validate_formula_pattern_bounds(
         other => bail!("invalid fill_direction: {}", other),
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StructureBatchParams {
+    pub fork_id: String,
+    pub ops: Vec<StructureOp>,
+    #[serde(default)]
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StructureOp {
+    InsertRows {
+        sheet_name: String,
+        at_row: u32,
+        count: u32,
+    },
+    DeleteRows {
+        sheet_name: String,
+        start_row: u32,
+        count: u32,
+    },
+    InsertCols {
+        sheet_name: String,
+        at_col: String,
+        count: u32,
+    },
+    DeleteCols {
+        sheet_name: String,
+        start_col: String,
+        count: u32,
+    },
+    RenameSheet {
+        old_name: String,
+        new_name: String,
+    },
+    CreateSheet {
+        name: String,
+        #[serde(default)]
+        position: Option<u32>,
+    },
+    DeleteSheet {
+        name: String,
+    },
+    CopyRange {
+        sheet_name: String,
+        src_range: String,
+        dest_anchor: String,
+        include_styles: bool,
+        include_formulas: bool,
+    },
+    MoveRange {
+        sheet_name: String,
+        src_range: String,
+        dest_anchor: String,
+        include_styles: bool,
+        include_formulas: bool,
+    },
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StructureBatchResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StructureBatchStagedPayload {
+    ops: Vec<StructureOp>,
+}
+
+pub async fn structure_batch(
+    state: Arc<AppState>,
+    params: StructureBatchParams,
+) -> Result<StructureBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let mode = params.mode.as_deref().unwrap_or("apply").to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let ops_for_apply = params.ops.clone();
+
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_structure_ops_to_file(&snapshot_for_apply, &ops_for_apply)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["structure_batch".to_string()];
+        // Best-effort preview diff size: compare current fork to preview snapshot.
+        // This is intentionally summarized as a count to avoid large payloads.
+        if let Ok(change_count) = tokio::task::spawn_blocking({
+            let base_path = work_path.clone();
+            let preview_path = snapshot_path.clone();
+            move || {
+                crate::diff::calculate_changeset(&base_path, &preview_path, None)
+                    .map(|changes| changes.len() as u64)
+            }
+        })
+        .await?
+        {
+            summary
+                .counts
+                .insert("preview_change_items".to_string(), change_count);
+        } else {
+            summary.warnings.push(
+                "Preview diff computation failed; run get_changeset after applying to inspect changes."
+                    .to_string(),
+            );
+        }
+
+        let staged_op = StagedOp {
+            kind: "structure_batch".to_string(),
+            payload: serde_json::to_value(StructureBatchStagedPayload {
+                ops: params.ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(StructureBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    } else {
+        let ops_for_apply = params.ops.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_structure_ops_to_file(&work_path, &ops_for_apply)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["structure_batch".to_string()];
+
+        let fork_workbook_id = WorkbookId(params.fork_id.clone());
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(StructureBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
+}
+
+struct StructureApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<StructureApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
+    let affected_bounds: Vec<String> = Vec::new();
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut warnings: Vec<String> = vec![
+        "Structural edits may not fully rewrite formulas/named ranges like Excel. After apply, run recalculate and review get_changeset.".to_string(),
+    ];
+
+    for op in ops {
+        match op {
+            StructureOp::InsertRows {
+                sheet_name,
+                at_row,
+                count,
+            } => {
+                if *at_row == 0 || *count == 0 {
+                    bail!("insert_rows requires at_row>=1 and count>=1");
+                }
+                book.insert_new_row(sheet_name, at_row, count);
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::DeleteRows {
+                sheet_name,
+                start_row,
+                count,
+            } => {
+                if *start_row == 0 || *count == 0 {
+                    bail!("delete_rows requires start_row>=1 and count>=1");
+                }
+                book.remove_row(sheet_name, start_row, count);
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_deleted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::InsertCols {
+                sheet_name,
+                at_col,
+                count,
+            } => {
+                if at_col.trim().is_empty() || *count == 0 {
+                    bail!("insert_cols requires at_col and count>=1");
+                }
+                let col_letters = normalize_col_letters(at_col)?;
+                book.insert_new_column(sheet_name, &col_letters, count);
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cols_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::DeleteCols {
+                sheet_name,
+                start_col,
+                count,
+            } => {
+                if start_col.trim().is_empty() || *count == 0 {
+                    bail!("delete_cols requires start_col and count>=1");
+                }
+                let col_letters = normalize_col_letters(start_col)?;
+                book.remove_column(sheet_name, &col_letters, count);
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cols_deleted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::RenameSheet { old_name, new_name } => {
+                let old_name = old_name.trim();
+                let new_name = new_name.trim();
+                if old_name.is_empty() || new_name.is_empty() {
+                    bail!("rename_sheet requires non-empty old_name and new_name");
+                }
+
+                let sheet_index = book
+                    .get_sheet_collection_no_check()
+                    .iter()
+                    .position(|s| s.get_name() == old_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", old_name))?;
+                book.set_sheet_name(sheet_index, new_name.to_string())
+                    .map_err(|e| anyhow!("failed to rename sheet '{}': {}", old_name, e))?;
+
+                rewrite_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
+
+                affected_sheets.insert(old_name.to_string());
+                affected_sheets.insert(new_name.to_string());
+                counts
+                    .entry("sheets_renamed".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::CreateSheet { name, position } => {
+                let name_trimmed = name.trim();
+                if name_trimmed.is_empty() {
+                    bail!("create_sheet requires non-empty name");
+                }
+                let requested_position = *position;
+                book.new_sheet(name_trimmed.to_string())
+                    .map_err(|e| anyhow!("failed to create sheet '{}': {}", name_trimmed, e))?;
+
+                if let Some(pos) = requested_position {
+                    let desired = pos as usize;
+                    let len = book.get_sheet_collection_no_check().len();
+                    if desired >= len {
+                        warnings.push(format!(
+                            "create_sheet position {} is out of range (sheet_count {}). Appended at end.",
+                            desired, len
+                        ));
+                    } else if desired != len - 1 {
+                        let sheets = book.get_sheet_collection_mut();
+                        let created = sheets.remove(len - 1);
+                        sheets.insert(desired, created);
+                    }
+                }
+
+                affected_sheets.insert(name_trimmed.to_string());
+                counts
+                    .entry("sheets_created".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::DeleteSheet { name } => {
+                let name_trimmed = name.trim();
+                if name_trimmed.is_empty() {
+                    bail!("delete_sheet requires non-empty name");
+                }
+                if book.get_sheet_collection_no_check().len() <= 1 {
+                    bail!("cannot delete the last remaining sheet");
+                }
+                book.remove_sheet_by_name(name_trimmed)
+                    .map_err(|e| anyhow!("failed to delete sheet '{}': {}", name_trimmed, e))?;
+                affected_sheets.insert(name_trimmed.to_string());
+                counts
+                    .entry("sheets_deleted".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::CopyRange { .. } | StructureOp::MoveRange { .. } => {
+                bail!("copy_range/move_range are not implemented in Phase 4 MVP");
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["structure_batch".to_string()],
+        affected_sheets: affected_sheets.into_iter().collect(),
+        affected_bounds,
+        counts,
+        warnings,
+    };
+
+    Ok(StructureApplyResult {
+        ops_applied: ops.len(),
+        summary,
+    })
+}
+
+fn normalize_col_letters(col: &str) -> Result<String> {
+    let letters = col.trim().to_ascii_uppercase();
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        bail!("invalid column reference: {}", col);
+    }
+    Ok(letters)
+}
+
+fn rewrite_formulas_for_sheet_rename(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let new_prefix = format_sheet_prefix_for_formula(new_name);
+
+    for sheet in book.get_sheet_collection_mut().iter_mut() {
+        for cell in sheet.get_cell_collection_mut() {
+            if !cell.is_formula() {
+                continue;
+            }
+            let formula_text = cell.get_formula();
+            if formula_text.is_empty() {
+                continue;
+            }
+            let formula_with_equals = if formula_text.starts_with('=') {
+                formula_text.to_string()
+            } else {
+                format!("={}", formula_text)
+            };
+
+            let tokenizer = Tokenizer::new(&formula_with_equals)
+                .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+
+            let tokens = tokenizer.items;
+            let mut out = String::with_capacity(formula_with_equals.len());
+            let mut cursor = 0usize;
+
+            for token in &tokens {
+                if token.start > cursor {
+                    out.push_str(&formula_with_equals[cursor..token.start]);
+                }
+
+                let mut value = token.value.clone();
+                if token.subtype == formualizer_parse::TokenSubType::Range
+                    && value.contains('!')
+                    && let Some((sheet_part, tail)) = value.split_once('!')
+                    && sheet_part_matches(sheet_part, old_name)
+                {
+                    value = format!("{}{}", new_prefix, tail);
+                }
+
+                out.push_str(&value);
+                cursor = token.end;
+            }
+
+            if cursor < formula_with_equals.len() {
+                out.push_str(&formula_with_equals[cursor..]);
+            }
+
+            let new_formula = out.strip_prefix('=').unwrap_or(&out);
+            cell.set_formula(new_formula.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn sheet_part_matches(sheet_part: &str, old_name: &str) -> bool {
+    let trimmed = sheet_part.trim();
+    if let Some(stripped) = trimmed.strip_prefix('\'')
+        && let Some(inner) = stripped.strip_suffix('\'')
+    {
+        return inner.replace("''", "'") == old_name;
+    }
+    trimmed == old_name
+}
+
+fn format_sheet_prefix_for_formula(sheet_name: &str) -> String {
+    if sheet_name_needs_quoting_for_formula(sheet_name) {
+        let escaped = sheet_name.replace('\'', "''");
+        format!("'{escaped}'!")
+    } else {
+        format!("{sheet_name}!")
+    }
+}
+
+fn sheet_name_needs_quoting_for_formula(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = name.as_bytes();
+    if bytes[0].is_ascii_digit() {
+        return true;
+    }
+    for &byte in bytes {
+        match byte {
+            b' ' | b'!' | b'"' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
+            | b',' | b'-' | b'.' | b'/' | b':' | b';' | b'<' | b'=' | b'>' | b'?' | b'@' | b'['
+            | b'\\' | b']' | b'^' | b'`' | b'{' | b'|' | b'}' | b'~' => return true,
+            _ => {}
+        }
+    }
+    let upper = name.to_uppercase();
+    matches!(
+        upper.as_str(),
+        "TRUE" | "FALSE" | "NULL" | "REF" | "DIV" | "NAME" | "NUM" | "VALUE" | "N/A"
+    )
 }
 
 struct StyleApplyResult {
@@ -1217,6 +1671,20 @@ pub async fn apply_staged_change(
                             relative_mode,
                         )
                     }
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "structure_batch" => {
+                let payload: StructureBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid structure_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_structure_ops_to_file(&work_path, &ops)
                 })
                 .await??;
 
