@@ -1,19 +1,22 @@
 #![cfg(feature = "recalc")]
 
 use anyhow::Result;
-use spreadsheet_mcp::model::{
-    FillPatch, FontPatch, PatternFillPatch, StylePatch,
-};
+use spreadsheet_mcp::model::{FillPatch, FontPatch, PatternFillPatch, StylePatch};
 use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, StyleBatchParams, StyleOp, StyleTarget,
     apply_staged_change, create_fork, style_batch,
 };
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
-use umya_spreadsheet::{ConditionalFormatValues, ConditionalFormatting, ConditionalFormattingRule, Formula, PatternValues};
+use umya_spreadsheet::{
+    ConditionalFormatValues, ConditionalFormatting, ConditionalFormattingRule, Formula,
+    PatternValues,
+};
 
 mod support;
 
-fn recalc_state(workspace: &support::TestWorkspace) -> std::sync::Arc<spreadsheet_mcp::state::AppState> {
+fn recalc_state(
+    workspace: &support::TestWorkspace,
+) -> std::sync::Arc<spreadsheet_mcp::state::AppState> {
     let config = workspace.config_with(|cfg| {
         cfg.recalc_enabled = true;
     });
@@ -369,7 +372,13 @@ async fn style_batch_nested_null_clear_only_subfield() -> Result<()> {
         )
     })?;
     assert_eq!(desc_a1.font.as_ref().and_then(|f| f.bold), Some(true));
-    assert!(desc_a1.font.as_ref().and_then(|f| f.color.clone()).is_none());
+    assert!(
+        desc_a1
+            .font
+            .as_ref()
+            .and_then(|f| f.color.clone())
+            .is_none()
+    );
 
     Ok(())
 }
@@ -383,9 +392,15 @@ async fn style_batch_region_target_resolves() -> Result<()> {
         sheet.get_cell_mut("B1").set_value("H2");
         sheet.get_cell_mut("C1").set_value("H3");
         for r in 2..=5 {
-            sheet.get_cell_mut(format!("A{r}").as_str()).set_value_number(r);
-            sheet.get_cell_mut(format!("B{r}").as_str()).set_value_number(r);
-            sheet.get_cell_mut(format!("C{r}").as_str()).set_value_number(r);
+            sheet
+                .get_cell_mut(format!("A{r}").as_str())
+                .set_value_number(r);
+            sheet
+                .get_cell_mut(format!("B{r}").as_str())
+                .set_value_number(r);
+            sheet
+                .get_cell_mut(format!("C{r}").as_str())
+                .set_value_number(r);
         }
     });
 
@@ -518,9 +533,7 @@ async fn style_batch_idempotent_noop_counts_and_no_diff() -> Result<()> {
     use spreadsheet_mcp::diff::merge::{CellDiff, ModificationType};
     let non_style_change = changes.changes.iter().any(|c| match c {
         Change::Cell(cell) => match &cell.diff {
-            CellDiff::Modified { subtype, .. } => {
-                !matches!(subtype, ModificationType::StyleEdit)
-            }
+            CellDiff::Modified { subtype, .. } => !matches!(subtype, ModificationType::StyleEdit),
             CellDiff::Added { .. } | CellDiff::Deleted { .. } => true,
         },
         Change::Table(_) | Change::Name(_) => true,

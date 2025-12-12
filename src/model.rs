@@ -635,6 +635,56 @@ pub struct StyleSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkbookStyleSummaryResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub theme: Option<ThemeSummary>,
+    pub inferred_default_style_id: Option<String>,
+    pub inferred_default_font: Option<FontDescriptor>,
+    pub styles: Vec<WorkbookStyleUsage>,
+    pub total_styles: u32,
+    pub styles_truncated: bool,
+    pub conditional_formats: Vec<ConditionalFormatSummary>,
+    pub conditional_formats_truncated: bool,
+    pub scan_truncated: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkbookStyleUsage {
+    pub style_id: String,
+    pub occurrences: u32,
+    pub tags: Vec<String>,
+    pub example_cells: Vec<String>,
+    pub descriptor: Option<StyleDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ThemeSummary {
+    pub name: Option<String>,
+    pub colors: BTreeMap<String, String>,
+    pub font_scheme: ThemeFontSchemeSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ThemeFontSchemeSummary {
+    pub major_latin: Option<String>,
+    pub major_east_asian: Option<String>,
+    pub major_complex_script: Option<String>,
+    pub minor_latin: Option<String>,
+    pub minor_east_asian: Option<String>,
+    pub minor_complex_script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConditionalFormatSummary {
+    pub sheet_name: String,
+    pub range: String,
+    pub rule_types: Vec<String>,
+    pub rule_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestStubResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,

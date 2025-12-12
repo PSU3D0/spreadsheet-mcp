@@ -1,8 +1,8 @@
 use crate::model::{
-    AlignmentDescriptor, BorderSideDescriptor, BordersDescriptor, FillDescriptor, FontDescriptor,
-    AlignmentPatch, BorderSidePatch, BordersPatch, FillPatch, FontPatch, GradientFillDescriptor,
-    GradientFillPatch, GradientStopDescriptor, PatternFillDescriptor,
-    PatternFillPatch, StyleDescriptor, StylePatch,
+    AlignmentDescriptor, AlignmentPatch, BorderSideDescriptor, BorderSidePatch, BordersDescriptor,
+    BordersPatch, FillDescriptor, FillPatch, FontDescriptor, FontPatch, GradientFillDescriptor,
+    GradientFillPatch, GradientStopDescriptor, PatternFillDescriptor, PatternFillPatch,
+    StyleDescriptor, StylePatch,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -79,10 +79,7 @@ pub fn stable_style_id(descriptor: &StyleDescriptor) -> String {
     hex.chars().take(12).collect()
 }
 
-pub fn compress_positions_to_ranges(
-    positions: &[(u32, u32)],
-    limit: usize,
-) -> (Vec<String>, bool) {
+pub fn compress_positions_to_ranges(positions: &[(u32, u32)], limit: usize) -> (Vec<String>, bool) {
     if positions.is_empty() {
         return (Vec::new(), false);
     }
@@ -259,7 +256,9 @@ fn descriptor_from_border_side(border: &Border) -> Option<BorderSideDescriptor> 
     }
 }
 
-fn descriptor_from_alignment(alignment: &umya_spreadsheet::Alignment) -> Option<AlignmentDescriptor> {
+fn descriptor_from_alignment(
+    alignment: &umya_spreadsheet::Alignment,
+) -> Option<AlignmentDescriptor> {
     let horizontal = if alignment.get_horizontal() != &HorizontalAlignmentValues::General {
         Some(alignment.get_horizontal().get_value_string().to_string())
     } else {
@@ -662,10 +661,10 @@ fn apply_descriptor_to_style(style: &mut Style, desc: &StyleDescriptor) {
         match fill_desc {
             FillDescriptor::Pattern(p) => {
                 let pat = style.get_fill_mut().get_pattern_fill_mut();
-                if let Some(kind) = &p.pattern_type {
-                    if let Ok(pv) = PatternValues::from_str(kind) {
-                        pat.set_pattern_type(pv);
-                    }
+                if let Some(kind) = &p.pattern_type
+                    && let Ok(pv) = PatternValues::from_str(kind)
+                {
+                    pat.set_pattern_type(pv);
                 }
                 if let Some(fg) = &p.foreground_color {
                     pat.get_foreground_color_mut().set_argb(fg.clone());
@@ -709,15 +708,15 @@ fn apply_descriptor_to_style(style: &mut Style, desc: &StyleDescriptor) {
 
     if let Some(align_desc) = &desc.alignment {
         let align = style.get_alignment_mut();
-        if let Some(h) = &align_desc.horizontal {
-            if let Ok(val) = HorizontalAlignmentValues::from_str(h) {
-                align.set_horizontal(val);
-            }
+        if let Some(h) = &align_desc.horizontal
+            && let Ok(val) = HorizontalAlignmentValues::from_str(h)
+        {
+            align.set_horizontal(val);
         }
-        if let Some(v) = &align_desc.vertical {
-            if let Ok(val) = VerticalAlignmentValues::from_str(v) {
-                align.set_vertical(val);
-            }
+        if let Some(v) = &align_desc.vertical
+            && let Ok(val) = VerticalAlignmentValues::from_str(v)
+        {
+            align.set_vertical(val);
         }
         if let Some(wrap) = align_desc.wrap_text {
             align.set_wrap_text(wrap);

@@ -300,7 +300,7 @@ fn outputs_band_detected() {
         .expect("metrics")
         .detected_regions
         .clone();
-    assert!(regions.len() >= 1, "expected at least 1 region");
+    assert!(!regions.is_empty(), "expected at least 1 region");
     let outputs_region = regions
         .iter()
         .find(|r| r.bounds.contains("18"))
@@ -330,7 +330,7 @@ fn noisy_sparse_sheet_stays_single_region_low_confidence() {
         .expect("metrics")
         .detected_regions
         .clone();
-    assert!(regions.len() >= 1);
+    assert!(!regions.is_empty());
     let avg_conf: f32 = regions.iter().map(|r| r.confidence).sum::<f32>() / regions.len() as f32;
     assert!(avg_conf <= 1.0);
 }

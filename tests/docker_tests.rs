@@ -4,6 +4,5 @@
 //! `tests/docker/mod.rs`. Existing top-level docker tests remain for now.
 #![cfg(feature = "docker-tests")]
 
-mod support;
 mod docker;
-
+mod support;

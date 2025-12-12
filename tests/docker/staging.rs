@@ -28,7 +28,10 @@ async fn test_checkpoint_restore_roundtrip() -> Result<()> {
 
     let fork = extract_json(
         &client
-            .call_tool(call_tool("create_fork", json!({ "workbook_id": workbook_id })))
+            .call_tool(call_tool(
+                "create_fork",
+                json!({ "workbook_id": workbook_id }),
+            ))
             .await?,
     )?;
     let fork_id = fork["fork_id"].as_str().unwrap();
@@ -57,9 +60,7 @@ async fn test_checkpoint_restore_roundtrip() -> Result<()> {
             ))
             .await?,
     )?;
-    let checkpoint_id = checkpoint["checkpoint"]["checkpoint_id"]
-        .as_str()
-        .unwrap();
+    let checkpoint_id = checkpoint["checkpoint"]["checkpoint_id"].as_str().unwrap();
 
     // Second edit after checkpoint.
     client

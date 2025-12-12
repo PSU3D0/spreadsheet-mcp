@@ -163,10 +163,11 @@ impl ScreenshotExecutor {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("png")
                     && let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
-                        && file_stem.starts_with(stem) {
-                            found = Some(path);
-                            break;
-                        }
+                    && file_stem.starts_with(stem)
+                {
+                    found = Some(path);
+                    break;
+                }
             }
             found
         };
