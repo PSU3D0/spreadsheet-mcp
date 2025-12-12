@@ -237,7 +237,7 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
             .iter()
             .any(|m| m.address.starts_with("D") || m.address.starts_with("E"))
     );
-    assert!(matches.matches[0].context.len() >= 1);
+    assert!(!matches.matches[0].context.is_empty());
 
     let volatiles = scan_volatiles(
         state,
@@ -269,6 +269,9 @@ async fn naming_and_styles_suite(state: Arc<AppState>, workbook_id: WorkbookId) 
         SheetStylesParams {
             workbook_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;

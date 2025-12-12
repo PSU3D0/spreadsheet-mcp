@@ -1,11 +1,17 @@
-use crate::fork::EditOp;
-use crate::model::WorkbookId;
+use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
+use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
+use crate::model::{StylePatch, WorkbookId};
 use crate::state::AppState;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
+use formualizer_parse::tokenizer::Tokenizer;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateForkParams {
@@ -127,6 +133,1659 @@ fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEd
 
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
     Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StyleBatchParams {
+    pub fork_id: String,
+    pub ops: Vec<StyleOp>,
+    #[serde(default)]
+    pub mode: Option<String>, // "preview" | "apply" (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StyleOp {
+    pub sheet_name: String,
+    pub target: StyleTarget,
+    pub patch: StylePatch,
+    #[serde(default)]
+    pub op_mode: Option<String>, // "merge" | "set" | "clear"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StyleTarget {
+    Range { range: String },
+    Region { region_id: u32 },
+    Cells { cells: Vec<String> },
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StyleBatchResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StyleBatchStagedPayload {
+    ops: Vec<StyleOp>,
+}
+
+pub async fn style_batch(
+    state: Arc<AppState>,
+    params: StyleBatchParams,
+) -> Result<StyleBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    // Resolve any region targets against current fork regions.
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let mut resolved_ops = Vec::with_capacity(params.ops.len());
+    for op in &params.ops {
+        let mut resolved = op.clone();
+        if let StyleTarget::Region { region_id } = &op.target {
+            let metrics = workbook.get_sheet_metrics(&op.sheet_name)?;
+            let region = metrics
+                .detected_regions
+                .iter()
+                .find(|r| r.id == *region_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "region_id {} not found on sheet '{}'",
+                        region_id,
+                        op.sheet_name
+                    )
+                })?;
+            resolved.target = StyleTarget::Range {
+                range: region.bounds.clone(),
+            };
+        }
+        resolved_ops.push(resolved);
+    }
+
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_path_for_apply = snapshot_path.clone();
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            move || apply_style_ops_to_file(&snapshot_path_for_apply, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["style_batch".to_string()];
+
+        let staged_op = StagedOp {
+            kind: "style_batch".to_string(),
+            payload: serde_json::to_value(StyleBatchStagedPayload {
+                ops: resolved_ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(StyleBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: resolved_ops.len(),
+            summary,
+        })
+    } else {
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            let work_path = work_path.clone();
+            move || apply_style_ops_to_file(&work_path, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["style_batch".to_string()];
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(StyleBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApplyFormulaPatternParams {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub target_range: String,
+    pub anchor_cell: String,
+    pub base_formula: String,
+    #[serde(default)]
+    pub fill_direction: Option<String>, // down|right|both (default both)
+    #[serde(default)]
+    pub relative_mode: Option<String>, // excel|abs_cols|abs_rows
+    #[serde(default)]
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApplyFormulaPatternResponse {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub target_range: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub cells_filled: u64,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ApplyFormulaPatternStagedPayload {
+    sheet_name: String,
+    target_range: String,
+    anchor_cell: String,
+    base_formula: String,
+    fill_direction: Option<String>,
+    relative_mode: Option<String>,
+}
+
+pub async fn apply_formula_pattern(
+    state: Arc<AppState>,
+    params: ApplyFormulaPatternParams,
+) -> Result<ApplyFormulaPatternResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let bounds = parse_range_bounds(&params.target_range)?;
+    let (anchor_col, anchor_row) = parse_cell_ref(&params.anchor_cell)?;
+    validate_formula_pattern_bounds(
+        &bounds,
+        anchor_col,
+        anchor_row,
+        params.fill_direction.as_deref(),
+    )?;
+
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
+
+    let relative_mode = RelativeMode::parse(params.relative_mode.as_deref())?;
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let sheet_name = params.sheet_name.clone();
+        let target_range = params.target_range.clone();
+        let anchor_cell = params.anchor_cell.clone();
+        let base_formula = params.base_formula.clone();
+        let fill_direction = params.fill_direction.clone();
+        let relative_mode_str = params.relative_mode.clone();
+        let snapshot_for_apply = snapshot_path.clone();
+        let sheet_name_for_apply = sheet_name.clone();
+        let target_range_for_apply = target_range.clone();
+        let base_formula_for_apply = base_formula.clone();
+
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_formula_pattern_to_file(
+                &snapshot_for_apply,
+                &sheet_name_for_apply,
+                &target_range_for_apply,
+                anchor_col,
+                anchor_row,
+                &base_formula_for_apply,
+                relative_mode,
+            )
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+
+        let staged_op = StagedOp {
+            kind: "apply_formula_pattern".to_string(),
+            payload: serde_json::to_value(ApplyFormulaPatternStagedPayload {
+                sheet_name: sheet_name.clone(),
+                target_range: target_range.clone(),
+                anchor_cell: anchor_cell.clone(),
+                base_formula: base_formula.clone(),
+                fill_direction,
+                relative_mode: relative_mode_str,
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(ApplyFormulaPatternResponse {
+            fork_id: params.fork_id,
+            sheet_name,
+            target_range,
+            mode,
+            change_id: Some(change_id),
+            cells_filled: apply_result.cells_filled,
+            summary,
+        })
+    } else {
+        let sheet_name = params.sheet_name.clone();
+        let target_range = params.target_range.clone();
+        let base_formula = params.base_formula.clone();
+        let sheet_name_for_apply = sheet_name.clone();
+        let target_range_for_apply = target_range.clone();
+        let base_formula_for_apply = base_formula.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_formula_pattern_to_file(
+                &work_path,
+                &sheet_name_for_apply,
+                &target_range_for_apply,
+                anchor_col,
+                anchor_row,
+                &base_formula_for_apply,
+                relative_mode,
+            )
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(ApplyFormulaPatternResponse {
+            fork_id: params.fork_id,
+            sheet_name,
+            target_range,
+            mode,
+            change_id: None,
+            cells_filled: apply_result.cells_filled,
+            summary,
+        })
+    }
+}
+
+struct FormulaPatternApplyResult {
+    cells_filled: u64,
+    summary: ChangeSummary,
+}
+
+fn apply_formula_pattern_to_file(
+    path: &Path,
+    sheet_name: &str,
+    target_range: &str,
+    anchor_col: u32,
+    anchor_row: u32,
+    base_formula: &str,
+    relative_mode: RelativeMode,
+) -> Result<FormulaPatternApplyResult> {
+    let ast = parse_base_formula(base_formula)?;
+    let bounds = parse_range_bounds(target_range)?;
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let mut cells_filled: u64 = 0;
+    for row in bounds.min_row..=bounds.max_row {
+        for col in bounds.min_col..=bounds.max_col {
+            let delta_col = col as i32 - anchor_col as i32;
+            let delta_row = row as i32 - anchor_row as i32;
+            let shifted = shift_formula_ast(&ast, delta_col, delta_row, relative_mode)?;
+            let shifted_for_umya = shifted.strip_prefix('=').unwrap_or(&shifted);
+            let addr = crate::utils::cell_address(col, row);
+            sheet
+                .get_cell_mut(addr.as_str())
+                .set_formula(shifted_for_umya.to_string());
+            cells_filled += 1;
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_filled".to_string(), cells_filled);
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["apply_formula_pattern".to_string()],
+        affected_sheets: vec![sheet_name.to_string()],
+        affected_bounds: vec![target_range.to_string()],
+        counts,
+        warnings: Vec::new(),
+    };
+
+    Ok(FormulaPatternApplyResult {
+        cells_filled,
+        summary,
+    })
+}
+
+fn validate_formula_pattern_bounds(
+    bounds: &ScreenshotBounds,
+    anchor_col: u32,
+    anchor_row: u32,
+    fill_direction: Option<&str>,
+) -> Result<()> {
+    if anchor_col < bounds.min_col
+        || anchor_col > bounds.max_col
+        || anchor_row < bounds.min_row
+        || anchor_row > bounds.max_row
+    {
+        let bounds_range = format!(
+            "{}:{}",
+            crate::utils::cell_address(bounds.min_col, bounds.min_row),
+            crate::utils::cell_address(bounds.max_col, bounds.max_row)
+        );
+        bail!(
+            "anchor_cell must be inside target_range (anchor {} not within {})",
+            crate::utils::cell_address(anchor_col, anchor_row),
+            bounds_range
+        );
+    }
+
+    if bounds.min_col != anchor_col || bounds.min_row != anchor_row {
+        bail!("target_range must start at anchor_cell (anchor should be top-left of fill range)");
+    }
+
+    let dir = fill_direction.unwrap_or("both").to_ascii_lowercase();
+    match dir.as_str() {
+        "down" => {
+            if bounds.min_col != bounds.max_col {
+                bail!("fill_direction=down requires a single-column target_range");
+            }
+        }
+        "right" => {
+            if bounds.min_row != bounds.max_row {
+                bail!("fill_direction=right requires a single-row target_range");
+            }
+        }
+        "both" => {}
+        other => bail!("invalid fill_direction: {}", other),
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StructureBatchParams {
+    pub fork_id: String,
+    pub ops: Vec<StructureOp>,
+    #[serde(default)]
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StructureOp {
+    InsertRows {
+        sheet_name: String,
+        at_row: u32,
+        count: u32,
+    },
+    DeleteRows {
+        sheet_name: String,
+        start_row: u32,
+        count: u32,
+    },
+    InsertCols {
+        sheet_name: String,
+        at_col: String,
+        count: u32,
+    },
+    DeleteCols {
+        sheet_name: String,
+        start_col: String,
+        count: u32,
+    },
+    RenameSheet {
+        old_name: String,
+        new_name: String,
+    },
+    CreateSheet {
+        name: String,
+        #[serde(default)]
+        position: Option<u32>,
+    },
+    DeleteSheet {
+        name: String,
+    },
+    CopyRange {
+        sheet_name: String,
+        src_range: String,
+        dest_anchor: String,
+        include_styles: bool,
+        include_formulas: bool,
+    },
+    MoveRange {
+        sheet_name: String,
+        src_range: String,
+        dest_anchor: String,
+        include_styles: bool,
+        include_formulas: bool,
+    },
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StructureBatchResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StructureBatchStagedPayload {
+    ops: Vec<StructureOp>,
+}
+
+pub async fn structure_batch(
+    state: Arc<AppState>,
+    params: StructureBatchParams,
+) -> Result<StructureBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let ops_for_apply = params.ops.clone();
+
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_structure_ops_to_file(&snapshot_for_apply, &ops_for_apply)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["structure_batch".to_string()];
+        // Best-effort preview diff size: compare current fork to preview snapshot.
+        // This is intentionally summarized as a count to avoid large payloads.
+        if let Ok(change_count) = tokio::task::spawn_blocking({
+            let base_path = work_path.clone();
+            let preview_path = snapshot_path.clone();
+            move || {
+                crate::diff::calculate_changeset(&base_path, &preview_path, None)
+                    .map(|changes| changes.len() as u64)
+            }
+        })
+        .await?
+        {
+            summary
+                .counts
+                .insert("preview_change_items".to_string(), change_count);
+        } else {
+            summary.warnings.push(
+                "Preview diff computation failed; run get_changeset after applying to inspect changes."
+                    .to_string(),
+            );
+        }
+
+        let staged_op = StagedOp {
+            kind: "structure_batch".to_string(),
+            payload: serde_json::to_value(StructureBatchStagedPayload {
+                ops: params.ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(StructureBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    } else {
+        let ops_for_apply = params.ops.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_structure_ops_to_file(&work_path, &ops_for_apply)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["structure_batch".to_string()];
+
+        let fork_workbook_id = WorkbookId(params.fork_id.clone());
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(StructureBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
+}
+
+struct StructureApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<StructureApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
+    let affected_bounds: Vec<String> = Vec::new();
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut warnings: Vec<String> = vec![
+        "Structural edits may not fully rewrite formulas/named ranges like Excel. After apply, run recalculate and review get_changeset.".to_string(),
+    ];
+
+    for op in ops {
+        match op {
+            StructureOp::InsertRows {
+                sheet_name,
+                at_row,
+                count,
+            } => {
+                if *at_row == 0 || *count == 0 {
+                    bail!("insert_rows requires at_row>=1 and count>=1");
+                }
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.insert_new_row(at_row, count);
+                }
+                rewrite_formulas_for_sheet_row_insert(&mut book, sheet_name, *at_row, *count)?;
+                rewrite_defined_name_formulas_for_sheet_row_insert(
+                    &mut book, sheet_name, *at_row, *count,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::DeleteRows {
+                sheet_name,
+                start_row,
+                count,
+            } => {
+                if *start_row == 0 || *count == 0 {
+                    bail!("delete_rows requires start_row>=1 and count>=1");
+                }
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.remove_row(start_row, count);
+                }
+                rewrite_formulas_for_sheet_row_delete(&mut book, sheet_name, *start_row, *count)?;
+                rewrite_defined_name_formulas_for_sheet_row_delete(
+                    &mut book, sheet_name, *start_row, *count,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_deleted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::InsertCols {
+                sheet_name,
+                at_col,
+                count,
+            } => {
+                if at_col.trim().is_empty() || *count == 0 {
+                    bail!("insert_cols requires at_col and count>=1");
+                }
+                let col_letters = normalize_col_letters(at_col)?;
+                let root_col =
+                    umya_spreadsheet::helper::coordinate::column_index_from_string(&col_letters);
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.insert_new_column(&col_letters, count);
+                }
+                rewrite_formulas_for_sheet_col_insert(&mut book, sheet_name, root_col, *count)?;
+                rewrite_defined_name_formulas_for_sheet_col_insert(
+                    &mut book, sheet_name, root_col, *count,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cols_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::DeleteCols {
+                sheet_name,
+                start_col,
+                count,
+            } => {
+                if start_col.trim().is_empty() || *count == 0 {
+                    bail!("delete_cols requires start_col and count>=1");
+                }
+                let col_letters = normalize_col_letters(start_col)?;
+                let root_col =
+                    umya_spreadsheet::helper::coordinate::column_index_from_string(&col_letters);
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.remove_column(&col_letters, count);
+                }
+                rewrite_formulas_for_sheet_col_delete(&mut book, sheet_name, root_col, *count)?;
+                rewrite_defined_name_formulas_for_sheet_col_delete(
+                    &mut book, sheet_name, root_col, *count,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cols_deleted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::RenameSheet { old_name, new_name } => {
+                let old_name = old_name.trim();
+                let new_name = new_name.trim();
+                if old_name.is_empty() || new_name.is_empty() {
+                    bail!("rename_sheet requires non-empty old_name and new_name");
+                }
+
+                let sheet_index = book
+                    .get_sheet_collection_no_check()
+                    .iter()
+                    .position(|s| s.get_name() == old_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", old_name))?;
+                book.set_sheet_name(sheet_index, new_name.to_string())
+                    .map_err(|e| anyhow!("failed to rename sheet '{}': {}", old_name, e))?;
+
+                rewrite_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
+                rewrite_defined_name_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
+
+                affected_sheets.insert(old_name.to_string());
+                affected_sheets.insert(new_name.to_string());
+                counts
+                    .entry("sheets_renamed".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::CreateSheet { name, position } => {
+                let name_trimmed = name.trim();
+                if name_trimmed.is_empty() {
+                    bail!("create_sheet requires non-empty name");
+                }
+                let requested_position = *position;
+                book.new_sheet(name_trimmed.to_string())
+                    .map_err(|e| anyhow!("failed to create sheet '{}': {}", name_trimmed, e))?;
+
+                if let Some(pos) = requested_position {
+                    let desired = pos as usize;
+                    let len = book.get_sheet_collection_no_check().len();
+                    if desired >= len {
+                        warnings.push(format!(
+                            "create_sheet position {} is out of range (sheet_count {}). Appended at end.",
+                            desired, len
+                        ));
+                    } else if desired != len - 1 {
+                        let sheets = book.get_sheet_collection_mut();
+                        let created = sheets.remove(len - 1);
+                        sheets.insert(desired, created);
+                    }
+                }
+
+                affected_sheets.insert(name_trimmed.to_string());
+                counts
+                    .entry("sheets_created".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::DeleteSheet { name } => {
+                let name_trimmed = name.trim();
+                if name_trimmed.is_empty() {
+                    bail!("delete_sheet requires non-empty name");
+                }
+                if book.get_sheet_collection_no_check().len() <= 1 {
+                    bail!("cannot delete the last remaining sheet");
+                }
+                book.remove_sheet_by_name(name_trimmed)
+                    .map_err(|e| anyhow!("failed to delete sheet '{}': {}", name_trimmed, e))?;
+                affected_sheets.insert(name_trimmed.to_string());
+                counts
+                    .entry("sheets_deleted".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+            StructureOp::CopyRange {
+                sheet_name,
+                src_range,
+                dest_anchor,
+                include_styles,
+                include_formulas,
+            } => {
+                let result = copy_or_move_range_on_sheet(
+                    &mut book,
+                    sheet_name,
+                    src_range,
+                    dest_anchor,
+                    *include_styles,
+                    *include_formulas,
+                    false,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cells_copied".to_string())
+                    .and_modify(|v| *v += result.cells_written)
+                    .or_insert(result.cells_written);
+                counts
+                    .entry("ranges_copied".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+                warnings.extend(result.warnings);
+            }
+            StructureOp::MoveRange {
+                sheet_name,
+                src_range,
+                dest_anchor,
+                include_styles,
+                include_formulas,
+            } => {
+                let result = copy_or_move_range_on_sheet(
+                    &mut book,
+                    sheet_name,
+                    src_range,
+                    dest_anchor,
+                    *include_styles,
+                    *include_formulas,
+                    true,
+                )?;
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("cells_moved".to_string())
+                    .and_modify(|v| *v += result.cells_written)
+                    .or_insert(result.cells_written);
+                counts
+                    .entry("ranges_moved".to_string())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+                warnings.extend(result.warnings);
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["structure_batch".to_string()],
+        affected_sheets: affected_sheets.into_iter().collect(),
+        affected_bounds,
+        counts,
+        warnings,
+    };
+
+    Ok(StructureApplyResult {
+        ops_applied: ops.len(),
+        summary,
+    })
+}
+
+fn normalize_col_letters(col: &str) -> Result<String> {
+    let letters = col.trim().to_ascii_uppercase();
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        bail!("invalid column reference: {}", col);
+    }
+    Ok(letters)
+}
+
+struct CopyMoveApplyResult {
+    cells_written: u64,
+    warnings: Vec<String>,
+}
+
+fn ranges_intersect(
+    a_min_col: u32,
+    a_min_row: u32,
+    a_max_col: u32,
+    a_max_row: u32,
+    b_min_col: u32,
+    b_min_row: u32,
+    b_max_col: u32,
+    b_max_row: u32,
+) -> bool {
+    !(a_max_col < b_min_col
+        || b_max_col < a_min_col
+        || a_max_row < b_min_row
+        || b_max_row < a_min_row)
+}
+
+fn copy_or_move_range_on_sheet(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    src_range: &str,
+    dest_anchor: &str,
+    include_styles: bool,
+    include_formulas: bool,
+    clear_source: bool,
+) -> Result<CopyMoveApplyResult> {
+    let src_bounds = parse_range_bounds(src_range)?;
+    let (dest_start_col, dest_start_row) = parse_cell_ref(dest_anchor)?;
+
+    let width = src_bounds.cols;
+    let height = src_bounds.rows;
+
+    let dest_end_col = dest_start_col
+        .checked_add(width.saturating_sub(1))
+        .ok_or_else(|| anyhow!("destination range overflows column bounds"))?;
+    let dest_end_row = dest_start_row
+        .checked_add(height.saturating_sub(1))
+        .ok_or_else(|| anyhow!("destination range overflows row bounds"))?;
+
+    if ranges_intersect(
+        src_bounds.min_col,
+        src_bounds.min_row,
+        src_bounds.max_col,
+        src_bounds.max_row,
+        dest_start_col,
+        dest_start_row,
+        dest_end_col,
+        dest_end_row,
+    ) {
+        let dest_range = if width == 1 && height == 1 {
+            crate::utils::cell_address(dest_start_col, dest_start_row)
+        } else {
+            format!(
+                "{}:{}",
+                crate::utils::cell_address(dest_start_col, dest_start_row),
+                crate::utils::cell_address(dest_end_col, dest_end_row)
+            )
+        };
+        bail!(
+            "copy/move destination overlaps source (src {}, dest {})",
+            src_range,
+            dest_range
+        );
+    }
+
+    let delta_col = dest_start_col as i32 - src_bounds.min_col as i32;
+    let delta_row = dest_start_row as i32 - src_bounds.min_row as i32;
+
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let mut warnings: Vec<String> = Vec::new();
+    let mut formula_shift_failures: u64 = 0;
+    let mut formula_value_copies: u64 = 0;
+
+    for row in 0..height {
+        for col in 0..width {
+            let src_col = src_bounds.min_col + col;
+            let src_row = src_bounds.min_row + row;
+            let dest_col = dest_start_col + col;
+            let dest_row = dest_start_row + row;
+
+            let Some(src_cell) = sheet.get_cell((src_col, src_row)) else {
+                sheet.remove_cell((dest_col, dest_row));
+                continue;
+            };
+
+            let mut set_value = true;
+            let mut dest_formula: Option<String> = None;
+
+            if include_formulas && src_cell.is_formula() {
+                let src_formula = src_cell.get_formula().to_string();
+                match parse_base_formula(&src_formula).and_then(|ast| {
+                    shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                }) {
+                    Ok(shifted) => {
+                        let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                        dest_formula = Some(shifted);
+                        set_value = false;
+                    }
+                    Err(_) => {
+                        dest_formula = Some(src_formula);
+                        set_value = false;
+                        formula_shift_failures += 1;
+                    }
+                }
+            } else if !include_formulas && src_cell.is_formula() {
+                formula_value_copies += 1;
+            }
+
+            let src_value = src_cell.get_value().to_string();
+            let src_style = src_cell.get_style().clone();
+
+            let dest_cell = sheet.get_cell_mut((dest_col, dest_row));
+            if include_styles {
+                dest_cell.set_style(src_style);
+            }
+
+            dest_cell.get_cell_value_mut().remove_formula();
+            if let Some(formula) = dest_formula {
+                dest_cell.set_formula(formula);
+                dest_cell.set_formula_result_default("");
+            }
+            if set_value {
+                dest_cell.set_value(src_value);
+            }
+        }
+    }
+
+    if clear_source {
+        for row in 0..height {
+            for col in 0..width {
+                let src_col = src_bounds.min_col + col;
+                let src_row = src_bounds.min_row + row;
+                sheet.remove_cell((src_col, src_row));
+            }
+        }
+    }
+
+    if include_formulas && formula_shift_failures > 0 {
+        warnings.push(format!(
+            "Failed to shift {} formula(s); copied original formula text.",
+            formula_shift_failures
+        ));
+    }
+    if !include_formulas && formula_value_copies > 0 {
+        warnings.push(format!(
+            "Copied cached values for {} formula cell(s) (include_formulas=false); run recalculate for fresh results.",
+            formula_value_copies
+        ));
+    }
+
+    Ok(CopyMoveApplyResult {
+        cells_written: width as u64 * height as u64,
+        warnings,
+    })
+}
+
+fn rewrite_formulas_for_sheet_rename(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let new_prefix = format_sheet_prefix_for_formula(new_name);
+
+    for sheet in book.get_sheet_collection_mut().iter_mut() {
+        for cell in sheet.get_cell_collection_mut() {
+            if !cell.is_formula() {
+                continue;
+            }
+            let formula_text = cell.get_formula();
+            if formula_text.is_empty() {
+                continue;
+            }
+            let formula_with_equals = if formula_text.starts_with('=') {
+                formula_text.to_string()
+            } else {
+                format!("={}", formula_text)
+            };
+
+            let tokenizer = Tokenizer::new(&formula_with_equals)
+                .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+
+            let tokens = tokenizer.items;
+            let mut out = String::with_capacity(formula_with_equals.len());
+            let mut cursor = 0usize;
+
+            for token in &tokens {
+                if token.start > cursor {
+                    out.push_str(&formula_with_equals[cursor..token.start]);
+                }
+
+                let mut value = token.value.clone();
+                if token.subtype == formualizer_parse::TokenSubType::Range
+                    && value.contains('!')
+                    && let Some((sheet_part, tail)) = value.split_once('!')
+                    && sheet_part_matches(sheet_part, old_name)
+                {
+                    value = format!("{}{}", new_prefix, tail);
+                }
+
+                out.push_str(&value);
+                cursor = token.end;
+            }
+
+            if cursor < formula_with_equals.len() {
+                out.push_str(&formula_with_equals[cursor..]);
+            }
+
+            let new_formula = out.strip_prefix('=').unwrap_or(&out);
+            cell.set_formula(new_formula.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn rewrite_defined_name_formulas_for_sheet_rename(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let new_prefix = format_sheet_prefix_for_formula(new_name);
+
+    for defined in book.get_defined_names_mut() {
+        let refers_to = defined.get_address();
+        let trimmed = refers_to.trim();
+        let had_equals = trimmed.starts_with('=');
+        let looks_like_formula = had_equals || trimmed.contains('(');
+        if !looks_like_formula {
+            continue;
+        }
+
+        let formula_in = if had_equals {
+            trimmed.to_string()
+        } else {
+            format!("={}", trimmed)
+        };
+
+        let tokenizer = Tokenizer::new(&formula_in)
+            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+        let tokens = tokenizer.items;
+
+        let mut out = String::with_capacity(formula_in.len());
+        let mut cursor = 0usize;
+        let mut changed = false;
+
+        for token in &tokens {
+            if token.start > cursor {
+                out.push_str(&formula_in[cursor..token.start]);
+            }
+
+            let mut value = token.value.clone();
+            if token.subtype == formualizer_parse::TokenSubType::Range
+                && value.contains('!')
+                && let Some((sheet_part, tail)) = value.split_once('!')
+                && sheet_part_matches(sheet_part, old_name)
+            {
+                value = format!("{}{}", new_prefix, tail);
+                changed = true;
+            }
+
+            out.push_str(&value);
+            cursor = token.end;
+        }
+
+        if cursor < formula_in.len() {
+            out.push_str(&formula_in[cursor..]);
+        }
+
+        if changed {
+            let out_final = if had_equals {
+                out
+            } else {
+                out.strip_prefix('=').unwrap_or(&out).to_string()
+            };
+            defined.set_address(out_final);
+        }
+    }
+
+    Ok(())
+}
+
+fn rewrite_defined_name_formulas_for_sheet_col_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Insert { at: at_col, count },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_col_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Delete {
+            start: start_col,
+            count,
+        },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_row_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Insert { at: at_row, count },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_row_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_defined_name_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Delete {
+            start: start_row,
+            count,
+        },
+    )
+}
+
+fn rewrite_defined_name_formulas_for_sheet_structure_change(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    axis: StructureAxis,
+    edit: StructureEdit,
+) -> Result<()> {
+    for defined in book.get_defined_names_mut() {
+        let refers_to = defined.get_address();
+        let trimmed = refers_to.trim();
+        let had_equals = trimmed.starts_with('=');
+        let looks_like_formula = had_equals || trimmed.contains('(');
+        if !looks_like_formula {
+            continue;
+        }
+
+        let formula_in = if had_equals {
+            trimmed.to_string()
+        } else {
+            format!("={}", trimmed)
+        };
+
+        let tokenizer = Tokenizer::new(&formula_in)
+            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+        let tokens = tokenizer.items;
+
+        let mut out = String::with_capacity(formula_in.len());
+        let mut cursor = 0usize;
+        let mut changed = false;
+
+        for token in &tokens {
+            if token.start > cursor {
+                out.push_str(&formula_in[cursor..token.start]);
+            }
+
+            let mut value = token.value.clone();
+            if token.subtype == formualizer_parse::TokenSubType::Range
+                && value.contains('!')
+                && let Some((sheet_part, coord_part)) = value.split_once('!')
+                && sheet_part_matches(sheet_part, sheet_name)
+            {
+                let adjusted = adjust_ref_coord_part(coord_part, axis, edit)?;
+                value = format!("{sheet_part}!{adjusted}");
+                changed = true;
+            }
+
+            out.push_str(&value);
+            cursor = token.end;
+        }
+
+        if cursor < formula_in.len() {
+            out.push_str(&formula_in[cursor..]);
+        }
+
+        if changed {
+            let out_final = if had_equals {
+                out
+            } else {
+                out.strip_prefix('=').unwrap_or(&out).to_string()
+            };
+            defined.set_address(out_final);
+        }
+    }
+
+    Ok(())
+}
+
+fn rewrite_formulas_for_sheet_col_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Insert { at: at_col, count },
+    )
+}
+
+fn rewrite_formulas_for_sheet_col_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_col: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Col,
+        StructureEdit::Delete {
+            start: start_col,
+            count,
+        },
+    )
+}
+
+fn rewrite_formulas_for_sheet_row_insert(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Insert { at: at_row, count },
+    )
+}
+
+fn rewrite_formulas_for_sheet_row_delete(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    start_row: u32,
+    count: u32,
+) -> Result<()> {
+    rewrite_formulas_for_sheet_structure_change(
+        book,
+        sheet_name,
+        StructureAxis::Row,
+        StructureEdit::Delete {
+            start: start_row,
+            count,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StructureAxis {
+    Row,
+    Col,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StructureEdit {
+    Insert { at: u32, count: u32 },
+    Delete { start: u32, count: u32 },
+}
+
+fn rewrite_formulas_for_sheet_structure_change(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    axis: StructureAxis,
+    edit: StructureEdit,
+) -> Result<()> {
+    for sheet in book.get_sheet_collection_mut().iter_mut() {
+        if sheet.get_name() == sheet_name {
+            continue;
+        }
+        for cell in sheet.get_cell_collection_mut() {
+            if !cell.is_formula() {
+                continue;
+            }
+            let formula_text = cell.get_formula();
+            if formula_text.is_empty() {
+                continue;
+            }
+            let formula_with_equals = if formula_text.starts_with('=') {
+                formula_text.to_string()
+            } else {
+                format!("={}", formula_text)
+            };
+            let tokenizer = Tokenizer::new(&formula_with_equals)
+                .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+            let tokens = tokenizer.items;
+
+            let mut out = String::with_capacity(formula_with_equals.len());
+            let mut cursor = 0usize;
+            let mut changed = false;
+
+            for token in &tokens {
+                if token.start > cursor {
+                    out.push_str(&formula_with_equals[cursor..token.start]);
+                }
+
+                let mut value = token.value.clone();
+                if token.subtype == formualizer_parse::TokenSubType::Range
+                    && value.contains('!')
+                    && let Some((sheet_part, coord_part)) = value.split_once('!')
+                    && sheet_part_matches(sheet_part, sheet_name)
+                {
+                    let adjusted = adjust_ref_coord_part(coord_part, axis, edit)?;
+                    value = format!("{sheet_part}!{adjusted}");
+                    changed = true;
+                }
+
+                out.push_str(&value);
+                cursor = token.end;
+            }
+
+            if cursor < formula_with_equals.len() {
+                out.push_str(&formula_with_equals[cursor..]);
+            }
+
+            if changed {
+                let new_formula = out.strip_prefix('=').unwrap_or(&out);
+                cell.set_formula(new_formula.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn adjust_ref_coord_part(
+    coord_part: &str,
+    axis: StructureAxis,
+    edit: StructureEdit,
+) -> Result<String> {
+    if coord_part == "#REF!" {
+        return Ok(coord_part.to_string());
+    }
+    if let Some((start, end)) = coord_part.split_once(':') {
+        let start_adj = adjust_ref_segment(start, axis, edit)?;
+        let end_adj = adjust_ref_segment(end, axis, edit)?;
+        if start_adj == "#REF!" || end_adj == "#REF!" {
+            return Ok("#REF!".to_string());
+        }
+        Ok(format!("{start_adj}:{end_adj}"))
+    } else {
+        Ok(adjust_ref_segment(coord_part, axis, edit)?)
+    }
+}
+
+fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -> Result<String> {
+    use umya_spreadsheet::helper::coordinate::{
+        coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
+    };
+
+    let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
+    let mut col = col;
+    let mut row = row;
+
+    match axis {
+        StructureAxis::Col => {
+            if let Some(c) = col {
+                col = match edit {
+                    StructureEdit::Insert { at, count } => Some(adjust_insert(c, at, count)),
+                    StructureEdit::Delete { start, count } => adjust_delete(c, start, count),
+                };
+            }
+        }
+        StructureAxis::Row => {
+            if let Some(r) = row {
+                row = match edit {
+                    StructureEdit::Insert { at, count } => Some(adjust_insert(r, at, count)),
+                    StructureEdit::Delete { start, count } => adjust_delete(r, start, count),
+                };
+            }
+        }
+    }
+
+    if col.is_none() && row.is_none() {
+        return Ok("#REF!".to_string());
+    }
+
+    match (col, row) {
+        (Some(c), Some(r)) => Ok(coordinate_from_index_with_lock(
+            &c,
+            &r,
+            &col_lock.unwrap_or(false),
+            &row_lock.unwrap_or(false),
+        )),
+        (Some(c), None) => {
+            let col_str = string_from_column_index(&c);
+            Ok(format!(
+                "{}{}",
+                if col_lock.unwrap_or(false) { "$" } else { "" },
+                col_str
+            ))
+        }
+        (None, Some(r)) => Ok(format!(
+            "{}{}",
+            if row_lock.unwrap_or(false) { "$" } else { "" },
+            r
+        )),
+        (None, None) => Ok("#REF!".to_string()),
+    }
+}
+
+fn adjust_insert(value: u32, at: u32, count: u32) -> u32 {
+    if value >= at { value + count } else { value }
+}
+
+fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {
+    let end = start.saturating_add(count.saturating_sub(1));
+    if value >= start && value <= end {
+        None
+    } else if value > end {
+        Some(value - count)
+    } else {
+        Some(value)
+    }
+}
+
+fn sheet_part_matches(sheet_part: &str, old_name: &str) -> bool {
+    let trimmed = sheet_part.trim();
+    if let Some(stripped) = trimmed.strip_prefix('\'')
+        && let Some(inner) = stripped.strip_suffix('\'')
+    {
+        return inner.replace("''", "'") == old_name;
+    }
+    trimmed == old_name
+}
+
+fn format_sheet_prefix_for_formula(sheet_name: &str) -> String {
+    if sheet_name_needs_quoting_for_formula(sheet_name) {
+        let escaped = sheet_name.replace('\'', "''");
+        format!("'{escaped}'!")
+    } else {
+        format!("{sheet_name}!")
+    }
+}
+
+fn sheet_name_needs_quoting_for_formula(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = name.as_bytes();
+    if bytes[0].is_ascii_digit() {
+        return true;
+    }
+    for &byte in bytes {
+        match byte {
+            b' ' | b'!' | b'"' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+'
+            | b',' | b'-' | b'.' | b'/' | b':' | b';' | b'<' | b'=' | b'>' | b'?' | b'@' | b'['
+            | b'\\' | b']' | b'^' | b'`' | b'{' | b'|' | b'}' | b'~' => return true,
+            _ => {}
+        }
+    }
+    let upper = name.to_uppercase();
+    matches!(
+        upper.as_str(),
+        "TRUE" | "FALSE" | "NULL" | "REF" | "DIV" | "NAME" | "NUM" | "VALUE" | "N/A"
+    )
+}
+
+struct StyleApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
+    PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
+}
+
+fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
+    use crate::styles::{
+        StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id,
+    };
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let mut sheets: BTreeSet<String> = BTreeSet::new();
+    let mut affected_bounds: Vec<String> = Vec::new();
+    let mut cells_touched: u64 = 0;
+    let mut cells_style_changed: u64 = 0;
+
+    for op in ops {
+        let sheet = book
+            .get_sheet_by_name_mut(&op.sheet_name)
+            .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
+        sheets.insert(op.sheet_name.clone());
+
+        let op_mode = match op
+            .op_mode
+            .as_deref()
+            .unwrap_or("merge")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "set" => StylePatchMode::Set,
+            "clear" => StylePatchMode::Clear,
+            _ => StylePatchMode::Merge,
+        };
+
+        match &op.target {
+            StyleTarget::Range { range } => {
+                let bounds = parse_range_bounds(range)?;
+                affected_bounds.push(range.clone());
+                for row in bounds.min_row..=bounds.max_row {
+                    for col in bounds.min_col..=bounds.max_col {
+                        let addr = crate::utils::cell_address(col, row);
+                        let cell = sheet.get_cell_mut(addr.as_str());
+                        let before = stable_style_id(&descriptor_from_style(cell.get_style()));
+                        let next_style = apply_style_patch(cell.get_style(), &op.patch, op_mode);
+                        cell.set_style(next_style);
+                        let after = stable_style_id(&descriptor_from_style(cell.get_style()));
+                        cells_touched += 1;
+                        if before != after {
+                            cells_style_changed += 1;
+                        }
+                    }
+                }
+            }
+            StyleTarget::Cells { cells } => {
+                affected_bounds.extend(cells.iter().cloned());
+                for addr in cells {
+                    let cell = sheet.get_cell_mut(addr.as_str());
+                    let before = stable_style_id(&descriptor_from_style(cell.get_style()));
+                    let next_style = apply_style_patch(cell.get_style(), &op.patch, op_mode);
+                    cell.set_style(next_style);
+                    let after = stable_style_id(&descriptor_from_style(cell.get_style()));
+                    cells_touched += 1;
+                    if before != after {
+                        cells_style_changed += 1;
+                    }
+                }
+            }
+            StyleTarget::Region { .. } => {
+                return Err(anyhow!(
+                    "region_id targets must be resolved before apply_style_ops_to_file"
+                ));
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_touched".to_string(), cells_touched);
+    counts.insert("cells_style_changed".to_string(), cells_style_changed);
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["style_batch".to_string()],
+        affected_sheets: sheets.into_iter().collect(),
+        affected_bounds,
+        counts,
+        warnings: Vec::new(),
+    };
+
+    Ok(StyleApplyResult {
+        ops_applied: ops.len(),
+        summary,
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -390,6 +2049,377 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
     })
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CheckpointForkParams {
+    pub fork_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CheckpointInfo {
+    pub checkpoint_id: String,
+    pub created_at: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CheckpointForkResponse {
+    pub fork_id: String,
+    pub checkpoint: CheckpointInfo,
+    pub total_checkpoints: usize,
+}
+
+pub async fn checkpoint_fork(
+    state: Arc<AppState>,
+    params: CheckpointForkParams,
+) -> Result<CheckpointForkResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.get_fork(&params.fork_id)?;
+    let checkpoint = registry.create_checkpoint(&params.fork_id, params.label.clone())?;
+    let total = registry.list_checkpoints(&params.fork_id)?.len();
+
+    Ok(CheckpointForkResponse {
+        fork_id: params.fork_id,
+        checkpoint: CheckpointInfo {
+            checkpoint_id: checkpoint.checkpoint_id,
+            created_at: checkpoint.created_at.to_rfc3339(),
+            label: checkpoint.label,
+        },
+        total_checkpoints: total,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListCheckpointsParams {
+    pub fork_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListCheckpointsResponse {
+    pub fork_id: String,
+    pub checkpoints: Vec<CheckpointInfo>,
+}
+
+pub async fn list_checkpoints(
+    state: Arc<AppState>,
+    params: ListCheckpointsParams,
+) -> Result<ListCheckpointsResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let checkpoints = registry.list_checkpoints(&params.fork_id)?;
+    let checkpoints = checkpoints
+        .into_iter()
+        .map(|cp| CheckpointInfo {
+            checkpoint_id: cp.checkpoint_id,
+            created_at: cp.created_at.to_rfc3339(),
+            label: cp.label,
+        })
+        .collect();
+
+    Ok(ListCheckpointsResponse {
+        fork_id: params.fork_id,
+        checkpoints,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RestoreCheckpointParams {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RestoreCheckpointResponse {
+    pub fork_id: String,
+    pub restored_checkpoint: CheckpointInfo,
+}
+
+pub async fn restore_checkpoint(
+    state: Arc<AppState>,
+    params: RestoreCheckpointParams,
+) -> Result<RestoreCheckpointResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let checkpoint = registry.restore_checkpoint(&params.fork_id, &params.checkpoint_id)?;
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(RestoreCheckpointResponse {
+        fork_id: params.fork_id,
+        restored_checkpoint: CheckpointInfo {
+            checkpoint_id: checkpoint.checkpoint_id,
+            created_at: checkpoint.created_at.to_rfc3339(),
+            label: checkpoint.label,
+        },
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteCheckpointParams {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DeleteCheckpointResponse {
+    pub fork_id: String,
+    pub checkpoint_id: String,
+    pub deleted: bool,
+}
+
+pub async fn delete_checkpoint(
+    state: Arc<AppState>,
+    params: DeleteCheckpointParams,
+) -> Result<DeleteCheckpointResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.delete_checkpoint(&params.fork_id, &params.checkpoint_id)?;
+
+    Ok(DeleteCheckpointResponse {
+        fork_id: params.fork_id,
+        checkpoint_id: params.checkpoint_id,
+        deleted: true,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListStagedChangesParams {
+    pub fork_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StagedChangeInfo {
+    pub change_id: String,
+    pub created_at: String,
+    pub label: Option<String>,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListStagedChangesResponse {
+    pub fork_id: String,
+    pub staged_changes: Vec<StagedChangeInfo>,
+}
+
+pub async fn list_staged_changes(
+    state: Arc<AppState>,
+    params: ListStagedChangesParams,
+) -> Result<ListStagedChangesResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let staged = registry.list_staged_changes(&params.fork_id)?;
+    let staged_changes = staged
+        .into_iter()
+        .map(|c| StagedChangeInfo {
+            change_id: c.change_id,
+            created_at: c.created_at.to_rfc3339(),
+            label: c.label,
+            summary: c.summary,
+        })
+        .collect();
+
+    Ok(ListStagedChangesResponse {
+        fork_id: params.fork_id,
+        staged_changes,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApplyStagedChangeParams {
+    pub fork_id: String,
+    pub change_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApplyStagedChangeResponse {
+    pub fork_id: String,
+    pub change_id: String,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditBatchStagedPayload {
+    sheet_name: String,
+    edits: Vec<CellEdit>,
+}
+
+pub async fn apply_staged_change(
+    state: Arc<AppState>,
+    params: ApplyStagedChangeParams,
+) -> Result<ApplyStagedChangeResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let staged_list = registry.list_staged_changes(&params.fork_id)?;
+    let staged = staged_list
+        .iter()
+        .find(|c| c.change_id == params.change_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("staged change not found: {}", params.change_id))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let mut ops_applied = 0usize;
+
+    for op in &staged.ops {
+        match op.kind.as_str() {
+            "edit_batch" => {
+                let payload: EditBatchStagedPayload = serde_json::from_value(op.payload.clone())
+                    .map_err(|e| anyhow!("invalid edit_batch payload: {}", e))?;
+
+                let edits_to_apply: Vec<_> = payload
+                    .edits
+                    .iter()
+                    .map(|e| EditOp {
+                        timestamp: Utc::now(),
+                        sheet: payload.sheet_name.clone(),
+                        address: e.address.clone(),
+                        value: e.value.clone(),
+                        is_formula: e.is_formula,
+                    })
+                    .collect();
+
+                tokio::task::spawn_blocking({
+                    let sheet_name = payload.sheet_name.clone();
+                    let edits = payload.edits.clone();
+                    let work_path = work_path.clone();
+                    move || apply_edits_to_file(&work_path, &sheet_name, &edits)
+                })
+                .await??;
+
+                registry.with_fork_mut(&params.fork_id, |ctx| {
+                    ctx.edits.extend(edits_to_apply);
+                    Ok(())
+                })?;
+
+                ops_applied += 1;
+            }
+            "style_batch" => {
+                let payload: StyleBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid style_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_style_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "apply_formula_pattern" => {
+                let payload: ApplyFormulaPatternStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid apply_formula_pattern payload: {}", e))?;
+
+                let bounds = parse_range_bounds(&payload.target_range)?;
+                let (anchor_col, anchor_row) = parse_cell_ref(&payload.anchor_cell)?;
+                validate_formula_pattern_bounds(
+                    &bounds,
+                    anchor_col,
+                    anchor_row,
+                    payload.fill_direction.as_deref(),
+                )?;
+                let relative_mode = RelativeMode::parse(payload.relative_mode.as_deref())?;
+
+                tokio::task::spawn_blocking({
+                    let sheet_name = payload.sheet_name.clone();
+                    let target_range = payload.target_range.clone();
+                    let base_formula = payload.base_formula.clone();
+                    let work_path = work_path.clone();
+                    move || {
+                        apply_formula_pattern_to_file(
+                            &work_path,
+                            &sheet_name,
+                            &target_range,
+                            anchor_col,
+                            anchor_row,
+                            &base_formula,
+                            relative_mode,
+                        )
+                    }
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "structure_batch" => {
+                let payload: StructureBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid structure_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_structure_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            other => {
+                return Err(anyhow!("unsupported staged op kind: {}", other));
+            }
+        }
+    }
+
+    registry.discard_staged_change(&params.fork_id, &params.change_id)?;
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(ApplyStagedChangeResponse {
+        fork_id: params.fork_id,
+        change_id: params.change_id,
+        ops_applied,
+        summary: staged.summary,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiscardStagedChangeParams {
+    pub fork_id: String,
+    pub change_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DiscardStagedChangeResponse {
+    pub fork_id: String,
+    pub change_id: String,
+    pub discarded: bool,
+}
+
+pub async fn discard_staged_change(
+    state: Arc<AppState>,
+    params: DiscardStagedChangeParams,
+) -> Result<DiscardStagedChangeResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    registry.discard_staged_change(&params.fork_id, &params.change_id)?;
+
+    Ok(DiscardStagedChangeResponse {
+        fork_id: params.fork_id,
+        change_id: params.change_id,
+        discarded: true,
+    })
+}
+
 const MAX_SCREENSHOT_ROWS: u32 = 100;
 const MAX_SCREENSHOT_COLS: u32 = 30;
 const DEFAULT_SCREENSHOT_RANGE: &str = "A1:M40";
@@ -521,12 +2551,16 @@ fn parse_cell_ref(cell: &str) -> Result<(u32, u32)> {
 
 fn parse_range_bounds(range: &str) -> Result<ScreenshotBounds> {
     let parts: Vec<&str> = range.split(':').collect();
-    if parts.len() != 2 {
-        return Err(anyhow!("Invalid range format. Expected 'A1:Z99'"));
+    if parts.is_empty() || parts.len() > 2 {
+        return Err(anyhow!("Invalid range format. Expected 'A1' or 'A1:Z99'"));
     }
 
     let start = parse_cell_ref(parts[0])?;
-    let end = parse_cell_ref(parts[1])?;
+    let end = if parts.len() == 2 {
+        parse_cell_ref(parts[1])?
+    } else {
+        start
+    };
 
     let min_col = start.0.min(end.0);
     let max_col = start.0.max(end.0);

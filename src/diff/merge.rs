@@ -23,6 +23,8 @@ pub enum CellDiff {
         new_value: Option<String>,
         old_formula: Option<String>,
         new_formula: Option<String>,
+        old_style_id: Option<u32>,
+        new_style_id: Option<u32>,
     },
 }
 
@@ -32,6 +34,7 @@ pub enum ModificationType {
     FormulaEdit,
     RecalcResult,
     ValueEdit,
+    StyleEdit,
 }
 
 pub fn diff_streams(
@@ -110,16 +113,21 @@ pub fn diff_streams(
 fn compare_cells(base: &RawCell, fork: &RawCell) -> Option<CellDiff> {
     let formula_changed = base.formula != fork.formula;
     let value_changed = !values_equal(&base.value, &fork.value);
+    let style_changed = base.style_id != fork.style_id;
 
-    if !formula_changed && !value_changed {
+    if !formula_changed && !value_changed && !style_changed {
         return None;
     }
 
-    let subtype = match (formula_changed, value_changed, fork.formula.is_some()) {
-        (true, _, _) => ModificationType::FormulaEdit,
-        (false, true, true) => ModificationType::RecalcResult,
-        (false, true, false) => ModificationType::ValueEdit,
-        _ => return None, // Should be covered above
+    let subtype = if style_changed && !formula_changed && !value_changed {
+        ModificationType::StyleEdit
+    } else {
+        match (formula_changed, value_changed, fork.formula.is_some()) {
+            (true, _, _) => ModificationType::FormulaEdit,
+            (false, true, true) => ModificationType::RecalcResult,
+            (false, true, false) => ModificationType::ValueEdit,
+            _ => return None, // Should be covered above
+        }
     };
 
     Some(CellDiff::Modified {
@@ -129,6 +137,8 @@ fn compare_cells(base: &RawCell, fork: &RawCell) -> Option<CellDiff> {
         new_value: fork.value.clone(),
         old_formula: base.formula.clone(),
         new_formula: fork.formula.clone(),
+        old_style_id: if style_changed { base.style_id } else { None },
+        new_style_id: if style_changed { fork.style_id } else { None },
     })
 }
 

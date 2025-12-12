@@ -430,6 +430,188 @@ pub struct VolatileScanResponse {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct StyleDescriptor {
+    pub font: Option<FontDescriptor>,
+    pub fill: Option<FillDescriptor>,
+    pub borders: Option<BordersDescriptor>,
+    pub alignment: Option<AlignmentDescriptor>,
+    pub number_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct FontDescriptor {
+    pub name: Option<String>,
+    pub size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<String>,
+    pub strikethrough: Option<bool>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FillDescriptor {
+    Pattern(PatternFillDescriptor),
+    Gradient(GradientFillDescriptor),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct PatternFillDescriptor {
+    pub pattern_type: Option<String>,
+    pub foreground_color: Option<String>,
+    pub background_color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct GradientFillDescriptor {
+    pub degree: Option<f64>,
+    pub stops: Vec<GradientStopDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientStopDescriptor {
+    pub position: f64,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BordersDescriptor {
+    pub left: Option<BorderSideDescriptor>,
+    pub right: Option<BorderSideDescriptor>,
+    pub top: Option<BorderSideDescriptor>,
+    pub bottom: Option<BorderSideDescriptor>,
+    pub diagonal: Option<BorderSideDescriptor>,
+    pub vertical: Option<BorderSideDescriptor>,
+    pub horizontal: Option<BorderSideDescriptor>,
+    pub diagonal_up: Option<bool>,
+    pub diagonal_down: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BorderSideDescriptor {
+    pub style: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AlignmentDescriptor {
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: Option<bool>,
+    pub text_rotation: Option<u32>,
+}
+
+// Patch variants for write tools (Phase 2+). Double-option fields distinguish:
+// - missing field => no change (merge mode)
+// - null => clear to default
+// - value => set/merge that value
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct StylePatch {
+    #[serde(default)]
+    pub font: Option<Option<FontPatch>>,
+    #[serde(default)]
+    pub fill: Option<Option<FillPatch>>,
+    #[serde(default)]
+    pub borders: Option<Option<BordersPatch>>,
+    #[serde(default)]
+    pub alignment: Option<Option<AlignmentPatch>>,
+    #[serde(default)]
+    pub number_format: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct FontPatch {
+    #[serde(default)]
+    pub name: Option<Option<String>>,
+    #[serde(default)]
+    pub size: Option<Option<f64>>,
+    #[serde(default)]
+    pub bold: Option<Option<bool>>,
+    #[serde(default)]
+    pub italic: Option<Option<bool>>,
+    #[serde(default)]
+    pub underline: Option<Option<String>>,
+    #[serde(default)]
+    pub strikethrough: Option<Option<bool>>,
+    #[serde(default)]
+    pub color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FillPatch {
+    Pattern(PatternFillPatch),
+    Gradient(GradientFillPatch),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct PatternFillPatch {
+    #[serde(default)]
+    pub pattern_type: Option<Option<String>>,
+    #[serde(default)]
+    pub foreground_color: Option<Option<String>>,
+    #[serde(default)]
+    pub background_color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct GradientFillPatch {
+    #[serde(default)]
+    pub degree: Option<Option<f64>>,
+    #[serde(default)]
+    pub stops: Option<Vec<GradientStopPatch>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientStopPatch {
+    pub position: f64,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BordersPatch {
+    #[serde(default)]
+    pub left: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub right: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub top: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub bottom: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub diagonal: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub vertical: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub horizontal: Option<Option<BorderSidePatch>>,
+    #[serde(default)]
+    pub diagonal_up: Option<Option<bool>>,
+    #[serde(default)]
+    pub diagonal_down: Option<Option<bool>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct BorderSidePatch {
+    #[serde(default)]
+    pub style: Option<Option<String>>,
+    #[serde(default)]
+    pub color: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AlignmentPatch {
+    #[serde(default)]
+    pub horizontal: Option<Option<String>>,
+    #[serde(default)]
+    pub vertical: Option<Option<String>>,
+    #[serde(default)]
+    pub wrap_text: Option<Option<bool>>,
+    #[serde(default)]
+    pub text_rotation: Option<Option<u32>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetStylesResponse {
     pub workbook_id: WorkbookId,
@@ -437,6 +619,8 @@ pub struct SheetStylesResponse {
     pub sheet_name: String,
     pub styles: Vec<StyleSummary>,
     pub conditional_rules: Vec<String>,
+    pub total_styles: u32,
+    pub styles_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -445,6 +629,59 @@ pub struct StyleSummary {
     pub occurrences: u32,
     pub tags: Vec<String>,
     pub example_cells: Vec<String>,
+    pub descriptor: Option<StyleDescriptor>,
+    pub cell_ranges: Vec<String>,
+    pub ranges_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkbookStyleSummaryResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub theme: Option<ThemeSummary>,
+    pub inferred_default_style_id: Option<String>,
+    pub inferred_default_font: Option<FontDescriptor>,
+    pub styles: Vec<WorkbookStyleUsage>,
+    pub total_styles: u32,
+    pub styles_truncated: bool,
+    pub conditional_formats: Vec<ConditionalFormatSummary>,
+    pub conditional_formats_truncated: bool,
+    pub scan_truncated: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkbookStyleUsage {
+    pub style_id: String,
+    pub occurrences: u32,
+    pub tags: Vec<String>,
+    pub example_cells: Vec<String>,
+    pub descriptor: Option<StyleDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ThemeSummary {
+    pub name: Option<String>,
+    pub colors: BTreeMap<String, String>,
+    pub font_scheme: ThemeFontSchemeSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ThemeFontSchemeSummary {
+    pub major_latin: Option<String>,
+    pub major_east_asian: Option<String>,
+    pub major_complex_script: Option<String>,
+    pub minor_latin: Option<String>,
+    pub minor_east_asian: Option<String>,
+    pub minor_complex_script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConditionalFormatSummary {
+    pub sheet_name: String,
+    pub range: String,
+    pub rule_types: Vec<String>,
+    pub rule_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

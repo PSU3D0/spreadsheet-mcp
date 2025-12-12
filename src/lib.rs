@@ -5,11 +5,13 @@ pub mod config;
 pub mod diff;
 #[cfg(feature = "recalc")]
 pub mod fork;
+pub mod formula;
 pub mod model;
 #[cfg(feature = "recalc")]
 pub mod recalc;
 pub mod server;
 pub mod state;
+pub mod styles;
 pub mod tools;
 pub mod utils;
 pub mod workbook;

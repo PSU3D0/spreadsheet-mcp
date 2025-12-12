@@ -421,7 +421,7 @@ fn numeric_year_headers() {
         sheet.get_cell_mut("D1").set_value_number(2024.0);
 
         // Data
-        let rows = vec![
+        let rows = [
             vec![
                 CellVal::Text("Revenue".into()),
                 CellVal::Num(100.0),
