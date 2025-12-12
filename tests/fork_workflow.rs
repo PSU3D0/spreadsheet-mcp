@@ -629,8 +629,7 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
     assert!(save_result.saved_to.contains("workflow_updated.xlsx"));
 
     // Verify the saved file
-    let saved_book =
-        umya_spreadsheet::reader::xlsx::read(workspace.path("workflow_updated.xlsx"))?;
+    let saved_book = umya_spreadsheet::reader::xlsx::read(workspace.path("workflow_updated.xlsx"))?;
     let saved_value = saved_book
         .get_sheet_by_name("Budget")
         .unwrap()

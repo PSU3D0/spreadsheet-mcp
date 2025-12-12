@@ -517,6 +517,25 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             .map_err(to_mcp_error)
     }
 
+    #[tool(
+        name = "apply_formula_pattern",
+        description = "Autofill-like formula pattern application over a target range in a fork. \
+Provide base_formula at anchor_cell, then fill across target_range. \
+Mode: preview or apply (default apply). relative_mode: excel (default), abs_cols, abs_rows. \
+fill_direction: down, right, both (default both)."
+    )]
+    pub async fn apply_formula_pattern(
+        &self,
+        Parameters(params): Parameters<tools::fork::ApplyFormulaPatternParams>,
+    ) -> Result<Json<tools::fork::ApplyFormulaPatternResponse>, McpError> {
+        self.ensure_recalc_enabled("apply_formula_pattern")
+            .map_err(to_mcp_error)?;
+        tools::fork::apply_formula_pattern(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
     pub async fn get_edits(
         &self,

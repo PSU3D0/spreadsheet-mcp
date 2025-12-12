@@ -1,7 +1,8 @@
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
+use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{StylePatch, WorkbookId};
 use crate::state::AppState;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -278,6 +279,277 @@ pub async fn style_batch(
             summary,
         })
     }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApplyFormulaPatternParams {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub target_range: String,
+    pub anchor_cell: String,
+    pub base_formula: String,
+    #[serde(default)]
+    pub fill_direction: Option<String>, // down|right|both (default both)
+    #[serde(default)]
+    pub relative_mode: Option<String>, // excel|abs_cols|abs_rows
+    #[serde(default)]
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApplyFormulaPatternResponse {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub target_range: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub cells_filled: u64,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ApplyFormulaPatternStagedPayload {
+    sheet_name: String,
+    target_range: String,
+    anchor_cell: String,
+    base_formula: String,
+    fill_direction: Option<String>,
+    relative_mode: Option<String>,
+}
+
+pub async fn apply_formula_pattern(
+    state: Arc<AppState>,
+    params: ApplyFormulaPatternParams,
+) -> Result<ApplyFormulaPatternResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let bounds = parse_range_bounds(&params.target_range)?;
+    let (anchor_col, anchor_row) = parse_cell_ref(&params.anchor_cell)?;
+    validate_formula_pattern_bounds(
+        &bounds,
+        anchor_col,
+        anchor_row,
+        params.fill_direction.as_deref(),
+    )?;
+
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
+
+    let relative_mode = RelativeMode::parse(params.relative_mode.as_deref())?;
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let sheet_name = params.sheet_name.clone();
+        let target_range = params.target_range.clone();
+        let anchor_cell = params.anchor_cell.clone();
+        let base_formula = params.base_formula.clone();
+        let fill_direction = params.fill_direction.clone();
+        let relative_mode_str = params.relative_mode.clone();
+        let snapshot_for_apply = snapshot_path.clone();
+        let sheet_name_for_apply = sheet_name.clone();
+        let target_range_for_apply = target_range.clone();
+        let base_formula_for_apply = base_formula.clone();
+
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_formula_pattern_to_file(
+                &snapshot_for_apply,
+                &sheet_name_for_apply,
+                &target_range_for_apply,
+                anchor_col,
+                anchor_row,
+                &base_formula_for_apply,
+                relative_mode,
+            )
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+
+        let staged_op = StagedOp {
+            kind: "apply_formula_pattern".to_string(),
+            payload: serde_json::to_value(ApplyFormulaPatternStagedPayload {
+                sheet_name: sheet_name.clone(),
+                target_range: target_range.clone(),
+                anchor_cell: anchor_cell.clone(),
+                base_formula: base_formula.clone(),
+                fill_direction,
+                relative_mode: relative_mode_str,
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(ApplyFormulaPatternResponse {
+            fork_id: params.fork_id,
+            sheet_name,
+            target_range,
+            mode,
+            change_id: Some(change_id),
+            cells_filled: apply_result.cells_filled,
+            summary,
+        })
+    } else {
+        let sheet_name = params.sheet_name.clone();
+        let target_range = params.target_range.clone();
+        let base_formula = params.base_formula.clone();
+        let sheet_name_for_apply = sheet_name.clone();
+        let target_range_for_apply = target_range.clone();
+        let base_formula_for_apply = base_formula.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            apply_formula_pattern_to_file(
+                &work_path,
+                &sheet_name_for_apply,
+                &target_range_for_apply,
+                anchor_col,
+                anchor_row,
+                &base_formula_for_apply,
+                relative_mode,
+            )
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(ApplyFormulaPatternResponse {
+            fork_id: params.fork_id,
+            sheet_name,
+            target_range,
+            mode,
+            change_id: None,
+            cells_filled: apply_result.cells_filled,
+            summary,
+        })
+    }
+}
+
+struct FormulaPatternApplyResult {
+    cells_filled: u64,
+    summary: ChangeSummary,
+}
+
+fn apply_formula_pattern_to_file(
+    path: &Path,
+    sheet_name: &str,
+    target_range: &str,
+    anchor_col: u32,
+    anchor_row: u32,
+    base_formula: &str,
+    relative_mode: RelativeMode,
+) -> Result<FormulaPatternApplyResult> {
+    let ast = parse_base_formula(base_formula)?;
+    let bounds = parse_range_bounds(target_range)?;
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let mut cells_filled: u64 = 0;
+    for row in bounds.min_row..=bounds.max_row {
+        for col in bounds.min_col..=bounds.max_col {
+            let delta_col = col as i32 - anchor_col as i32;
+            let delta_row = row as i32 - anchor_row as i32;
+            let shifted = shift_formula_ast(&ast, delta_col, delta_row, relative_mode)?;
+            let shifted_for_umya = shifted.strip_prefix('=').unwrap_or(&shifted);
+            let addr = crate::utils::cell_address(col, row);
+            sheet
+                .get_cell_mut(addr.as_str())
+                .set_formula(shifted_for_umya.to_string());
+            cells_filled += 1;
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_filled".to_string(), cells_filled);
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["apply_formula_pattern".to_string()],
+        affected_sheets: vec![sheet_name.to_string()],
+        affected_bounds: vec![target_range.to_string()],
+        counts,
+        warnings: Vec::new(),
+    };
+
+    Ok(FormulaPatternApplyResult {
+        cells_filled,
+        summary,
+    })
+}
+
+fn validate_formula_pattern_bounds(
+    bounds: &ScreenshotBounds,
+    anchor_col: u32,
+    anchor_row: u32,
+    fill_direction: Option<&str>,
+) -> Result<()> {
+    if anchor_col < bounds.min_col
+        || anchor_col > bounds.max_col
+        || anchor_row < bounds.min_row
+        || anchor_row > bounds.max_row
+    {
+        let bounds_range = format!(
+            "{}:{}",
+            crate::utils::cell_address(bounds.min_col, bounds.min_row),
+            crate::utils::cell_address(bounds.max_col, bounds.max_row)
+        );
+        bail!(
+            "anchor_cell must be inside target_range (anchor {} not within {})",
+            crate::utils::cell_address(anchor_col, anchor_row),
+            bounds_range
+        );
+    }
+
+    if bounds.min_col != anchor_col || bounds.min_row != anchor_row {
+        bail!("target_range must start at anchor_cell (anchor should be top-left of fill range)");
+    }
+
+    let dir = fill_direction.unwrap_or("both").to_ascii_lowercase();
+    match dir.as_str() {
+        "down" => {
+            if bounds.min_col != bounds.max_col {
+                bail!("fill_direction=down requires a single-column target_range");
+            }
+        }
+        "right" => {
+            if bounds.min_row != bounds.max_row {
+                bail!("fill_direction=right requires a single-row target_range");
+            }
+        }
+        "both" => {}
+        other => bail!("invalid fill_direction: {}", other),
+    }
+    Ok(())
 }
 
 struct StyleApplyResult {
@@ -909,6 +1181,42 @@ pub async fn apply_staged_change(
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
                     move || apply_style_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "apply_formula_pattern" => {
+                let payload: ApplyFormulaPatternStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid apply_formula_pattern payload: {}", e))?;
+
+                let bounds = parse_range_bounds(&payload.target_range)?;
+                let (anchor_col, anchor_row) = parse_cell_ref(&payload.anchor_cell)?;
+                validate_formula_pattern_bounds(
+                    &bounds,
+                    anchor_col,
+                    anchor_row,
+                    payload.fill_direction.as_deref(),
+                )?;
+                let relative_mode = RelativeMode::parse(payload.relative_mode.as_deref())?;
+
+                tokio::task::spawn_blocking({
+                    let sheet_name = payload.sheet_name.clone();
+                    let target_range = payload.target_range.clone();
+                    let base_formula = payload.base_formula.clone();
+                    let work_path = work_path.clone();
+                    move || {
+                        apply_formula_pattern_to_file(
+                            &work_path,
+                            &sheet_name,
+                            &target_range,
+                            anchor_col,
+                            anchor_row,
+                            &base_formula,
+                            relative_mode,
+                        )
+                    }
                 })
                 .await??;
 
