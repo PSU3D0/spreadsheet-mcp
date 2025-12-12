@@ -269,6 +269,9 @@ async fn naming_and_styles_suite(state: Arc<AppState>, workbook_id: WorkbookId) 
         SheetStylesParams {
             workbook_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;

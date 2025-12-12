@@ -1,7 +1,7 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::FillDescriptor;
 use spreadsheet_mcp::tools::{
-    ListWorkbooksParams, SheetStylesParams, list_workbooks, sheet_styles,
+    ListWorkbooksParams, SheetStylesParams, SheetStylesScope, list_workbooks, sheet_styles,
 };
 use umya_spreadsheet::{
     GradientStop, HorizontalAlignmentValues, NumberingFormat, PatternValues,
@@ -73,6 +73,9 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
         SheetStylesParams {
             workbook_id,
             sheet_name: "Sheet1".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;
@@ -105,6 +108,107 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
 
     assert_eq!(descriptor.number_format.as_deref(), Some("0.00"));
     assert!(a1_style.tags.iter().any(|t| t == "header"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sheet_styles_runs_respect_scope() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("style_overview.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("a");
+        sheet.get_cell_mut("B1").set_value("b");
+        sheet.get_cell_mut("C1").set_value("c");
+
+        sheet.get_style_mut("A1").get_font_mut().set_bold(true);
+        sheet.get_style_mut("B1").get_font_mut().set_bold(true);
+        sheet.get_style_mut("C1").get_font_mut().set_italic(true);
+    });
+
+    let state = workspace.app_state();
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+
+    let styles = sheet_styles(
+        state,
+        SheetStylesParams {
+            workbook_id,
+            sheet_name: "Sheet1".to_string(),
+            scope: Some(SheetStylesScope::Range {
+                range: "A1:C1".to_string(),
+            }),
+            granularity: Some("runs".to_string()),
+            max_items: Some(50),
+        },
+    )
+    .await?;
+
+    let bold_style = styles
+        .styles
+        .iter()
+        .find(|s| {
+            s.occurrences == 2
+                && s.descriptor
+                    .as_ref()
+                    .and_then(|d| d.font.as_ref())
+                    .and_then(|f| f.bold)
+                    == Some(true)
+        })
+        .expect("expected a bold style");
+
+    assert!(bold_style.cell_ranges.iter().any(|r| r == "A1:B1"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sheet_styles_cells_truncates() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("style_overview_cells.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("a");
+        sheet.get_cell_mut("B1").set_value("b");
+        sheet.get_cell_mut("C1").set_value("c");
+    });
+
+    let state = workspace.app_state();
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+
+    let styles = sheet_styles(
+        state,
+        SheetStylesParams {
+            workbook_id,
+            sheet_name: "Sheet1".to_string(),
+            scope: Some(SheetStylesScope::Range {
+                range: "A1:C1".to_string(),
+            }),
+            granularity: Some("cells".to_string()),
+            max_items: Some(2),
+        },
+    )
+    .await?;
+
+    assert_eq!(styles.styles.len(), 1);
+    assert_eq!(styles.styles[0].occurrences, 3);
+    assert_eq!(styles.styles[0].cell_ranges.len(), 2);
+    assert!(styles.styles[0].ranges_truncated);
 
     Ok(())
 }
@@ -144,6 +248,9 @@ async fn sheet_styles_truncates_large_style_counts() -> Result<()> {
         SheetStylesParams {
             workbook_id,
             sheet_name: "Sheet1".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;
@@ -187,6 +294,9 @@ async fn sheet_styles_truncates_ranges_for_disjoint_runs() -> Result<()> {
         SheetStylesParams {
             workbook_id,
             sheet_name: "Sheet1".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;
@@ -259,6 +369,9 @@ async fn sheet_styles_maps_gradient_pattern_underline_borders_rotation() -> Resu
         SheetStylesParams {
             workbook_id,
             sheet_name: "Sheet1".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;
@@ -338,6 +451,9 @@ async fn sheet_styles_dedupes_identical_visible_formats() -> Result<()> {
         SheetStylesParams {
             workbook_id,
             sheet_name: "Sheet1".to_string(),
+            scope: None,
+            granularity: None,
+            max_items: None,
         },
     )
     .await?;
