@@ -51,6 +51,16 @@ pub fn calculate_changeset(
     // Load SSTs
     let base_sst = load_sst(&mut base_zip).ok();
     let fork_sst = load_sst(&mut fork_zip).ok();
+    let base_sst_hash = base_zip
+        .by_name("xl/sharedStrings.xml")
+        .ok()
+        .and_then(|f| hash::compute_hash(f).ok())
+        .unwrap_or(0);
+    let fork_sst_hash = fork_zip
+        .by_name("xl/sharedStrings.xml")
+        .ok()
+        .and_then(|f| hash::compute_hash(f).ok())
+        .unwrap_or(0);
 
     // Load Workbook Meta (Sheets + Names)
     let base_meta = load_workbook_meta(&mut base_zip)?;
@@ -141,7 +151,7 @@ pub fn calculate_changeset(
             0
         };
 
-        if base_hash != 0 && base_hash == fork_hash {
+        if base_hash != 0 && base_hash == fork_hash && base_sst_hash == fork_sst_hash {
             continue;
         }
 

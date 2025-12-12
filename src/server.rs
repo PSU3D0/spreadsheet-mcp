@@ -483,6 +483,23 @@ impl SpreadsheetServer {
             .map_err(to_mcp_error)
     }
 
+    #[tool(
+        name = "style_batch",
+        description = "Apply batch style edits to a fork. Supports targets by range, region_id, or explicit cells. \
+Mode: preview or apply (default apply). Op mode: merge (default), set, or clear."
+    )]
+    pub async fn style_batch(
+        &self,
+        Parameters(params): Parameters<tools::fork::StyleBatchParams>,
+    ) -> Result<Json<tools::fork::StyleBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("style_batch")
+            .map_err(to_mcp_error)?;
+        tools::fork::style_batch(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
     pub async fn get_edits(
         &self,

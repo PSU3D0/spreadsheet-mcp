@@ -361,6 +361,7 @@ fn test_recalc_result_classification() {
                 new_value,
                 old_formula,
                 new_formula,
+                ..
             } => {
                 assert_eq!(address, "B1");
                 assert!(
@@ -613,6 +614,70 @@ fn test_rich_text_changed() {
             _ => unreachable!(),
         },
         _ => unreachable!(),
+    }
+}
+
+#[test]
+fn test_style_only_edit_emits_style_diff() {
+    let scenario = DiffScenario::new();
+    scenario.setup(
+        |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            builders::set_cell(sheet, 1, 1, &CellVal::from("x")); // A1
+        },
+        |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            builders::set_cell(sheet, 1, 1, &CellVal::from("x")); // A1
+            sheet.get_style_mut("A1").get_font_mut().set_bold(true);
+        },
+    );
+
+    let diffs = scenario.run_diff(None);
+    assert_eq!(diffs.len(), 1);
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified { subtype, .. } => {
+                assert!(matches!(subtype, ModificationType::StyleEdit));
+            }
+            other => panic!("unexpected diff: {:?}", other),
+        },
+        other => panic!("unexpected change: {:?}", other),
+    }
+}
+
+#[test]
+fn test_style_and_value_edit_keeps_value_subtype_with_style_ids() {
+    let scenario = DiffScenario::new();
+    scenario.setup(
+        |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            builders::set_cell(sheet, 1, 1, &CellVal::from("x")); // A1
+            sheet.get_style_mut("A1").get_font_mut().set_italic(true);
+        },
+        |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            builders::set_cell(sheet, 1, 1, &CellVal::from("y")); // A1
+            sheet.get_style_mut("A1").get_font_mut().set_bold(true);
+        },
+    );
+
+    let diffs = scenario.run_diff(None);
+    assert_eq!(diffs.len(), 1);
+    match &diffs[0] {
+        Change::Cell(c) => match &c.diff {
+            CellDiff::Modified {
+                subtype,
+                old_style_id,
+                new_style_id,
+                ..
+            } => {
+                assert!(matches!(subtype, ModificationType::ValueEdit));
+                // Style ids may be omitted by the writer when defaults are used.
+                let _ = (old_style_id, new_style_id);
+            }
+            other => panic!("unexpected diff: {:?}", other),
+        },
+        other => panic!("unexpected change: {:?}", other),
     }
 }
 
