@@ -536,6 +536,24 @@ fill_direction: down, right, both (default both)."
             .map_err(to_mcp_error)
     }
 
+    #[tool(
+        name = "structure_batch",
+        description = "Apply structural edits to a fork (rows/cols/sheets). \
+Mode: preview or apply (default apply). Note: structural edits may not fully rewrite formulas/named ranges like Excel; \
+run recalculate and review get_changeset after applying."
+    )]
+    pub async fn structure_batch(
+        &self,
+        Parameters(params): Parameters<tools::fork::StructureBatchParams>,
+    ) -> Result<Json<tools::fork::StructureBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("structure_batch")
+            .map_err(to_mcp_error)?;
+        tools::fork::structure_batch(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
     pub async fn get_edits(
         &self,
