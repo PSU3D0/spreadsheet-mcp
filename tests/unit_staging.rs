@@ -109,4 +109,3 @@ async fn test_staged_change_cap_eviction() -> Result<()> {
     registry.discard_fork(&fork_id)?;
     Ok(())
 }
-

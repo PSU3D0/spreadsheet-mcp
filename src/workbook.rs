@@ -214,6 +214,14 @@ impl WorkbookContext {
         Ok(func(sheet))
     }
 
+    pub fn with_spreadsheet<T, F>(&self, func: F) -> Result<T>
+    where
+        F: FnOnce(&Spreadsheet) -> T,
+    {
+        let book = self.spreadsheet.read();
+        Ok(func(&book))
+    }
+
     pub fn formula_graph(&self, sheet_name: &str) -> Result<FormulaGraph> {
         self.with_sheet(sheet_name, |sheet| {
             FormulaGraph::build(sheet, &self.formula_atlas)

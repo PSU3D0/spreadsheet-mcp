@@ -49,20 +49,21 @@ async fn test_sheet_styles_reports_descriptors_in_docker() -> Result<()> {
 #[tokio::test]
 async fn test_sheet_styles_truncates_large_style_counts_in_docker() -> Result<()> {
     let test = McpTestClient::new();
-    test.workspace().create_workbook("many_styles.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        for i in 0..205u32 {
-            let row = i + 1;
-            let addr = format!("A{row}");
-            sheet.get_cell_mut(addr.as_str()).set_value_number(i as i32);
-            let color = format!("FF{:02X}0000", (i % 256) as u8);
-            sheet
-                .get_style_mut(addr.as_str())
-                .get_font_mut()
-                .get_color_mut()
-                .set_argb(color);
-        }
-    });
+    test.workspace()
+        .create_workbook("many_styles.xlsx", |book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+            for i in 0..205u32 {
+                let row = i + 1;
+                let addr = format!("A{row}");
+                sheet.get_cell_mut(addr.as_str()).set_value_number(i as i32);
+                let color = format!("FF{:02X}0000", (i % 256) as u8);
+                sheet
+                    .get_style_mut(addr.as_str())
+                    .get_font_mut()
+                    .get_color_mut()
+                    .set_argb(color);
+            }
+        });
 
     let client = test.connect().await?;
     let workbooks = extract_json(

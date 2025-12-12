@@ -8,10 +8,11 @@ use crate::support::mcp::{McpTestClient, call_tool, extract_json};
 #[tokio::test]
 async fn test_style_batch_apply_emits_style_diff_in_docker() -> Result<()> {
     let test = McpTestClient::new();
-    test.workspace().create_workbook("style_batch.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        sheet.get_cell_mut("A1").set_value("x");
-    });
+    test.workspace()
+        .create_workbook("style_batch.xlsx", |book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+            sheet.get_cell_mut("A1").set_value("x");
+        });
 
     let client = test.connect().await?;
     let workbooks = extract_json(
@@ -23,7 +24,10 @@ async fn test_style_batch_apply_emits_style_diff_in_docker() -> Result<()> {
 
     let fork = extract_json(
         &client
-            .call_tool(call_tool("create_fork", json!({ "workbook_id": workbook_id })))
+            .call_tool(call_tool(
+                "create_fork",
+                json!({ "workbook_id": workbook_id }),
+            ))
             .await?,
     )?;
     let fork_id = fork["fork_id"].as_str().unwrap();
@@ -83,7 +87,10 @@ async fn test_style_batch_large_range_counts_in_docker() -> Result<()> {
 
     let fork = extract_json(
         &client
-            .call_tool(call_tool("create_fork", json!({ "workbook_id": workbook_id })))
+            .call_tool(call_tool(
+                "create_fork",
+                json!({ "workbook_id": workbook_id }),
+            ))
             .await?,
     )?;
     let fork_id = fork["fork_id"].as_str().unwrap();

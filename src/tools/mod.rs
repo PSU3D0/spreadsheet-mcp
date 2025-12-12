@@ -1708,6 +1708,256 @@ pub async fn scan_volatiles(
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorkbookStyleSummaryParams {
+    pub workbook_id: WorkbookId,
+    pub max_styles: Option<u32>,
+    pub max_conditional_formats: Option<u32>,
+    pub max_cells_scan: Option<u32>,
+}
+
+#[derive(Debug)]
+struct WorkbookStyleAccum {
+    descriptor: StyleDescriptor,
+    occurrences: u32,
+    tags: HashSet<String>,
+    example_cells: Vec<String>,
+}
+
+impl WorkbookStyleAccum {
+    fn new(descriptor: StyleDescriptor) -> Self {
+        Self {
+            descriptor,
+            occurrences: 0,
+            tags: HashSet::new(),
+            example_cells: Vec::new(),
+        }
+    }
+}
+
+pub async fn workbook_style_summary(
+    state: Arc<AppState>,
+    params: WorkbookStyleSummaryParams,
+) -> Result<WorkbookStyleSummaryResponse> {
+    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let sheet_names = workbook.sheet_names();
+
+    const STYLE_EXAMPLE_LIMIT: usize = 5;
+    const STYLE_LIMIT_DEFAULT: usize = 200;
+    const CF_LIMIT_DEFAULT: usize = 200;
+    const CELL_SCAN_LIMIT_DEFAULT: usize = 500_000;
+
+    let style_limit = params
+        .max_styles
+        .map(|v| v as usize)
+        .unwrap_or(STYLE_LIMIT_DEFAULT);
+    let cf_limit = params
+        .max_conditional_formats
+        .map(|v| v as usize)
+        .unwrap_or(CF_LIMIT_DEFAULT);
+    let cell_scan_limit = params
+        .max_cells_scan
+        .map(|v| v as usize)
+        .unwrap_or(CELL_SCAN_LIMIT_DEFAULT);
+
+    let mut acc: HashMap<String, WorkbookStyleAccum> = HashMap::new();
+    let mut scanned_cells: usize = 0;
+    let mut scan_truncated = false;
+
+    for sheet_name in &sheet_names {
+        if scan_truncated {
+            break;
+        }
+        workbook.with_sheet(sheet_name, |sheet| {
+            for cell in sheet.get_cell_collection() {
+                if scanned_cells >= cell_scan_limit {
+                    scan_truncated = true;
+                    break;
+                }
+                scanned_cells += 1;
+
+                let address = cell.get_coordinate().get_coordinate().to_string();
+                let descriptor = crate::styles::descriptor_from_style(cell.get_style());
+                let style_id = crate::styles::stable_style_id(&descriptor);
+
+                let entry = acc
+                    .entry(style_id.clone())
+                    .or_insert_with(|| WorkbookStyleAccum::new(descriptor.clone()));
+                entry.occurrences += 1;
+                if entry.example_cells.len() < STYLE_EXAMPLE_LIMIT {
+                    entry.example_cells.push(format!("{sheet_name}!{address}"));
+                }
+
+                if let Some((_, tagging)) = crate::analysis::style::tag_cell(cell) {
+                    for tag in tagging.tags {
+                        entry.tags.insert(tag);
+                    }
+                }
+            }
+        })?;
+    }
+
+    let total_styles = acc.len() as u32;
+    let mut styles: Vec<WorkbookStyleUsage> = acc
+        .into_iter()
+        .map(|(style_id, entry)| {
+            let mut tags: Vec<String> = entry.tags.into_iter().collect();
+            tags.sort();
+            WorkbookStyleUsage {
+                style_id,
+                occurrences: entry.occurrences,
+                tags,
+                example_cells: entry.example_cells,
+                descriptor: Some(entry.descriptor),
+            }
+        })
+        .collect();
+
+    styles.sort_by(|a, b| {
+        b.occurrences
+            .cmp(&a.occurrences)
+            .then_with(|| a.style_id.cmp(&b.style_id))
+    });
+
+    let inferred_default_style_id = styles.first().map(|s| s.style_id.clone());
+    let mut inferred_default_font = styles
+        .first()
+        .and_then(|s| s.descriptor.as_ref().and_then(|d| d.font.clone()));
+
+    let styles_truncated = if styles.len() > style_limit {
+        styles.truncate(style_limit);
+        true
+    } else {
+        false
+    };
+
+    let theme = workbook.with_spreadsheet(|book| {
+        let theme = book.get_theme();
+        let elements = theme.get_theme_elements();
+        let scheme = elements.get_color_scheme();
+        let mut colors = BTreeMap::new();
+
+        let mut insert_color = |name: &str, value: String| {
+            if !value.trim().is_empty() {
+                colors.insert(name.to_string(), value);
+            }
+        };
+
+        insert_color("dk1", scheme.get_dk1().get_val());
+        insert_color("lt1", scheme.get_lt1().get_val());
+        insert_color("dk2", scheme.get_dk2().get_val());
+        insert_color("lt2", scheme.get_lt2().get_val());
+        insert_color("accent1", scheme.get_accent1().get_val());
+        insert_color("accent2", scheme.get_accent2().get_val());
+        insert_color("accent3", scheme.get_accent3().get_val());
+        insert_color("accent4", scheme.get_accent4().get_val());
+        insert_color("accent5", scheme.get_accent5().get_val());
+        insert_color("accent6", scheme.get_accent6().get_val());
+        insert_color("hlink", scheme.get_hlink().get_val());
+        insert_color("fol_hlink", scheme.get_fol_hlink().get_val());
+
+        let font_scheme = elements.get_font_scheme();
+        let major = font_scheme.get_major_font();
+        let minor = font_scheme.get_minor_font();
+        let font_scheme_summary = ThemeFontSchemeSummary {
+            major_latin: Some(major.get_latin_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+            major_east_asian: Some(major.get_east_asian_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+            major_complex_script: Some(major.get_complex_script_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+            minor_latin: Some(minor.get_latin_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+            minor_east_asian: Some(minor.get_east_asian_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+            minor_complex_script: Some(minor.get_complex_script_font().get_typeface().to_string())
+                .filter(|s| !s.trim().is_empty()),
+        };
+
+        ThemeSummary {
+            name: Some(theme.get_name().to_string()).filter(|s| !s.trim().is_empty()),
+            colors,
+            font_scheme: font_scheme_summary,
+        }
+    })?;
+
+    if inferred_default_font.is_none()
+        && let Some(name) = theme
+            .font_scheme
+            .minor_latin
+            .clone()
+            .or_else(|| theme.font_scheme.major_latin.clone())
+    {
+        inferred_default_font = Some(FontDescriptor {
+            name: Some(name),
+            size: None,
+            bold: None,
+            italic: None,
+            underline: None,
+            strikethrough: None,
+            color: None,
+        });
+    }
+
+    let mut conditional_formats: Vec<ConditionalFormatSummary> = Vec::new();
+    let mut conditional_formats_truncated = false;
+    {
+        use umya_spreadsheet::structs::EnumTrait;
+        for sheet_name in &sheet_names {
+            if conditional_formats_truncated {
+                break;
+            }
+            workbook.with_sheet(sheet_name, |sheet| {
+                for cf in sheet.get_conditional_formatting_collection() {
+                    if conditional_formats.len() >= cf_limit {
+                        conditional_formats_truncated = true;
+                        break;
+                    }
+                    let range = cf.get_sequence_of_references().get_sqref().to_string();
+                    let mut types: HashSet<String> = HashSet::new();
+                    for rule in cf.get_conditional_collection() {
+                        types.insert(rule.get_type().get_value_string().to_string());
+                    }
+                    let mut rule_types: Vec<String> = types.into_iter().collect();
+                    rule_types.sort();
+                    conditional_formats.push(ConditionalFormatSummary {
+                        sheet_name: sheet_name.clone(),
+                        range,
+                        rule_types,
+                        rule_count: cf.get_conditional_collection().len() as u32,
+                    });
+                }
+            })?;
+        }
+    }
+
+    let mut notes: Vec<String> = Vec::new();
+    if scan_truncated {
+        notes.push(format!(
+            "Stopped scanning after {cell_scan_limit} cells; style counts may be incomplete."
+        ));
+    }
+    notes.push(
+        "Named styles are not directly exposed by umya-spreadsheet; styles here are inferred from cell formatting."
+            .to_string(),
+    );
+
+    Ok(WorkbookStyleSummaryResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        theme: Some(theme),
+        inferred_default_style_id,
+        inferred_default_font,
+        styles,
+        total_styles,
+        styles_truncated,
+        conditional_formats,
+        conditional_formats_truncated,
+        scan_truncated,
+        notes,
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetStylesParams {
     pub workbook_id: WorkbookId,
     pub sheet_name: String,

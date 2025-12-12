@@ -290,7 +290,9 @@ fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
 }
 
 fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
-    use crate::styles::{StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id};
+    use crate::styles::{
+        StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id,
+    };
 
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
@@ -305,7 +307,12 @@ fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyRes
             .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
         sheets.insert(op.sheet_name.clone());
 
-        let op_mode = match op.op_mode.as_deref().unwrap_or("merge").to_ascii_lowercase().as_str()
+        let op_mode = match op
+            .op_mode
+            .as_deref()
+            .unwrap_or("merge")
+            .to_ascii_lowercase()
+            .as_str()
         {
             "set" => StylePatchMode::Set,
             "clear" => StylePatchMode::Clear,
@@ -863,9 +870,8 @@ pub async fn apply_staged_change(
     for op in &staged.ops {
         match op.kind.as_str() {
             "edit_batch" => {
-                let payload: EditBatchStagedPayload =
-                    serde_json::from_value(op.payload.clone())
-                        .map_err(|e| anyhow!("invalid edit_batch payload: {}", e))?;
+                let payload: EditBatchStagedPayload = serde_json::from_value(op.payload.clone())
+                    .map_err(|e| anyhow!("invalid edit_batch payload: {}", e))?;
 
                 let edits_to_apply: Vec<_> = payload
                     .edits

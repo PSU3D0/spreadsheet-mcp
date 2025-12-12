@@ -4,7 +4,8 @@ use crate::model::{
     ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
     SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
     SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse, WorkbookSummaryResponse,
+    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    WorkbookSummaryResponse,
 };
 use crate::state::AppState;
 use crate::tools;
@@ -419,6 +420,22 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "workbook_style_summary",
+        description = "Summarise style usage, theme colors, and conditional formats across a workbook"
+    )]
+    pub async fn workbook_style_summary(
+        &self,
+        Parameters(params): Parameters<tools::WorkbookStyleSummaryParams>,
+    ) -> Result<Json<WorkbookStyleSummaryResponse>, McpError> {
+        self.ensure_tool_enabled("workbook_style_summary")
+            .map_err(to_mcp_error)?;
+        tools::workbook_style_summary(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
         name = "get_manifest_stub",
         description = "Generate manifest scaffold for workbook"
     )]
@@ -616,7 +633,10 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             .map_err(to_mcp_error)
     }
 
-    #[tool(name = "restore_checkpoint", description = "Restore a fork to a checkpoint")]
+    #[tool(
+        name = "restore_checkpoint",
+        description = "Restore a fork to a checkpoint"
+    )]
     pub async fn restore_checkpoint(
         &self,
         Parameters(params): Parameters<tools::fork::RestoreCheckpointParams>,
@@ -629,7 +649,10 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             .map_err(to_mcp_error)
     }
 
-    #[tool(name = "delete_checkpoint", description = "Delete a checkpoint from a fork")]
+    #[tool(
+        name = "delete_checkpoint",
+        description = "Delete a checkpoint from a fork"
+    )]
     pub async fn delete_checkpoint(
         &self,
         Parameters(params): Parameters<tools::fork::DeleteCheckpointParams>,
@@ -642,7 +665,10 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             .map_err(to_mcp_error)
     }
 
-    #[tool(name = "list_staged_changes", description = "List previewed/staged changes for a fork")]
+    #[tool(
+        name = "list_staged_changes",
+        description = "List previewed/staged changes for a fork"
+    )]
     pub async fn list_staged_changes(
         &self,
         Parameters(params): Parameters<tools::fork::ListStagedChangesParams>,
@@ -655,7 +681,10 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             .map_err(to_mcp_error)
     }
 
-    #[tool(name = "apply_staged_change", description = "Apply a staged change to a fork")]
+    #[tool(
+        name = "apply_staged_change",
+        description = "Apply a staged change to a fork"
+    )]
     pub async fn apply_staged_change(
         &self,
         Parameters(params): Parameters<tools::fork::ApplyStagedChangeParams>,

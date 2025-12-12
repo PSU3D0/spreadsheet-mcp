@@ -1,7 +1,7 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::FillDescriptor;
 use spreadsheet_mcp::tools::{
-    list_workbooks, sheet_styles, ListWorkbooksParams, SheetStylesParams,
+    ListWorkbooksParams, SheetStylesParams, list_workbooks, sheet_styles,
 };
 use umya_spreadsheet::{
     GradientStop, HorizontalAlignmentValues, NumberingFormat, PatternValues,
@@ -34,8 +34,12 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
             borders.get_top_border_mut().set_border_style("thin");
             borders.get_bottom_border_mut().set_border_style("thin");
         }
-        style_a1.get_alignment_mut().set_horizontal(HorizontalAlignmentValues::Center);
-        style_a1.get_alignment_mut().set_vertical(VerticalAlignmentValues::Top);
+        style_a1
+            .get_alignment_mut()
+            .set_horizontal(HorizontalAlignmentValues::Center);
+        style_a1
+            .get_alignment_mut()
+            .set_vertical(VerticalAlignmentValues::Top);
         style_a1.get_alignment_mut().set_wrap_text(true);
         style_a1
             .get_number_format_mut()

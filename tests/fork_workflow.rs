@@ -531,7 +531,7 @@ async fn test_save_fork_to_new_path() -> Result<()> {
     assert!(save_response.saved_to.contains("copy.xlsx"));
 
     // Verify original is unchanged
-    let original_book = umya_spreadsheet::reader::xlsx::read(&workspace.path("original.xlsx"))?;
+    let original_book = umya_spreadsheet::reader::xlsx::read(workspace.path("original.xlsx"))?;
     let original_value = original_book
         .get_sheet_by_name("Data")
         .unwrap()
@@ -541,7 +541,7 @@ async fn test_save_fork_to_new_path() -> Result<()> {
     assert_eq!(original_value, "1");
 
     // Verify copy has changes
-    let copy_book = umya_spreadsheet::reader::xlsx::read(&workspace.path("copy.xlsx"))?;
+    let copy_book = umya_spreadsheet::reader::xlsx::read(workspace.path("copy.xlsx"))?;
     let copy_value = copy_book
         .get_sheet_by_name("Data")
         .unwrap()
@@ -630,7 +630,7 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
 
     // Verify the saved file
     let saved_book =
-        umya_spreadsheet::reader::xlsx::read(&workspace.path("workflow_updated.xlsx"))?;
+        umya_spreadsheet::reader::xlsx::read(workspace.path("workflow_updated.xlsx"))?;
     let saved_value = saved_book
         .get_sheet_by_name("Budget")
         .unwrap()
