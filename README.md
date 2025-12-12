@@ -57,11 +57,26 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `create_fork` | Create a temporary editable copy for "what-if" analysis |
 | `edit_batch` | Apply values or formulas to cells in a fork |
 | `recalculate` | Trigger LibreOffice to update formula results |
+| `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
 | `get_edits` | List all edits applied to a fork |
 | `list_forks` | List all active forks |
 | `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
 | `discard_fork` | Delete the temporary fork |
+
+### Screenshot Tool
+
+`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshots/` in the workspace; the tool returns a `file://` URI.
+
+Arguments:
+- `workbook_id` (required)
+- `sheet_name` (required)
+- `range` (optional, default `A1:M40`)
+
+Limits and behavior:
+- Max range per screenshot: **100 rows × 30 columns**. If exceeded, the tool fails with suggested tiled sub‑ranges to request instead.
+- After export/crop, a pixel guard rejects images that are too large for reliable agent use (default max **4096px** on a side or **12MP** area). On rejection, the tool returns smaller range suggestions.
+- Override pixel guard via env vars: `SPREADSHEET_MCP_MAX_PNG_DIM_PX`, `SPREADSHEET_MCP_MAX_PNG_AREA_PX`.
 
 See [docs/RECALC.md](docs/RECALC.md) for architecture details.
 
@@ -330,3 +345,4 @@ This ensures you're always testing against your latest code changes without manu
 - **XLSX supported for write**; `.xls`/`.xlsb` are read-only
 - Bounded in-memory cache honors `cache_capacity`
 - Prefer region-scoped reads and sampling for token/latency efficiency
+- `screenshot_sheet` requires write/recalc support and is capped to 100×30 cells per image (with split suggestions).
