@@ -61,6 +61,10 @@ WORKFLOW:
 5) save_fork: Write changes to file.
 6) discard_fork: Delete fork without saving.
 
+SAFETY:
+- checkpoint_fork before large/structural edits; restore_checkpoint to rollback if needed.
+- Preview-based tools (future) will create staged changes; use apply_staged_change or discard_staged_change.
+
 TOOL DETAILS:
 - create_fork: Only .xlsx supported. Returns fork_id for subsequent operations.
 - edit_batch: {fork_id, sheet_name, edits:[{address, value, is_formula}]}. \
@@ -79,6 +83,13 @@ Use drop_fork=false to keep fork active after saving (default: true drops fork).
 Validates base file unchanged since fork creation.
 - get_edits: List all edits applied to a fork (before recalculate).
 - list_forks: See all active forks.
+- checkpoint_fork: Snapshot a fork to a checkpoint for high-fidelity undo.
+- list_checkpoints: List checkpoints for a fork.
+- restore_checkpoint: Restore a fork to a checkpoint (overwrites fork file; clears newer staged changes).
+- delete_checkpoint: Delete a checkpoint.
+- list_staged_changes: List staged (previewed) changes for a fork.
+- apply_staged_change: Apply a staged change to the fork.
+- discard_staged_change: Discard a staged change.
 
 BEST PRACTICES:
 - Always recalculate after edit_batch before get_changeset.
@@ -560,9 +571,106 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "checkpoint_fork",
+        description = "Create a high-fidelity checkpoint snapshot of a fork"
+    )]
+    pub async fn checkpoint_fork(
+        &self,
+        Parameters(params): Parameters<tools::fork::CheckpointForkParams>,
+    ) -> Result<Json<tools::fork::CheckpointForkResponse>, McpError> {
+        self.ensure_recalc_enabled("checkpoint_fork")
+            .map_err(to_mcp_error)?;
+        tools::fork::checkpoint_fork(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "list_checkpoints", description = "List checkpoints for a fork")]
+    pub async fn list_checkpoints(
+        &self,
+        Parameters(params): Parameters<tools::fork::ListCheckpointsParams>,
+    ) -> Result<Json<tools::fork::ListCheckpointsResponse>, McpError> {
+        self.ensure_recalc_enabled("list_checkpoints")
+            .map_err(to_mcp_error)?;
+        tools::fork::list_checkpoints(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "restore_checkpoint", description = "Restore a fork to a checkpoint")]
+    pub async fn restore_checkpoint(
+        &self,
+        Parameters(params): Parameters<tools::fork::RestoreCheckpointParams>,
+    ) -> Result<Json<tools::fork::RestoreCheckpointResponse>, McpError> {
+        self.ensure_recalc_enabled("restore_checkpoint")
+            .map_err(to_mcp_error)?;
+        tools::fork::restore_checkpoint(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "delete_checkpoint", description = "Delete a checkpoint from a fork")]
+    pub async fn delete_checkpoint(
+        &self,
+        Parameters(params): Parameters<tools::fork::DeleteCheckpointParams>,
+    ) -> Result<Json<tools::fork::DeleteCheckpointResponse>, McpError> {
+        self.ensure_recalc_enabled("delete_checkpoint")
+            .map_err(to_mcp_error)?;
+        tools::fork::delete_checkpoint(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "list_staged_changes", description = "List previewed/staged changes for a fork")]
+    pub async fn list_staged_changes(
+        &self,
+        Parameters(params): Parameters<tools::fork::ListStagedChangesParams>,
+    ) -> Result<Json<tools::fork::ListStagedChangesResponse>, McpError> {
+        self.ensure_recalc_enabled("list_staged_changes")
+            .map_err(to_mcp_error)?;
+        tools::fork::list_staged_changes(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(name = "apply_staged_change", description = "Apply a staged change to a fork")]
+    pub async fn apply_staged_change(
+        &self,
+        Parameters(params): Parameters<tools::fork::ApplyStagedChangeParams>,
+    ) -> Result<Json<tools::fork::ApplyStagedChangeResponse>, McpError> {
+        self.ensure_recalc_enabled("apply_staged_change")
+            .map_err(to_mcp_error)?;
+        tools::fork::apply_staged_change(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "discard_staged_change",
+        description = "Discard a staged change without applying it"
+    )]
+    pub async fn discard_staged_change(
+        &self,
+        Parameters(params): Parameters<tools::fork::DiscardStagedChangeParams>,
+    ) -> Result<Json<tools::fork::DiscardStagedChangeResponse>, McpError> {
+        self.ensure_recalc_enabled("discard_staged_change")
+            .map_err(to_mcp_error)?;
+        tools::fork::discard_staged_change(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
         name = "screenshot_sheet",
         description = "Capture a visual screenshot of a spreadsheet region as PNG. \
-Returns file URI. Max range: 100 rows x 30 columns. Default: A1:M40."
+	Returns file URI. Max range: 100 rows x 30 columns. Default: A1:M40."
     )]
     pub async fn screenshot_sheet(
         &self,
