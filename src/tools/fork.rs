@@ -2432,8 +2432,6 @@ pub struct ScreenshotSheetParams {
     pub sheet_name: String,
     #[serde(default)]
     pub range: Option<String>,
-    #[serde(default)]
-    pub return_image: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -66,9 +66,7 @@ async fn screenshot_ok_inline(
             json!({
                 "workbook_id": workbook_id,
                 "sheet_name": sheet_name,
-                "range": range,
-                "return_image": true
-            }),
+                "range": range            }),
         ))
         .await?;
 
