@@ -1,6 +1,6 @@
 [package]
 name = "spreadsheet-mcp"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "An MCP server that lets LLM agents explore and edit spreadsheet workbooks"
 authors = ["Frankie Colson"]
