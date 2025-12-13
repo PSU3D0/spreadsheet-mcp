@@ -76,10 +76,9 @@ May take several seconds for complex workbooks.
 - get_changeset: Returns cell-level diffs with modification types: \
 ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
 Use sheet_name param to filter to specific sheet.
-- screenshot_sheet: {workbook_id, sheet_name, range?, return_image?}. Renders a cropped PNG for inspecting an area visually.
+- screenshot_sheet: {workbook_id, sheet_name, range?}. Renders a cropped PNG for inspecting an area visually.
   workbook_id may be either a real workbook_id OR a fork_id (to screenshot an edited fork).
-  Prefer return_image=true to receive the PNG in the tool response.
-  If return_image=false, the PNG is written under workspace_root/screenshots/ (Docker default: /data/screenshots/).
+  The PNG is returned directly in the tool response, and also written under workspace_root/screenshots/ (Docker default: /data/screenshots/).
   DO NOT call save_fork just to get a screenshot.
   If formulas changed, run recalculate on the fork first.
 - save_fork: Requires target_path for new file location.
@@ -100,7 +99,7 @@ Use sheet_name param to filter to specific sheet.
 BEST PRACTICES:
 - Always recalculate after edit_batch before get_changeset.
 - Review changeset before save_fork to verify expected changes.
-- Use screenshot_sheet(return_image=true) for quick visual inspection; save_fork is ONLY for exporting a workbook file.
+- Use screenshot_sheet for quick visual inspection; save_fork is ONLY for exporting a workbook file.
 - Discard forks when done to free resources (auto-cleanup after 1 hour).
 - For large edits, batch multiple cells in single edit_batch call.";
 
@@ -771,27 +770,22 @@ run recalculate and review get_changeset after applying."
         self.ensure_recalc_enabled("screenshot_sheet")
             .map_err(to_mcp_error)?;
 
-        let return_image = params.return_image;
         let response = tools::fork::screenshot_sheet(self.state.clone(), params)
             .await
             .map_err(to_mcp_error)?;
 
         let mut content = Vec::new();
 
-        if return_image {
-            let fs_path = response
-                .output_path
-                .strip_prefix("file://")
-                .ok_or_else(|| {
-                    to_mcp_error(anyhow::anyhow!("unexpected screenshot output_path"))
-                })?;
-            let bytes = tokio::fs::read(fs_path)
-                .await
-                .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to read screenshot: {}", e)))?;
+        let fs_path = response
+            .output_path
+            .strip_prefix("file://")
+            .ok_or_else(|| to_mcp_error(anyhow::anyhow!("unexpected screenshot output_path")))?;
+        let bytes = tokio::fs::read(fs_path)
+            .await
+            .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to read screenshot: {}", e)))?;
 
-            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-            content.push(Content::image(data, "image/png"));
-        }
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        content.push(Content::image(data, "image/png"));
 
         // Always include a small text hint for clients that ignore structured_content.
         content.push(Content::text(response.output_path.clone()));
