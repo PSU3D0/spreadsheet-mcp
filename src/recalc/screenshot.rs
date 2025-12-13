@@ -44,6 +44,24 @@ impl ScreenshotExecutor {
         let file_url = format!("file://{}", abs_path.display());
         let range_arg = range.unwrap_or("A1:M40");
 
+        fn truncate_for_log(s: &str, max_bytes: usize) -> String {
+            if s.len() <= max_bytes {
+                return s.to_string();
+            }
+
+            // Keep it cheap; best-effort to not cut mid-char.
+            let mut end = max_bytes;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...[truncated]", &s[..end])
+        }
+
+        struct SofficeLogs {
+            stdout: String,
+            stderr: String,
+        }
+
         let run_macro = |macro_uri: String| async move {
             let macro_result = time::timeout(
                 self.timeout,
@@ -65,9 +83,22 @@ impl ScreenshotExecutor {
             .map_err(|_| anyhow!("soffice timed out after {:?}", self.timeout))
             .and_then(|res| res.map_err(|e| anyhow!("failed to spawn soffice: {}", e)))?;
 
+            // LibreOffice Basic errors often land in stderr, but the process can still exit 0.
+            // Capture stdout/stderr even on success so we can surface it on downstream failures.
+            let stdout_raw = String::from_utf8_lossy(&macro_result.stdout);
+            let stderr_raw = String::from_utf8_lossy(&macro_result.stderr);
+            let stdout = truncate_for_log(stdout_raw.trim(), 16 * 1024);
+            let stderr = truncate_for_log(stderr_raw.trim(), 16 * 1024);
+
+            if !stdout.is_empty() || !stderr.is_empty() {
+                tracing::debug!(
+                    soffice_stdout = %stdout,
+                    soffice_stderr = %stderr,
+                    "soffice screenshot macro output"
+                );
+            }
+
             if !macro_result.status.success() {
-                let stderr = String::from_utf8_lossy(&macro_result.stderr);
-                let stdout = String::from_utf8_lossy(&macro_result.stdout);
                 return Err(anyhow!(
                     "soffice screenshot macro failed (exit {}): stderr={}, stdout={}",
                     macro_result.status.code().unwrap_or(-1),
@@ -76,7 +107,7 @@ impl ScreenshotExecutor {
                 ));
             }
 
-            Ok(())
+            Ok(SofficeLogs { stdout, stderr })
         };
 
         let pdf_output_path = output_path.with_extension("pdf");
@@ -88,12 +119,14 @@ impl ScreenshotExecutor {
             range_arg
         );
 
-        run_macro(macro_uri_pdf).await?;
+        let macro_logs = run_macro(macro_uri_pdf).await?;
 
         fs::metadata(&pdf_output_path).await.map_err(|_| {
             anyhow!(
-                "screenshot PDF output file not created at {}",
-                pdf_output_path.display()
+                "screenshot PDF output file not created at {} (soffice stderr={}, stdout={})",
+                pdf_output_path.display(),
+                macro_logs.stderr,
+                macro_logs.stdout
             )
         })?;
 

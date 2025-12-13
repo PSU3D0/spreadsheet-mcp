@@ -12,16 +12,25 @@ Sub RecalculateAndSave(sPath As String)
     Dim doc As Object
     doc = desktop.loadComponentFromURL(ConvertToURL(sPath), "_blank", 0, args())
 
-    If IsNull(doc) Or IsEmpty(doc) Then
-        Exit Sub
-    End If
+    If IsNull(doc) Or IsEmpty(doc) Then Exit Sub
 
     doc.calculateAll()
     doc.store()
     doc.close(True)
 End Sub
 
+' --- NEW: clear print areas on all sheets (prevents “sheet 0 wins” behavior) ---
+Sub ClearAllPrintAreas(oDoc As Object)
+    Dim oSheets As Object, i As Long
+    oSheets = oDoc.getSheets()
+    For i = 0 To oSheets.getCount() - 1
+        oSheets.getByIndex(i).setPrintAreas(Array())
+    Next i
+End Sub
+
 Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As String, sRange As String)
+    On Error GoTo EH
+
     Dim desktop As Object
     desktop = CreateUnoService("com.sun.star.frame.Desktop")
 
@@ -31,10 +40,7 @@ Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As 
 
     Dim doc As Object
     doc = desktop.loadComponentFromURL(ConvertToURL(sInputPath), "_blank", 0, args())
-
-    If IsNull(doc) Or IsEmpty(doc) Then
-        Exit Sub
-    End If
+    If IsNull(doc) Or IsEmpty(doc) Then Exit Sub
 
     Dim oSheets As Object
     oSheets = doc.getSheets()
@@ -45,11 +51,13 @@ Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As 
 
     Dim oSheet As Object
     oSheet = oSheets.getByName(sSheetName)
-    
+
+    ' Make the target sheet active
     Dim oController As Object
     oController = doc.getCurrentController()
     oController.setActiveSheet(oSheet)
 
+    ' Pick range (or default)
     Dim oRange As Object
     If sRange &lt;&gt; "" Then
         oRange = oSheet.getCellRangeByName(sRange)
@@ -57,13 +65,19 @@ Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As 
         oRange = oSheet.getCellRangeByName("A1:M40")
     End If
 
-    Dim oPageStyle As Object
-    Dim sStyleName As String
+    ' --- CRITICAL: ensure only THIS sheet has a print area ---
+    ClearAllPrintAreas(doc)
+
+    Dim aPrintAreas(0) As New com.sun.star.table.CellRangeAddress
+    aPrintAreas(0) = oRange.getRangeAddress()
+    oSheet.setPrintAreas(aPrintAreas())
+
+    ' Optional: tighten page style to reduce whitespace
+    Dim oPageStyle As Object, sStyleName As String
     sStyleName = oSheet.PageStyle
     oPageStyle = doc.StyleFamilies.getByName("PageStyles").getByName(sStyleName)
     oPageStyle.PrintHeaders = True
     oPageStyle.PrintGrid = True
-    ' Fit print area to a single page and remove margins to reduce whitespace
     oPageStyle.ScaleToPages = 1
     oPageStyle.ScaleToPagesX = 1
     oPageStyle.ScaleToPagesY = 1
@@ -74,28 +88,64 @@ Sub ExportScreenshot(sInputPath As String, sOutputPath As String, sSheetName As 
     oPageStyle.HeaderIsOn = False
     oPageStyle.FooterIsOn = False
 
-    Dim aPrintAreas(0) As New com.sun.star.table.CellRangeAddress
-    aPrintAreas(0) = oRange.getRangeAddress()
-    oSheet.setPrintAreas(aPrintAreas())
-
-    ' Select range for SelectionOnly export (matches macro recorder behavior)
+    ' Select range (helps some export paths)
     oController.Select(oRange)
 
-    Dim aExportArgs(2) As New com.sun.star.beans.PropertyValue
-    aExportArgs(0).Name = "FilterName"
-    aExportArgs(0).Value = "calc_pdf_Export"
-    aExportArgs(1).Name = "FilterData"
-    aExportArgs(1).Value = Array( _
-        Array("Compression", 0, 9, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
-        Array("Interlaced", 0, 0, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
-        Array("Translucent", 0, 0, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
-        Array("PixelWidth", 0, 1920, com.sun.star.beans.PropertyState.DIRECT_VALUE), _
-        Array("PixelHeight", 0, 1080, com.sun.star.beans.PropertyState.DIRECT_VALUE) _
-    )
-    aExportArgs(2).Name = "SelectionOnly"
-    aExportArgs(2).Value = True
+    ' Decide export filter by output extension
+    Dim sOutLower As String
+    sOutLower = LCase(sOutputPath)
 
-    doc.storeToURL(ConvertToURL(sOutputPath), aExportArgs())
+    Dim sFilterName As String
+    If Right(sOutLower, 4) = ".png" Then
+        sFilterName = "calc_png_Export"
+    Else
+        ' default to PDF
+        sFilterName = "calc_pdf_Export"
+    End If
+
+    ' --- Build FilterData with explicit Selection to force correct sheet/range ---
+    If sFilterName = "calc_pdf_Export" Then
+        Dim filterDataPDF(0) As New com.sun.star.beans.PropertyValue
+        filterDataPDF(0).Name = "Selection"
+        filterDataPDF(0).Value = oRange   ' could also be oSheet for “whole sheet”
+
+        Dim aExportArgsPDF(2) As New com.sun.star.beans.PropertyValue
+        aExportArgsPDF(0).Name = "FilterName"
+        aExportArgsPDF(0).Value = sFilterName
+        aExportArgsPDF(1).Name = "FilterData"
+        aExportArgsPDF(1).Value = filterDataPDF()
+        aExportArgsPDF(2).Name = "SelectionOnly"
+        aExportArgsPDF(2).Value = True
+
+        doc.storeToURL(ConvertToURL(sOutputPath), aExportArgsPDF())
+
+    Else
+        ' PNG export: PixelWidth/PixelHeight etc belong here
+        Dim filterDataPNG(2) As New com.sun.star.beans.PropertyValue
+        filterDataPNG(0).Name = "Selection"
+        filterDataPNG(0).Value = oRange
+        filterDataPNG(1).Name = "PixelWidth"
+        filterDataPNG(1).Value = 1920
+        filterDataPNG(2).Name = "PixelHeight"
+        filterDataPNG(2).Value = 1080
+
+        Dim aExportArgsPNG(2) As New com.sun.star.beans.PropertyValue
+        aExportArgsPNG(0).Name = "FilterName"
+        aExportArgsPNG(0).Value = sFilterName
+        aExportArgsPNG(1).Name = "FilterData"
+        aExportArgsPNG(1).Value = filterDataPNG()
+        aExportArgsPNG(2).Name = "SelectionOnly"
+        aExportArgsPNG(2).Value = True
+
+        doc.storeToURL(ConvertToURL(sOutputPath), aExportArgsPNG())
+    End If
+
     doc.close(True)
+    Exit Sub
+
+EH:
+    On Error Resume Next
+    If Not IsNull(doc) Then doc.close(True)
 End Sub
+
 </script:module>

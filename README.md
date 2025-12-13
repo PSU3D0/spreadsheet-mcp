@@ -27,15 +27,17 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 | Tool | Purpose |
 | --- | --- |
-| `list_workbooks`, `list_sheets` | Discover targets and get sheet summaries |
-| `workbook_summary` | Region counts/kinds, named ranges, suggested entry points |
-| `sheet_overview` | Detected regions (bounds/id/kind/confidence), narrative, key ranges |
-| `find_value` | Value/label-mode lookup with region/table scoping, neighbors, row context |
-| `read_table` | Structured read (range/region/table/named range), headers, filters, sampling |
-| `table_profile` | Lightweight column profiling with samples and inferred types |
-| `range_values` | Minimal range fetch for spot checks |
-| `sheet_page` | Fallback pagination; supports `compact`/`values_only` |
-| `formula_trace` | Precedents/dependents with paging |
+| `list_workbooks`, `describe_workbook`, `list_sheets` | Discover workbooks/sheets and metadata |
+| `workbook_summary`, `sheet_overview` | Orientation + region detection |
+| `read_table`, `table_profile` | Structured reads and lightweight profiling |
+| `range_values`, `sheet_page` | Targeted spot checks / raw paging fallback |
+| `find_value`, `find_formula` | Search values/labels or formulas |
+| `sheet_statistics` | Quick sheet stats (density, nulls, duplicates hints) |
+| `sheet_formula_map`, `formula_trace`, `scan_volatiles` | Formula analysis and tracing |
+| `sheet_styles`, `workbook_style_summary` | Style inspection (sheet-scoped + workbook-wide) |
+| `named_ranges` | List defined names + tables |
+| `get_manifest_stub` | Generate manifest scaffold |
+| `close_workbook` | Evict workbook from cache |
 
 ## Write & Recalc Support
 
@@ -55,25 +57,30 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | Tool | Purpose |
 | --- | --- |
 | `create_fork` | Create a temporary editable copy for "what-if" analysis |
+| `checkpoint_fork`, `restore_checkpoint` | High-fidelity snapshot + rollback |
 | `edit_batch` | Apply values or formulas to cells in a fork |
+| `style_batch` | Batch style edits (range/region/cells) |
+| `apply_formula_pattern` | Autofill-like formula fill over a target range |
+| `structure_batch` | Batch structural edits (rows/cols/sheets + copy/move ranges) |
 | `recalculate` | Trigger LibreOffice to update formula results |
-| `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
-| `get_edits` | List all edits applied to a fork |
-| `list_forks` | List all active forks |
-| `checkpoint_fork` | Create a snapshot checkpoint for rollback |
-| `list_checkpoints` | List checkpoints for a fork |
-| `restore_checkpoint` | Restore a fork to a checkpoint |
-| `delete_checkpoint` | Delete a checkpoint |
-| `list_staged_changes` | List previewed/staged changes for a fork |
-| `apply_staged_change` | Apply a staged change |
-| `discard_staged_change` | Discard a staged change |
+| `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
 | `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
-| `discard_fork` | Delete the temporary fork |
+| `list_staged_changes`, `apply_staged_change`, `discard_staged_change` | Manage previewed/staged changes |
+| `get_edits`, `list_forks`, `discard_fork` | Inspect / list / discard forks |
+
+### Docker Paths (Exports + Screenshots)
+
+When running in Docker with `--workspace-root /data` and a host mount like `-v /path/to/workbooks:/data`:
+
+- Fork working files live under `/tmp/mcp-forks` inside the container (not visible on host).
+- `save_fork.target_path` is resolved under `workspace_root` (Docker default: `/data`).
+  Use a relative path like `out.xlsx` (or `exports/out.xlsx`) to write back into the mounted folder on the host.
+- `screenshot_sheet` writes PNGs under `screenshots/` in `workspace_root` (Docker default: `/data/screenshots/`).
 
 ### Screenshot Tool
 
-`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshots/` in the workspace; the tool returns a `file://` URI.
+`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshots/` in the workspace. Note: the tool returns a `file://` URI on the server filesystem; when running via Docker, treat it as a container path and look for the PNG under your mounted workspace folder (e.g. `screenshots/<name>.png`).
 
 Arguments:
 - `workbook_id` (required)

@@ -2554,6 +2554,7 @@ dependencies = [
  "assert_matches",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bollard",
  "chrono",
  "clap",

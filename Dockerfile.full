@@ -61,6 +61,9 @@ COPY docker/libreoffice/registrymodifications.xcu /root/.config/libreoffice/4/us
 COPY --from=builder /usr/local/bin/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 WORKDIR /data
+
+# Defaults so override/stdio runs still see mounted workspace.
+ENV SPREADSHEET_MCP_WORKSPACE=/data
 ENV SPREADSHEET_MCP_RECALC_ENABLED=true
 
 LABEL org.opencontainers.image.source="https://github.com/PSU3D0/spreadsheet-mcp"

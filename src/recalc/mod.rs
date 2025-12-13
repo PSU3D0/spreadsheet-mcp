@@ -35,6 +35,17 @@ impl GlobalRecalcLock {
     }
 }
 
+#[cfg(feature = "recalc")]
+#[derive(Clone)]
+pub struct GlobalScreenshotLock(pub Arc<Semaphore>);
+
+#[cfg(feature = "recalc")]
+impl GlobalScreenshotLock {
+    pub fn new() -> Self {
+        Self(Arc::new(Semaphore::new(1)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ExecutorStrategy {
     #[default]

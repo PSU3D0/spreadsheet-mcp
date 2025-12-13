@@ -55,12 +55,13 @@ Fork-based editing allows 'what-if' analysis without modifying original files.
 
 WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
-2) edit_batch: Apply cell changes (values or formulas) to the fork.
-3) recalculate: Trigger LibreOffice to recompute all formulas.
-4) get_changeset: Diff fork against original. Shows cell/table/name changes.
+2) Optional: checkpoint_fork before large edits.
+3) edit_batch/style_batch/structure_batch/apply_formula_pattern: Apply edits to the fork.
+4) recalculate: Trigger LibreOffice to recompute all formulas.
+5) get_changeset: Diff fork against original. Shows cell/table/name changes.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
-5) save_fork: Write changes to file.
-6) discard_fork: Delete fork without saving.
+6) save_fork: Write changes to file.
+7) discard_fork: Delete fork without saving.
 
 SAFETY:
 - checkpoint_fork before large/structural edits; restore_checkpoint to rollback if needed.
@@ -75,13 +76,17 @@ May take several seconds for complex workbooks.
 - get_changeset: Returns cell-level diffs with modification types: \
 ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
 Use sheet_name param to filter to specific sheet.
-- screenshot_sheet: {workbook_id, sheet_name, range?}. Renders a cropped PNG to `screenshots/` and returns a file URI. \
-Max range 100x30; if too large or pixel-guarded, the error includes suggested tiled sub-ranges. \
-Pass fork_id as workbook_id to screenshot edits (recalculate first if formulas changed).
-- save_fork: Requires target_path for new file location. \
-Overwriting original requires server --allow-overwrite flag. \
-Use drop_fork=false to keep fork active after saving (default: true drops fork). \
-Validates base file unchanged since fork creation.
+- screenshot_sheet: {workbook_id, sheet_name, range?, return_image?}. Renders a cropped PNG for inspecting an area visually.
+  workbook_id may be either a real workbook_id OR a fork_id (to screenshot an edited fork).
+  Prefer return_image=true to receive the PNG in the tool response.
+  If return_image=false, the PNG is written under workspace_root/screenshots/ (Docker default: /data/screenshots/).
+  DO NOT call save_fork just to get a screenshot.
+  If formulas changed, run recalculate on the fork first.
+- save_fork: Requires target_path for new file location.
+  If target_path is relative, it is resolved under workspace_root (Docker default: `/data`).
+  Overwriting original requires server --allow-overwrite flag.
+  Use drop_fork=false to keep fork active after saving (default: true drops fork).
+  Validates base file unchanged since fork creation.
 - get_edits: List all edits applied to a fork (before recalculate).
 - list_forks: See all active forks.
 - checkpoint_fork: Snapshot a fork to a checkpoint for high-fidelity undo.
@@ -95,6 +100,7 @@ Validates base file unchanged since fork creation.
 BEST PRACTICES:
 - Always recalculate after edit_batch before get_changeset.
 - Review changeset before save_fork to verify expected changes.
+- Use screenshot_sheet(return_image=true) for quick visual inspection; save_fork is ONLY for exporting a workbook file.
 - Discard forks when done to free resources (auto-cleanup after 1 hour).
 - For large edits, batch multiple cells in single edit_batch call.";
 
@@ -758,13 +764,47 @@ run recalculate and review get_changeset after applying."
     pub async fn screenshot_sheet(
         &self,
         Parameters(params): Parameters<tools::fork::ScreenshotSheetParams>,
-    ) -> Result<Json<tools::fork::ScreenshotSheetResponse>, McpError> {
+    ) -> Result<rmcp::model::CallToolResult, McpError> {
+        use base64::Engine;
+        use rmcp::model::Content;
+
         self.ensure_recalc_enabled("screenshot_sheet")
             .map_err(to_mcp_error)?;
-        tools::fork::screenshot_sheet(self.state.clone(), params)
+
+        let return_image = params.return_image;
+        let response = tools::fork::screenshot_sheet(self.state.clone(), params)
             .await
-            .map(Json)
-            .map_err(to_mcp_error)
+            .map_err(to_mcp_error)?;
+
+        let mut content = Vec::new();
+
+        if return_image {
+            let fs_path = response
+                .output_path
+                .strip_prefix("file://")
+                .ok_or_else(|| {
+                    to_mcp_error(anyhow::anyhow!("unexpected screenshot output_path"))
+                })?;
+            let bytes = tokio::fs::read(fs_path)
+                .await
+                .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to read screenshot: {}", e)))?;
+
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            content.push(Content::image(data, "image/png"));
+        }
+
+        // Always include a small text hint for clients that ignore structured_content.
+        content.push(Content::text(response.output_path.clone()));
+
+        let structured_content = serde_json::to_value(&response)
+            .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to serialize response: {}", e)))?;
+
+        Ok(rmcp::model::CallToolResult {
+            content,
+            structured_content: Some(structured_content),
+            is_error: Some(false),
+            meta: None,
+        })
     }
 }
 

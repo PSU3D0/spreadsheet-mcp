@@ -10,5 +10,6 @@ docker build -q -f "$PROJECT_ROOT/Dockerfile.full" -t "$IMAGE_NAME" "$PROJECT_RO
 exec docker run --rm -i \
     -v "${WORKSPACE_ROOT:-$PROJECT_ROOT/stest}:/data" \
     "$IMAGE_NAME" \
+    --workspace-root /data \
     --transport stdio \
     --recalc-enabled

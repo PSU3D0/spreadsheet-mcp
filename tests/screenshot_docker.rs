@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 use support::mcp::{McpTestClient, call_tool, cell_value_f64, extract_json};
 use umya_spreadsheet::{Color, Style};
 
+#[cfg(feature = "recalc")]
+use base64::Engine;
+#[cfg(feature = "recalc")]
+use image::ImageFormat;
+
 fn workbook_id_by_name(workbooks: &Value, name: &str) -> String {
     workbooks["workbooks"]
         .as_array()
@@ -47,6 +52,50 @@ async fn screenshot_ok(
         "output should be PNG"
     );
     Ok(response)
+}
+
+async fn screenshot_ok_inline(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    workbook_id: &str,
+    sheet_name: &str,
+    range: &str,
+) -> Result<(Value, Vec<u8>)> {
+    let result = client
+        .call_tool(call_tool(
+            "screenshot_sheet",
+            json!({
+                "workbook_id": workbook_id,
+                "sheet_name": sheet_name,
+                "range": range,
+                "return_image": true
+            }),
+        ))
+        .await?;
+
+    assert!(result.is_error != Some(true), "screenshot should succeed");
+
+    let image_data = result
+        .content
+        .iter()
+        .find_map(|c| c.as_image())
+        .filter(|img| img.mime_type == "image/png" && !img.data.is_empty())
+        .expect("inline image content");
+
+    #[cfg(feature = "recalc")]
+    let png_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&image_data.data)
+        .expect("decode base64 png");
+
+    #[cfg(not(feature = "recalc"))]
+    let png_bytes: Vec<u8> = Vec::new();
+
+    let response = extract_json(&result)?;
+    assert!(
+        response["output_path"].as_str().unwrap().ends_with(".png"),
+        "output should be PNG"
+    );
+
+    Ok((response, png_bytes))
 }
 
 // ============================================================================
@@ -125,6 +174,155 @@ async fn test_screenshot_sheet_basic() -> Result<()> {
     assert!(
         response["duration_ms"].as_u64().is_some(),
         "duration should be reported"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_screenshot_sheet_concurrent_requests_are_safe() -> Result<()> {
+    let test = McpTestClient::new();
+    test.workspace()
+        .create_workbook("screenshot_concurrent.xlsx", |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            sheet.set_name("Data");
+            sheet.get_cell_mut("A1").set_value("X");
+            sheet.get_cell_mut("D1").set_value("Y");
+            let mut fill = Style::default();
+            fill.set_background_color("FFEEEEEE");
+            sheet.set_style_by_range("A1:F10", fill);
+        });
+
+    let client = test.connect().await?;
+
+    let workbooks = extract_json(
+        &client
+            .call_tool(call_tool("list_workbooks", json!({})))
+            .await?,
+    )?;
+    let workbook_id = workbook_id_by_name(&workbooks, "screenshot_concurrent.xlsx");
+
+    let req1 = client.call_tool(call_tool(
+        "screenshot_sheet",
+        json!({
+            "workbook_id": workbook_id,
+            "sheet_name": "Data",
+            "range": "A1:C5"
+        }),
+    ));
+    let req2 = client.call_tool(call_tool(
+        "screenshot_sheet",
+        json!({
+            "workbook_id": workbook_id,
+            "sheet_name": "Data",
+            "range": "D1:F5"
+        }),
+    ));
+
+    let (r1, r2) = tokio::join!(req1, req2);
+    let r1 = r1?;
+    let r2 = r2?;
+
+    assert!(r1.is_error != Some(true), "first screenshot should succeed");
+    assert!(
+        r2.is_error != Some(true),
+        "second screenshot should succeed"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_screenshot_sheet_inline_image_content() -> Result<()> {
+    let test = McpTestClient::new();
+    test.workspace()
+        .create_workbook("screenshot_inline_test.xlsx", |book| {
+            let sheet = book.get_sheet_mut(&0).unwrap();
+            sheet.set_name("Data");
+            sheet.get_cell_mut("A1").set_value("Header1");
+            sheet.get_cell_mut("A2").set_value_number(1);
+            sheet.get_cell_mut("B2").set_value_number(2);
+        });
+
+    let client = test.connect().await?;
+
+    let workbooks = extract_json(
+        &client
+            .call_tool(call_tool("list_workbooks", json!({})))
+            .await?,
+    )?;
+    let workbook_id = workbook_id_by_name(&workbooks, "screenshot_inline_test.xlsx");
+
+    let _ = screenshot_ok_inline(&client, &workbook_id, "Data", "A1:C5").await?;
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "recalc")]
+async fn test_screenshot_sheet_targets_requested_sheet_not_first() -> Result<()> {
+    let test = McpTestClient::new();
+    test.workspace()
+        .create_workbook("screenshot_multi_sheet.xlsx", |book| {
+            let sheet1 = book.get_sheet_mut(&0).unwrap();
+            sheet1.set_name("First");
+            sheet1.get_cell_mut("A1").set_value("FIRST");
+            let mut red = Style::default();
+            red.set_background_color("FFFF0000");
+            sheet1.set_style_by_range("A1:M40", red);
+
+            let sheet2 = book.new_sheet("Calculations").unwrap();
+            sheet2.get_cell_mut("A1").set_value("CALC");
+            let mut green = Style::default();
+            green.set_background_color("FF00FF00");
+            sheet2.set_style_by_range("A1:M40", green);
+        });
+
+    let client = test.connect().await?;
+
+    let workbooks = extract_json(
+        &client
+            .call_tool(call_tool("list_workbooks", json!({})))
+            .await?,
+    )?;
+    let workbook_id = workbook_id_by_name(&workbooks, "screenshot_multi_sheet.xlsx");
+
+    let (_response, png_bytes) =
+        screenshot_ok_inline(&client, &workbook_id, "Calculations", "A1:M40").await?;
+
+    let img = image::load_from_memory_with_format(&png_bytes, ImageFormat::Png)?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+
+    // Sample a grid; background dominates if we got the right sheet.
+    let mut greenish = 0u32;
+    let mut redish = 0u32;
+    for yi in 1..=5 {
+        for xi in 1..=5 {
+            let x = (w * xi) / 6;
+            let y = (h * yi) / 6;
+            let p = rgba.get_pixel(x, y).0;
+            let (r, g, b) = (p[0], p[1], p[2]);
+
+            // Ignore dark pixels (gridlines/text).
+            if r < 40 && g < 40 && b < 40 {
+                continue;
+            }
+            if g > 150 && r < 120 {
+                greenish += 1;
+            }
+            if r > 150 && g < 120 {
+                redish += 1;
+            }
+        }
+    }
+
+    assert!(
+        greenish > redish,
+        "expected green sheet to dominate (greenish={greenish}, redish={redish})"
     );
 
     client.cancel().await?;

@@ -14,6 +14,9 @@ COPY --from=builder /build/target/release/spreadsheet-mcp /usr/local/bin/spreads
 
 WORKDIR /data
 
+# Defaults so override/stdio runs still see mounted workspace.
+ENV SPREADSHEET_MCP_WORKSPACE=/data
+
 LABEL org.opencontainers.image.source="https://github.com/PSU3D0/spreadsheet-mcp"
 LABEL org.opencontainers.image.description="MCP server for spreadsheet analysis and editing"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

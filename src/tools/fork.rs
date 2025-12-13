@@ -2432,6 +2432,8 @@ pub struct ScreenshotSheetParams {
     pub sheet_name: String,
     #[serde(default)]
     pub range: Option<String>,
+    #[serde(default)]
+    pub return_image: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2467,6 +2469,17 @@ pub async fn screenshot_sheet(
     let screenshot_dir = state.config().workspace_root.join("screenshots");
     tokio::fs::create_dir_all(&screenshot_dir).await?;
     let output_path = screenshot_dir.join(&filename);
+
+    let semaphore = state
+        .screenshot_semaphore()
+        .ok_or_else(|| anyhow!("screenshot semaphore not available"))?;
+
+    // LibreOffice profile/macro export is not concurrency-safe. Serialize screenshot calls.
+    let _permit = semaphore
+        .0
+        .acquire()
+        .await
+        .map_err(|e| anyhow!("failed to acquire screenshot permit: {}", e))?;
 
     let executor = crate::recalc::ScreenshotExecutor::new(&crate::recalc::RecalcConfig::default());
     let result = executor
