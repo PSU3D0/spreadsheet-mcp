@@ -599,6 +599,8 @@ pub enum StructureOp {
     },
     CopyRange {
         sheet_name: String,
+        #[serde(default)]
+        dest_sheet_name: Option<String>,
         src_range: String,
         dest_anchor: String,
         include_styles: bool,
@@ -606,6 +608,8 @@ pub enum StructureOp {
     },
     MoveRange {
         sheet_name: String,
+        #[serde(default)]
+        dest_sheet_name: Option<String>,
         src_range: String,
         dest_anchor: String,
         include_styles: bool,
@@ -922,14 +926,17 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
             }
             StructureOp::CopyRange {
                 sheet_name,
+                dest_sheet_name,
                 src_range,
                 dest_anchor,
                 include_styles,
                 include_formulas,
             } => {
-                let result = copy_or_move_range_on_sheet(
+                let dest_sheet_name = dest_sheet_name.as_deref().unwrap_or(sheet_name);
+                let result = copy_or_move_range(
                     &mut book,
                     sheet_name,
+                    dest_sheet_name,
                     src_range,
                     dest_anchor,
                     *include_styles,
@@ -937,6 +944,7 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     false,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
+                affected_sheets.insert(dest_sheet_name.to_string());
                 counts
                     .entry("cells_copied".to_string())
                     .and_modify(|v| *v += result.cells_written)
@@ -949,14 +957,17 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
             }
             StructureOp::MoveRange {
                 sheet_name,
+                dest_sheet_name,
                 src_range,
                 dest_anchor,
                 include_styles,
                 include_formulas,
             } => {
-                let result = copy_or_move_range_on_sheet(
+                let dest_sheet_name = dest_sheet_name.as_deref().unwrap_or(sheet_name);
+                let result = copy_or_move_range(
                     &mut book,
                     sheet_name,
+                    dest_sheet_name,
                     src_range,
                     dest_anchor,
                     *include_styles,
@@ -964,6 +975,7 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
                     true,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
+                affected_sheets.insert(dest_sheet_name.to_string());
                 counts
                     .entry("cells_moved".to_string())
                     .and_modify(|v| *v += result.cells_written)
@@ -1022,9 +1034,10 @@ fn ranges_intersect(
         || b_max_row < a_min_row)
 }
 
-fn copy_or_move_range_on_sheet(
+fn copy_or_move_range(
     book: &mut umya_spreadsheet::Spreadsheet,
-    sheet_name: &str,
+    src_sheet_name: &str,
+    dest_sheet_name: &str,
     src_range: &str,
     dest_anchor: &str,
     include_styles: bool,
@@ -1044,16 +1057,20 @@ fn copy_or_move_range_on_sheet(
         .checked_add(height.saturating_sub(1))
         .ok_or_else(|| anyhow!("destination range overflows row bounds"))?;
 
-    if ranges_intersect(
-        src_bounds.min_col,
-        src_bounds.min_row,
-        src_bounds.max_col,
-        src_bounds.max_row,
-        dest_start_col,
-        dest_start_row,
-        dest_end_col,
-        dest_end_row,
-    ) {
+    let same_sheet = src_sheet_name == dest_sheet_name;
+
+    if same_sheet
+        && ranges_intersect(
+            src_bounds.min_col,
+            src_bounds.min_row,
+            src_bounds.max_col,
+            src_bounds.max_row,
+            dest_start_col,
+            dest_start_row,
+            dest_end_col,
+            dest_end_row,
+        )
+    {
         let dest_range = if width == 1 && height == 1 {
             crate::utils::cell_address(dest_start_col, dest_start_row)
         } else {
@@ -1073,74 +1090,161 @@ fn copy_or_move_range_on_sheet(
     let delta_col = dest_start_col as i32 - src_bounds.min_col as i32;
     let delta_row = dest_start_row as i32 - src_bounds.min_row as i32;
 
-    let sheet = book
-        .get_sheet_by_name_mut(sheet_name)
-        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
-
     let mut warnings: Vec<String> = Vec::new();
     let mut formula_shift_failures: u64 = 0;
     let mut formula_value_copies: u64 = 0;
 
-    for row in 0..height {
-        for col in 0..width {
-            let src_col = src_bounds.min_col + col;
-            let src_row = src_bounds.min_row + row;
-            let dest_col = dest_start_col + col;
-            let dest_row = dest_start_row + row;
+    let (src_sheet_index, dest_sheet_index) = {
+        let sheets = book.get_sheet_collection_no_check();
+        let src = sheets
+            .iter()
+            .position(|s| s.get_name() == src_sheet_name)
+            .ok_or_else(|| anyhow!("sheet '{}' not found", src_sheet_name))?;
+        let dest = sheets
+            .iter()
+            .position(|s| s.get_name() == dest_sheet_name)
+            .ok_or_else(|| anyhow!("sheet '{}' not found", dest_sheet_name))?;
+        (src, dest)
+    };
 
-            let Some(src_cell) = sheet.get_cell((src_col, src_row)) else {
-                sheet.remove_cell((dest_col, dest_row));
-                continue;
-            };
+    let sheets = book.get_sheet_collection_mut();
 
-            let mut set_value = true;
-            let mut dest_formula: Option<String> = None;
+    if src_sheet_index == dest_sheet_index {
+        let sheet = &mut sheets[src_sheet_index];
 
-            if include_formulas && src_cell.is_formula() {
-                let src_formula = src_cell.get_formula().to_string();
-                match parse_base_formula(&src_formula).and_then(|ast| {
-                    shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
-                }) {
-                    Ok(shifted) => {
-                        let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
-                        dest_formula = Some(shifted);
-                        set_value = false;
-                    }
-                    Err(_) => {
-                        dest_formula = Some(src_formula);
-                        set_value = false;
-                        formula_shift_failures += 1;
-                    }
-                }
-            } else if !include_formulas && src_cell.is_formula() {
-                formula_value_copies += 1;
-            }
-
-            let src_value = src_cell.get_value().to_string();
-            let src_style = src_cell.get_style().clone();
-
-            let dest_cell = sheet.get_cell_mut((dest_col, dest_row));
-            if include_styles {
-                dest_cell.set_style(src_style);
-            }
-
-            dest_cell.get_cell_value_mut().remove_formula();
-            if let Some(formula) = dest_formula {
-                dest_cell.set_formula(formula);
-                dest_cell.set_formula_result_default("");
-            }
-            if set_value {
-                dest_cell.set_value(src_value);
-            }
-        }
-    }
-
-    if clear_source {
         for row in 0..height {
             for col in 0..width {
                 let src_col = src_bounds.min_col + col;
                 let src_row = src_bounds.min_row + row;
-                sheet.remove_cell((src_col, src_row));
+                let dest_col = dest_start_col + col;
+                let dest_row = dest_start_row + row;
+
+                let Some(src_cell) = sheet.get_cell((src_col, src_row)) else {
+                    sheet.remove_cell((dest_col, dest_row));
+                    continue;
+                };
+
+                let mut set_value = true;
+                let mut dest_formula: Option<String> = None;
+
+                if include_formulas && src_cell.is_formula() {
+                    let src_formula = src_cell.get_formula().to_string();
+                    match parse_base_formula(&src_formula).and_then(|ast| {
+                        shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                    }) {
+                        Ok(shifted) => {
+                            let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                            dest_formula = Some(shifted);
+                            set_value = false;
+                        }
+                        Err(_) => {
+                            dest_formula = Some(src_formula);
+                            set_value = false;
+                            formula_shift_failures += 1;
+                        }
+                    }
+                } else if !include_formulas && src_cell.is_formula() {
+                    formula_value_copies += 1;
+                }
+
+                let src_value = src_cell.get_value().to_string();
+                let src_style = src_cell.get_style().clone();
+
+                let dest_cell = sheet.get_cell_mut((dest_col, dest_row));
+                if include_styles {
+                    dest_cell.set_style(src_style);
+                }
+
+                dest_cell.get_cell_value_mut().remove_formula();
+                if let Some(formula) = dest_formula {
+                    dest_cell.set_formula(formula);
+                    dest_cell.set_formula_result_default("");
+                }
+                if set_value {
+                    dest_cell.set_value(src_value);
+                }
+            }
+        }
+
+        if clear_source {
+            for row in 0..height {
+                for col in 0..width {
+                    let src_col = src_bounds.min_col + col;
+                    let src_row = src_bounds.min_row + row;
+                    sheet.remove_cell((src_col, src_row));
+                }
+            }
+        }
+    } else {
+        let (src_sheet, dest_sheet) = if src_sheet_index < dest_sheet_index {
+            let (left, right) = sheets.split_at_mut(dest_sheet_index);
+            (&mut left[src_sheet_index], &mut right[0])
+        } else {
+            let (left, right) = sheets.split_at_mut(src_sheet_index);
+            (&mut right[0], &mut left[dest_sheet_index])
+        };
+
+        for row in 0..height {
+            for col in 0..width {
+                let src_col = src_bounds.min_col + col;
+                let src_row = src_bounds.min_row + row;
+                let dest_col = dest_start_col + col;
+                let dest_row = dest_start_row + row;
+
+                let Some(src_cell) = src_sheet.get_cell((src_col, src_row)) else {
+                    dest_sheet.remove_cell((dest_col, dest_row));
+                    continue;
+                };
+
+                let mut set_value = true;
+                let mut dest_formula: Option<String> = None;
+
+                if include_formulas && src_cell.is_formula() {
+                    let src_formula = src_cell.get_formula().to_string();
+                    match parse_base_formula(&src_formula).and_then(|ast| {
+                        shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                    }) {
+                        Ok(shifted) => {
+                            let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                            dest_formula = Some(shifted);
+                            set_value = false;
+                        }
+                        Err(_) => {
+                            dest_formula = Some(src_formula);
+                            set_value = false;
+                            formula_shift_failures += 1;
+                        }
+                    }
+                } else if !include_formulas && src_cell.is_formula() {
+                    formula_value_copies += 1;
+                }
+
+                let src_value = src_cell.get_value().to_string();
+                let src_style = src_cell.get_style().clone();
+
+                let dest_cell = dest_sheet.get_cell_mut((dest_col, dest_row));
+                if include_styles {
+                    dest_cell.set_style(src_style);
+                }
+
+                dest_cell.get_cell_value_mut().remove_formula();
+                if let Some(formula) = dest_formula {
+                    dest_cell.set_formula(formula);
+                    dest_cell.set_formula_result_default("");
+                }
+                if set_value {
+                    dest_cell.set_value(src_value);
+                }
+            }
+        }
+
+        if clear_source {
+            for row in 0..height {
+                for col in 0..width {
+                    let src_col = src_bounds.min_col + col;
+                    let src_row = src_bounds.min_row + row;
+                    src_sheet.remove_cell((src_col, src_row));
+                }
             }
         }
     }
