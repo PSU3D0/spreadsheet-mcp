@@ -38,7 +38,7 @@ pub async fn describe_workbook(
     state: Arc<AppState>,
     params: DescribeWorkbookParams,
 ) -> Result<WorkbookDescription> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let desc = workbook.describe();
     Ok(desc)
 }
@@ -58,19 +58,21 @@ impl ListWorkbooksParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DescribeWorkbookParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListSheetsParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
 }
 
 pub async fn list_sheets(
     state: Arc<AppState>,
     params: ListSheetsParams,
 ) -> Result<SheetListResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let summaries = workbook.list_summaries()?;
     let response = SheetListResponse {
         workbook_id: workbook.id.clone(),
@@ -82,20 +84,22 @@ pub async fn list_sheets(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetOverviewParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkbookSummaryParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
 }
 
 pub async fn workbook_summary(
     state: Arc<AppState>,
     params: WorkbookSummaryParams,
 ) -> Result<WorkbookSummaryResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let sheet_names = workbook.sheet_names();
 
     let mut total_cells: u64 = 0;
@@ -229,7 +233,7 @@ pub async fn sheet_overview(
     state: Arc<AppState>,
     params: SheetOverviewParams,
 ) -> Result<SheetOverviewResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let overview = workbook.sheet_overview(&params.sheet_name)?;
     Ok(overview)
 }
@@ -252,7 +256,8 @@ fn default_include_header() -> bool {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetPageParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     #[serde(default = "default_start_row")]
     pub start_row: u32,
@@ -275,7 +280,7 @@ pub struct SheetPageParams {
 impl Default for SheetPageParams {
     fn default() -> Self {
         SheetPageParams {
-            workbook_id: WorkbookId(String::new()),
+            workbook_or_fork_id: WorkbookId(String::new()),
             sheet_name: String::new(),
             start_row: default_start_row(),
             page_size: default_page_size(),
@@ -295,7 +300,8 @@ fn default_find_limit() -> u32 {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FindValueParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub query: String,
     #[serde(default)]
     pub label: Option<String>,
@@ -324,7 +330,7 @@ pub struct FindValueParams {
 impl Default for FindValueParams {
     fn default() -> Self {
         Self {
-            workbook_id: WorkbookId(String::new()),
+            workbook_or_fork_id: WorkbookId(String::new()),
             query: String::new(),
             label: None,
             mode: None,
@@ -343,7 +349,8 @@ impl Default for FindValueParams {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ReadTableParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     #[serde(default)]
     pub sheet_name: Option<String>,
     #[serde(default)]
@@ -377,7 +384,8 @@ pub struct TableFilter {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TableProfileParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     #[serde(default)]
     pub sheet_name: Option<String>,
     #[serde(default)]
@@ -392,7 +400,8 @@ pub struct TableProfileParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RangeValuesParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     pub ranges: Vec<String>,
     #[serde(default)]
@@ -407,7 +416,7 @@ pub async fn sheet_page(
         return Err(anyhow!("page_size must be greater than zero"));
     }
 
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
     let format = params.format.unwrap_or_default();
 
@@ -480,7 +489,8 @@ pub async fn sheet_page(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetFormulaMapParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     pub range: Option<String>,
     #[serde(default)]
@@ -504,7 +514,7 @@ pub async fn sheet_formula_map(
     state: Arc<AppState>,
     params: SheetFormulaMapParams,
 ) -> Result<SheetFormulaMapResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let graph = workbook.formula_graph(&params.sheet_name)?;
     let mut groups = Vec::new();
     let mut truncated = false;
@@ -555,7 +565,8 @@ pub async fn sheet_formula_map(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FormulaTraceParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     pub cell_address: String,
     pub direction: TraceDirection,
@@ -571,7 +582,7 @@ pub async fn formula_trace(
     state: Arc<AppState>,
     params: FormulaTraceParams,
 ) -> Result<FormulaTraceResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let graph = workbook.formula_graph(&params.sheet_name)?;
     let formula_lookup = build_formula_lookup(&graph);
     let depth = params.depth.unwrap_or(3).clamp(1, 5);
@@ -612,7 +623,8 @@ pub async fn formula_trace(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct NamedRangesParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: Option<String>,
     pub name_prefix: Option<String>,
 }
@@ -621,7 +633,7 @@ pub async fn named_ranges(
     state: Arc<AppState>,
     params: NamedRangesParams,
 ) -> Result<NamedRangesResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let mut items = workbook.named_items()?;
 
     if let Some(sheet_filter) = &params.sheet_name {
@@ -925,7 +937,8 @@ fn default_stats_sample() -> usize {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetStatisticsParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     #[serde(default)]
     pub sample_rows: Option<usize>,
@@ -935,7 +948,7 @@ pub async fn sheet_statistics(
     state: Arc<AppState>,
     params: SheetStatisticsParams,
 ) -> Result<SheetStatisticsResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let sheet_metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
     let sample_rows = params.sample_rows.unwrap_or_else(default_stats_sample);
     let stats = workbook.with_sheet(&params.sheet_name, |sheet| {
@@ -1616,26 +1629,36 @@ fn build_row_context(
     })
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+fn default_find_formula_limit() -> u32 {
+    50
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct FindFormulaParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub query: String,
     pub sheet_name: Option<String>,
     #[serde(default)]
     pub case_sensitive: bool,
+    #[serde(default)]
+    pub include_context: bool,
+    #[serde(default = "default_find_formula_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
 }
 
 pub async fn find_formula(
     state: Arc<AppState>,
     params: FindFormulaParams,
 ) -> Result<FindFormulaResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let query = if params.case_sensitive {
         params.query.clone()
     } else {
         params.query.to_ascii_lowercase()
     };
-    let mut matches = Vec::new();
 
     let sheet_names: Vec<String> = if let Some(sheet) = &params.sheet_name {
         vec![sheet.clone()]
@@ -1643,24 +1666,51 @@ pub async fn find_formula(
         workbook.sheet_names()
     };
 
+    let limit = params.limit.clamp(1, 500);
+    let offset = params.offset;
+
+    let mut matches = Vec::new();
+    let mut seen: u32 = 0;
+    let mut truncated = false;
+
     for sheet_name in sheet_names {
-        let sheet_matches = workbook.with_sheet(&sheet_name, |sheet| {
-            collect_formula_matches(sheet, &sheet_name, &query, params.case_sensitive)
-        })?;
+        let (sheet_matches, sheet_seen, sheet_truncated) =
+            workbook.with_sheet(&sheet_name, |sheet| {
+                collect_formula_matches(
+                    sheet,
+                    &sheet_name,
+                    &query,
+                    params.case_sensitive,
+                    params.include_context,
+                    offset,
+                    limit,
+                    seen,
+                )
+            })?;
+
+        seen = sheet_seen;
+        truncated |= sheet_truncated;
         matches.extend(sheet_matches);
+
+        if truncated {
+            break;
+        }
     }
 
     let response = FindFormulaResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         matches,
+        truncated,
+        next_offset: truncated.then(|| offset.saturating_add(limit)),
     };
     Ok(response)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScanVolatilesParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: Option<String>,
 }
 
@@ -1668,7 +1718,7 @@ pub async fn scan_volatiles(
     state: Arc<AppState>,
     params: ScanVolatilesParams,
 ) -> Result<VolatileScanResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
         vec![sheet.clone()]
     } else {
@@ -1709,7 +1759,8 @@ pub async fn scan_volatiles(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkbookStyleSummaryParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub max_styles: Option<u32>,
     pub max_conditional_formats: Option<u32>,
     pub max_cells_scan: Option<u32>,
@@ -1738,7 +1789,7 @@ pub async fn workbook_style_summary(
     state: Arc<AppState>,
     params: WorkbookStyleSummaryParams,
 ) -> Result<WorkbookStyleSummaryResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let sheet_names = workbook.sheet_names();
 
     const STYLE_EXAMPLE_LIMIT: usize = 5;
@@ -1959,7 +2010,8 @@ pub async fn workbook_style_summary(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetStylesParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     #[serde(default)]
     pub scope: Option<SheetStylesScope>,
@@ -2001,7 +2053,7 @@ pub async fn sheet_styles(
     state: Arc<AppState>,
     params: SheetStylesParams,
 ) -> Result<SheetStylesResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     const STYLE_EXAMPLE_LIMIT: usize = 5;
     const STYLE_RANGE_LIMIT: usize = 50;
     const STYLE_LIMIT: usize = 200;
@@ -2138,7 +2190,7 @@ pub async fn range_values(
     state: Arc<AppState>,
     params: RangeValuesParams,
 ) -> Result<RangeValuesResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let include_headers = params.include_headers.unwrap_or(false);
     let values = workbook.with_sheet(&params.sheet_name, |sheet| {
         params
@@ -2179,7 +2231,7 @@ pub async fn find_value(
     state: Arc<AppState>,
     params: FindValueParams,
 ) -> Result<FindValueResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let mut matches = Vec::new();
     let mut truncated = false;
     let mode = params.mode.clone().unwrap_or_else(|| {
@@ -2246,7 +2298,7 @@ pub async fn read_table(
     state: Arc<AppState>,
     params: ReadTableParams,
 ) -> Result<ReadTableResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let resolved = resolve_table_target(&workbook, &params)?;
     let limit = params.limit.unwrap_or(100) as usize;
     let offset = params.offset.unwrap_or(0) as usize;
@@ -2287,11 +2339,11 @@ pub async fn table_profile(
     state: Arc<AppState>,
     params: TableProfileParams,
 ) -> Result<TableProfileResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let resolved = resolve_table_target(
         &workbook,
         &ReadTableParams {
-            workbook_id: params.workbook_id.clone(),
+            workbook_or_fork_id: params.workbook_or_fork_id.clone(),
             sheet_name: params.sheet_name.clone(),
             table_name: params.table_name.clone(),
             region_id: params.region_id,
@@ -2343,7 +2395,8 @@ pub async fn table_profile(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ManifestStubParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_filter: Option<String>,
 }
 
@@ -2351,7 +2404,7 @@ pub async fn get_manifest_stub(
     state: Arc<AppState>,
     params: ManifestStubParams,
 ) -> Result<ManifestStubResponse> {
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let mut summaries = workbook.list_summaries()?;
 
     if let Some(filter) = &params.sheet_filter {
@@ -2382,28 +2435,36 @@ pub async fn get_manifest_stub(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CloseWorkbookParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
 }
 
 pub async fn close_workbook(
     state: Arc<AppState>,
     params: CloseWorkbookParams,
 ) -> Result<CloseWorkbookResponse> {
-    state.close_workbook(&params.workbook_id)?;
+    state.close_workbook(&params.workbook_or_fork_id)?;
     Ok(CloseWorkbookResponse {
-        workbook_id: params.workbook_id.clone(),
-        message: format!("workbook {} evicted", params.workbook_id.as_str()),
+        workbook_id: params.workbook_or_fork_id.clone(),
+        message: format!("workbook {} evicted", params.workbook_or_fork_id.as_str()),
     })
 }
+#[allow(clippy::too_many_arguments)]
 fn collect_formula_matches(
     sheet: &umya_spreadsheet::Worksheet,
     sheet_name: &str,
     query: &str,
     case_sensitive: bool,
-) -> Vec<FindFormulaMatch> {
+    include_context: bool,
+    offset: u32,
+    limit: u32,
+    seen_so_far: u32,
+) -> (Vec<FindFormulaMatch>, u32, bool) {
     use crate::workbook::cell_to_value;
 
     let mut results = Vec::new();
+    let mut seen = seen_so_far;
+
     for cell in sheet.get_cell_collection() {
         if !cell.is_formula() {
             continue;
@@ -2417,26 +2478,41 @@ fn collect_formula_matches(
         if !haystack.contains(query) {
             continue;
         }
+
+        if seen < offset {
+            seen += 1;
+            continue;
+        }
+
+        if results.len() as u32 >= limit {
+            return (results, seen, true);
+        }
+
         let coord = cell.get_coordinate();
         let column = *coord.get_col_num();
         let row = *coord.get_row_num();
-        let columns = vec![column];
-        let context_row = build_row_snapshot(sheet, row, &columns, true, false);
-        let header_row = build_row_snapshot(sheet, 1, &columns, false, false);
+
+        let context = if include_context {
+            let columns = vec![column];
+            let context_row = build_row_snapshot(sheet, row, &columns, true, false);
+            let header_row = build_row_snapshot(sheet, 1, &columns, false, false);
+            vec![header_row, context_row]
+        } else {
+            Vec::new()
+        };
 
         results.push(FindFormulaMatch {
             address: coord.get_coordinate(),
             sheet_name: sheet_name.to_string(),
             formula: formula.to_string(),
-            cached_value: if cell.is_formula() {
-                cell_to_value(cell)
-            } else {
-                None
-            },
-            context: vec![header_row, context_row],
+            cached_value: cell_to_value(cell),
+            context,
         });
+
+        seen += 1;
     }
-    results
+
+    (results, seen, false)
 }
 
 #[derive(Clone)]

@@ -26,7 +26,7 @@ async fn workbook_summary_reports_regions_and_entry_points() -> Result<()> {
     let summary = workbook_summary(
         state.clone(),
         WorkbookSummaryParams {
-            workbook_id: descriptor.workbook_id.clone(),
+            workbook_or_fork_id: descriptor.workbook_id.clone(),
         },
     )
     .await?;

@@ -39,7 +39,7 @@ async fn screenshot_ok(
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": sheet_name,
                 "range": range
             }),
@@ -64,7 +64,7 @@ async fn screenshot_ok_inline(
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": sheet_name,
                 "range": range            }),
         ))
@@ -147,7 +147,7 @@ async fn test_screenshot_sheet_basic() -> Result<()> {
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": "Data",
                 "range": "A1:C5"
             }),
@@ -204,7 +204,7 @@ async fn test_screenshot_sheet_concurrent_requests_are_safe() -> Result<()> {
     let req1 = client.call_tool(call_tool(
         "screenshot_sheet",
         json!({
-            "workbook_id": workbook_id,
+            "workbook_or_fork_id": workbook_id,
             "sheet_name": "Data",
             "range": "A1:C5"
         }),
@@ -212,7 +212,7 @@ async fn test_screenshot_sheet_concurrent_requests_are_safe() -> Result<()> {
     let req2 = client.call_tool(call_tool(
         "screenshot_sheet",
         json!({
-            "workbook_id": workbook_id,
+            "workbook_or_fork_id": workbook_id,
             "sheet_name": "Data",
             "range": "D1:F5"
         }),
@@ -581,7 +581,7 @@ async fn test_screenshot_visual_scenarios_original_and_forked() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": forked_workbook_id }),
+                json!({ "workbook_or_fork_id": forked_workbook_id }),
             ))
             .await?,
     )?;
@@ -606,7 +606,7 @@ async fn test_screenshot_visual_scenarios_original_and_forked() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": forked_workbook_id,
+                    "workbook_or_fork_id": forked_workbook_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 3
@@ -619,7 +619,7 @@ async fn test_screenshot_visual_scenarios_original_and_forked() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 3
@@ -660,7 +660,7 @@ async fn test_screenshot_range_too_large() -> Result<()> {
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": "Data",
                 "range": "A1:AF150"
             }),
@@ -724,7 +724,7 @@ async fn test_screenshot_pixel_guard_suggests_split() -> Result<()> {
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": "Data",
                 "range": "A1:C5"
             }),
@@ -774,7 +774,7 @@ async fn test_screenshot_default_range() -> Result<()> {
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": "Sheet1"
             }),
         ))
@@ -813,7 +813,7 @@ async fn test_screenshot_invalid_sheet() -> Result<()> {
         .call_tool(call_tool(
             "screenshot_sheet",
             json!({
-                "workbook_id": workbook_id,
+                "workbook_or_fork_id": workbook_id,
                 "sheet_name": "NonExistentSheet",
                 "range": "A1:B5"
             }),

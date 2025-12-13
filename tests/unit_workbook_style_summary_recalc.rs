@@ -43,7 +43,7 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
     let base_summary = workbook_style_summary(
         state.clone(),
         WorkbookStyleSummaryParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
@@ -56,7 +56,13 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
         .map(|s| s.style_id.clone())
         .collect();
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {
@@ -87,7 +93,7 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
     let fork_summary = workbook_style_summary(
         state,
         WorkbookStyleSummaryParams {
-            workbook_id: spreadsheet_mcp::model::WorkbookId(fork.fork_id),
+            workbook_or_fork_id: spreadsheet_mcp::model::WorkbookId(fork.fork_id),
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,

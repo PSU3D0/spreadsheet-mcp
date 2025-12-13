@@ -39,7 +39,13 @@ async fn apply_formula_pattern_preview_stages_and_apply() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let preview = apply_formula_pattern(
         state.clone(),
@@ -110,7 +116,13 @@ async fn apply_formula_pattern_validates_anchor_and_direction() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let err = apply_formula_pattern(
         state.clone(),

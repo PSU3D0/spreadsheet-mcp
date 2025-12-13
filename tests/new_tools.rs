@@ -30,7 +30,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let sheets = spreadsheet_mcp::tools::list_sheets(
         state.clone(),
         ListSheetsParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
         },
     )
     .await?;
@@ -48,7 +48,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let overview = sheet_overview(
         state.clone(),
         SheetOverviewParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: target.clone(),
         },
     )
@@ -62,7 +62,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let label_matches = find_value(
         state.clone(),
         FindValueParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             query: "".into(),
             label: Some("Comp Rate".into()),
             mode: Some(spreadsheet_mcp::model::FindMode::Label),
@@ -87,7 +87,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let value_matches = find_value(
         state.clone(),
         FindValueParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             query: "Widget".into(),
             sheet_name: Some(target.clone()),
             mode: Some(spreadsheet_mcp::model::FindMode::Value),
@@ -103,7 +103,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let table = read_table(
         state.clone(),
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Data".into()),
             header_row: Some(1),
             limit: Some(5),
@@ -118,7 +118,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let profile = table_profile(
         state.clone(),
         TableProfileParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Data".into()),
             region_id: None,
             sample_size: Some(2),
@@ -132,7 +132,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let ranges = range_values(
         state.clone(),
         RangeValuesParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Inputs".into(),
             ranges: vec!["B2".into(), "B3:C3".into()],
             include_headers: Some(true),
@@ -144,7 +144,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let values_only = sheet_page(
         state,
         SheetPageParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".into(),
             start_row: 1,
             page_size: 10,
@@ -191,7 +191,7 @@ async fn find_value_search_headers_only() -> Result<()> {
     let all_matches = find_value(
         state.clone(),
         FindValueParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             query: "Name".into(),
             search_headers_only: false,
             ..Default::default()
@@ -207,7 +207,7 @@ async fn find_value_search_headers_only() -> Result<()> {
     let header_only_matches = find_value(
         state,
         FindValueParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             query: "Name".into(),
             search_headers_only: true,
             ..Default::default()

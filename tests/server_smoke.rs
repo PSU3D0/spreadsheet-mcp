@@ -52,7 +52,7 @@ async fn server_tool_handlers_return_json() -> Result<()> {
 
     let error = match server
         .sheet_page(Parameters(SheetPageParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Missing".to_string(),
             start_row: 1,
             page_size: 10,
@@ -72,7 +72,7 @@ async fn server_tool_handlers_return_json() -> Result<()> {
 
     let page = server
         .sheet_page(Parameters(SheetPageParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             start_row: 1,
             page_size: 10,
@@ -124,7 +124,7 @@ async fn disabled_tools_return_invalid_request() -> Result<()> {
 
     let error = match server
         .sheet_page(Parameters(SheetPageParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             start_row: 1,
             page_size: 5,

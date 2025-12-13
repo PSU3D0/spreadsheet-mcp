@@ -121,7 +121,7 @@ fn read_defined_name_refers_to(path: &Path, target_name: &str) -> Result<Option<
                         buf.clear();
                         match reader.read_event_into(&mut buf) {
                             Ok(Event::Text(t)) => {
-                                text.push_str(&t.unescape()?.to_string());
+                                text.push_str(t.unescape()?.as_ref());
                             }
                             Ok(Event::End(end)) if end.name().as_ref() == b"definedName" => {
                                 return Ok(Some(text));
@@ -171,7 +171,7 @@ async fn test_structure_batch_insert_rows_updates_cross_sheet_formulas_in_docker
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -202,7 +202,7 @@ async fn test_structure_batch_insert_rows_updates_cross_sheet_formulas_in_docker
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -246,7 +246,7 @@ async fn test_structure_batch_rename_sheet_preserves_formulas_in_docker() -> Res
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -276,7 +276,7 @@ async fn test_structure_batch_rename_sheet_preserves_formulas_in_docker() -> Res
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -321,7 +321,7 @@ async fn test_structure_batch_insert_cols_updates_cross_sheet_formulas_in_docker
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -352,7 +352,7 @@ async fn test_structure_batch_insert_cols_updates_cross_sheet_formulas_in_docker
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -398,7 +398,7 @@ async fn test_structure_batch_delete_rows_preserves_formula_result_in_docker() -
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -429,7 +429,7 @@ async fn test_structure_batch_delete_rows_preserves_formula_result_in_docker() -
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -476,7 +476,7 @@ async fn test_structure_batch_delete_cols_preserves_formula_result_in_docker() -
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -507,7 +507,7 @@ async fn test_structure_batch_delete_cols_preserves_formula_result_in_docker() -
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -552,7 +552,7 @@ async fn test_structure_batch_rename_quoted_sheet_preserves_formulas_in_docker()
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -582,7 +582,7 @@ async fn test_structure_batch_rename_quoted_sheet_preserves_formulas_in_docker()
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -626,7 +626,7 @@ async fn test_structure_batch_copy_range_across_sheets_in_docker() -> Result<()>
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -660,7 +660,7 @@ async fn test_structure_batch_copy_range_across_sheets_in_docker() -> Result<()>
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet2",
                     "start_row": 1,
                     "page_size": 1,
@@ -703,7 +703,7 @@ async fn test_structure_batch_copy_range_shifts_formulas_in_docker() -> Result<(
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -736,7 +736,7 @@ async fn test_structure_batch_copy_range_shifts_formulas_in_docker() -> Result<(
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 1,
@@ -777,7 +777,7 @@ async fn test_structure_batch_move_range_moves_and_clears_source_in_docker() -> 
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -806,7 +806,7 @@ async fn test_structure_batch_move_range_moves_and_clears_source_in_docker() -> 
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 3,
@@ -855,7 +855,7 @@ async fn test_structure_batch_insert_rows_preserves_named_range_outputs_in_docke
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -886,7 +886,7 @@ async fn test_structure_batch_insert_rows_preserves_named_range_outputs_in_docke
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -950,7 +950,7 @@ async fn test_structure_batch_insert_rows_above_named_range_shifts_ref_in_docker
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -981,7 +981,7 @@ async fn test_structure_batch_insert_rows_above_named_range_shifts_ref_in_docker
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1045,7 +1045,7 @@ async fn test_structure_batch_insert_rows_multirow_expands_named_range_in_docker
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1076,7 +1076,7 @@ async fn test_structure_batch_insert_rows_multirow_expands_named_range_in_docker
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1140,7 +1140,7 @@ async fn test_structure_batch_insert_rows_adjusts_union_named_ranges_in_docker()
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1171,7 +1171,7 @@ async fn test_structure_batch_insert_rows_adjusts_union_named_ranges_in_docker()
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1234,7 +1234,7 @@ async fn test_structure_batch_insert_rows_rewrites_formula_defined_names_in_dock
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1265,7 +1265,7 @@ async fn test_structure_batch_insert_rows_rewrites_formula_defined_names_in_dock
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1331,7 +1331,7 @@ async fn test_structure_batch_rename_sheet_updates_named_ranges_in_docker() -> R
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1361,7 +1361,7 @@ async fn test_structure_batch_rename_sheet_updates_named_ranges_in_docker() -> R
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1426,7 +1426,7 @@ async fn test_structure_batch_rename_sheet_updates_quoted_named_ranges_in_docker
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1456,7 +1456,7 @@ async fn test_structure_batch_rename_sheet_updates_quoted_named_ranges_in_docker
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,
@@ -1520,7 +1520,7 @@ async fn test_structure_batch_rename_sheet_rewrites_formula_defined_names_in_doc
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1550,7 +1550,7 @@ async fn test_structure_batch_rename_sheet_rewrites_formula_defined_names_in_doc
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calc",
                     "start_row": 1,
                     "page_size": 1,

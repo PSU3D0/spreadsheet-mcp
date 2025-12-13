@@ -51,7 +51,13 @@ async fn style_batch_merge_set_clear_semantics() -> Result<()> {
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     // Merge: remove bold (explicit false) and clear fill.
     let patch_merge = StylePatch {
@@ -162,7 +168,13 @@ async fn style_batch_preview_stages_and_apply() -> Result<()> {
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {
@@ -245,7 +257,13 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let base_fill = StylePatch {
         fill: Some(Some(FillPatch::Pattern(PatternFillPatch {
@@ -335,7 +353,13 @@ async fn style_batch_nested_null_clear_only_subfield() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {
@@ -415,7 +439,13 @@ async fn style_batch_region_target_resolves() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let fork_wb = state
         .open_workbook(&spreadsheet_mcp::model::WorkbookId(fork.fork_id.clone()))
@@ -488,7 +518,13 @@ async fn style_batch_idempotent_noop_counts_and_no_diff() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {
@@ -526,6 +562,7 @@ async fn style_batch_idempotent_noop_counts_and_no_diff() -> Result<()> {
         spreadsheet_mcp::tools::fork::GetChangesetParams {
             fork_id: fork.fork_id.clone(),
             sheet_name: None,
+            ..Default::default()
         },
     )
     .await?;
@@ -584,7 +621,13 @@ async fn style_batch_preserves_conditional_formats() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {

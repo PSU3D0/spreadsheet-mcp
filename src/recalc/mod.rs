@@ -46,6 +46,13 @@ impl GlobalScreenshotLock {
     }
 }
 
+#[cfg(feature = "recalc")]
+impl Default for GlobalScreenshotLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ExecutorStrategy {
     #[default]

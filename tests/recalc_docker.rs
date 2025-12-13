@@ -75,7 +75,7 @@ async fn test_recalc_sum_formula() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -97,7 +97,7 @@ async fn test_recalc_sum_formula() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -145,7 +145,7 @@ async fn test_recalc_cross_sheet_reference() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -161,7 +161,7 @@ async fn test_recalc_cross_sheet_reference() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Output",
                     "start_row": 1,
                     "page_size": 10
@@ -222,7 +222,7 @@ async fn test_recalc_complex_formulas() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -238,7 +238,7 @@ async fn test_recalc_complex_formulas() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 10
@@ -308,7 +308,7 @@ async fn test_recalc_chain_dependencies() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -324,7 +324,7 @@ async fn test_recalc_chain_dependencies() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Chain",
                     "start_row": 1,
                     "page_size": 10
@@ -384,7 +384,7 @@ async fn test_edit_and_recalc_workflow() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -434,7 +434,7 @@ async fn test_edit_and_recalc_workflow() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -482,7 +482,7 @@ async fn test_edit_formula_and_recalc() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -511,7 +511,7 @@ async fn test_edit_formula_and_recalc() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -556,7 +556,7 @@ async fn test_list_and_discard_forks() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -568,7 +568,7 @@ async fn test_list_and_discard_forks() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -619,7 +619,7 @@ async fn test_get_edits_returns_applied_changes() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -691,7 +691,7 @@ async fn test_vlookup_recalc_with_real_workbook() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -730,7 +730,7 @@ async fn test_vlookup_recalc_with_real_workbook() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calculations",
                     "start_row": 1,
                     "page_size": 15
@@ -797,7 +797,7 @@ async fn test_recalc_division_by_zero_error() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -813,7 +813,7 @@ async fn test_recalc_division_by_zero_error() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -873,7 +873,7 @@ async fn test_recalc_error_propagation() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -889,7 +889,7 @@ async fn test_recalc_error_propagation() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -956,7 +956,7 @@ async fn test_recalc_date_arithmetic() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -972,7 +972,7 @@ async fn test_recalc_date_arithmetic() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1057,7 +1057,7 @@ async fn test_recalc_large_dataset_sumif() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1084,7 +1084,7 @@ async fn test_recalc_large_dataset_sumif() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1153,7 +1153,7 @@ async fn test_recalc_multiple_batch_edits() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1186,7 +1186,7 @@ async fn test_recalc_multiple_batch_edits() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1263,7 +1263,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1275,7 +1275,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1316,7 +1316,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork1_id,
+                    "workbook_or_fork_id": fork1_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1330,7 +1330,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork2_id,
+                    "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1366,7 +1366,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": workbook_id,
+                    "workbook_or_fork_id": workbook_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1431,7 +1431,7 @@ async fn test_recalc_empty_cells_in_range() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1447,7 +1447,7 @@ async fn test_recalc_empty_cells_in_range() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1533,7 +1533,7 @@ async fn test_recalc_text_and_boolean_handling() -> Result<()> {
             .call_tool(call_tool(
                 "create_fork",
                 json!({
-                    "workbook_id": workbook_id
+                    "workbook_or_fork_id": workbook_id
                 }),
             ))
             .await?,
@@ -1549,7 +1549,7 @@ async fn test_recalc_text_and_boolean_handling() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -1616,7 +1616,7 @@ async fn test_save_fork_to_new_path() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1698,7 +1698,7 @@ async fn test_save_fork_overwrite_blocked_by_default() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1751,7 +1751,7 @@ async fn test_save_fork_overwrite_with_flag() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1816,7 +1816,7 @@ async fn test_save_fork_drop_fork_false_keeps_fork() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1927,7 +1927,7 @@ async fn test_save_fork_reject_outside_workspace() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -1976,7 +1976,7 @@ async fn test_save_fork_reject_non_xlsx() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -2030,7 +2030,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -2062,7 +2062,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -2074,7 +2074,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork2_id,
+                    "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10
@@ -2113,7 +2113,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork2_id,
+                    "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
                     "page_size": 10

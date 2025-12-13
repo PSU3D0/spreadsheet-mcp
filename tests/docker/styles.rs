@@ -28,7 +28,7 @@ async fn test_sheet_styles_reports_descriptors_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "sheet_styles",
-                json!({ "workbook_id": workbook_id, "sheet_name": "Sheet1" }),
+                json!({ "workbook_or_fork_id": workbook_id, "sheet_name": "Sheet1" }),
             ))
             .await?,
     )?;
@@ -77,7 +77,7 @@ async fn test_sheet_styles_truncates_large_style_counts_in_docker() -> Result<()
         &client
             .call_tool(call_tool(
                 "sheet_styles",
-                json!({ "workbook_id": workbook_id, "sheet_name": "Sheet1" }),
+                json!({ "workbook_or_fork_id": workbook_id, "sheet_name": "Sheet1" }),
             ))
             .await?,
     )?;
@@ -116,7 +116,7 @@ async fn test_sheet_styles_reports_runs_in_docker() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_styles",
                 json!({
-                    "workbook_id": workbook_id,
+                    "workbook_or_fork_id": workbook_id,
                     "sheet_name": "Sheet1",
                     "scope": { "kind": "range", "range": "A1:C1" },
                     "granularity": "runs",

@@ -59,6 +59,7 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `create_fork` | Create a temporary editable copy for "what-if" analysis |
 | `checkpoint_fork`, `restore_checkpoint` | High-fidelity snapshot + rollback |
 | `edit_batch` | Apply values or formulas to cells in a fork |
+| `transform_batch` | Range-first clear/fill/replace (prefer for bulk edits) |
 | `style_batch` | Batch style edits (range/region/cells) |
 | `apply_formula_pattern` | Autofill-like formula fill over a target range |
 | `structure_batch` | Batch structural edits (rows/cols/sheets + copy/move ranges) |
@@ -68,6 +69,37 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
 | `list_staged_changes`, `apply_staged_change`, `discard_staged_change` | Manage previewed/staged changes |
 | `get_edits`, `list_forks`, `discard_fork` | Inspect / list / discard forks |
+
+### Token-Efficient Write Workflows
+
+**find_formula paging**
+```json
+{
+  "tool": "find_formula",
+  "arguments": {
+    "workbook_or_fork_id": "budget-2024-a1b2c3",
+    "sheet_name": "Calc",
+    "query": "SUM(",
+    "include_context": false,
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+**get_changeset summary + filters**
+```json
+{
+  "tool": "get_changeset",
+  "arguments": {
+    "fork_id": "fork-123",
+    "summary_only": true,
+    "exclude_subtypes": ["recalc_result"],
+    "limit": 200,
+    "offset": 0
+  }
+}
+```
 
 ### Docker Paths (Exports + Screenshots)
 
@@ -83,7 +115,7 @@ When running in Docker with `--workspace-root /data` and a host mount like `-v /
 `screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshots/` in the workspace. Note: the tool returns a `file://` URI on the server filesystem; when running via Docker, treat it as a container path and look for the PNG under your mounted workspace folder (e.g. `screenshots/<name>.png`).
 
 Arguments:
-- `workbook_id` (required)
+- `workbook_or_fork_id` (required; accepts a workbook_id or fork_id)
 - `sheet_name` (required)
 - `range` (optional, default `A1:M40`)
 
