@@ -113,6 +113,7 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             fork_id: fork.fork_id.clone(),
             ops: vec![StructureOp::CopyRange {
                 sheet_name: "Sheet1".to_string(),
+                dest_sheet_name: None,
                 src_range: "C1:C1".to_string(),
                 dest_anchor: "D1".to_string(),
                 include_styles: true,
@@ -169,6 +170,7 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             ops: vec![StructureOp::MoveRange {
                 sheet_name: "Sheet1".to_string(),
+                dest_sheet_name: None,
                 src_range: "A1:A1".to_string(),
                 dest_anchor: "C3".to_string(),
                 include_styles: true,
@@ -232,6 +234,7 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             ops: vec![StructureOp::CopyRange {
                 sheet_name: "Sheet1".to_string(),
+                dest_sheet_name: None,
                 src_range: "A1:B2".to_string(),
                 dest_anchor: "B2".to_string(),
                 include_styles: false,
