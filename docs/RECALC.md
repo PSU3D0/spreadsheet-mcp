@@ -45,6 +45,14 @@ The standard `spreadsheet-mcp:latest` image is read-only and much smaller (~15MB
 4.  **Review:** `get_changeset(fork_id)` -> JSON diff of values/formulas/tables.
 5.  **Commit/Discard:** `save_fork(fork_id, target_path)` or `discard_fork(fork_id)`.
 
+### Docker paths (what’s persisted)
+
+When running in Docker with `--workspace-root /data` and a host mount like `-v /path/to/workbooks:/data`:
+
+- Fork working files are stored under `/tmp/mcp-forks` inside the container and are ephemeral.
+- To persist a fork back to the host, call `save_fork` with a `target_path` under `/data` (or a relative path).
+- Screenshots from `screenshot_sheet` are written under `/data/screenshots/` (host sees `/path/to/workbooks/screenshots/`).
+
 ## Configuration
 
 *   `SPREADSHEET_MCP_RECALC_ENABLED=true`: Enables write tools.

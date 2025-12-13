@@ -4,7 +4,8 @@ use crate::fork::{ForkConfig, ForkRegistry};
 use crate::model::{WorkbookId, WorkbookListResponse};
 #[cfg(feature = "recalc")]
 use crate::recalc::{
-    GlobalRecalcLock, LibreOfficeBackend, RecalcBackend, RecalcConfig, create_executor,
+    GlobalRecalcLock, GlobalScreenshotLock, LibreOfficeBackend, RecalcBackend, RecalcConfig,
+    create_executor,
 };
 use crate::tools::filters::WorkbookFilter;
 use crate::utils::{hash_path_metadata, make_short_workbook_id};
@@ -31,6 +32,8 @@ pub struct AppState {
     recalc_backend: Option<Arc<dyn RecalcBackend>>,
     #[cfg(feature = "recalc")]
     recalc_semaphore: Option<GlobalRecalcLock>,
+    #[cfg(feature = "recalc")]
+    screenshot_semaphore: Option<GlobalScreenshotLock>,
 }
 
 impl AppState {
@@ -38,32 +41,39 @@ impl AppState {
         let capacity = NonZeroUsize::new(config.cache_capacity.max(1)).unwrap();
 
         #[cfg(feature = "recalc")]
-        let (fork_registry, recalc_backend, recalc_semaphore) = if config.recalc_enabled {
-            let fork_config = ForkConfig::default();
-            let registry = ForkRegistry::new(fork_config)
-                .map(Arc::new)
-                .map_err(|e| tracing::warn!("failed to init fork registry: {}", e))
-                .ok();
+        let (fork_registry, recalc_backend, recalc_semaphore, screenshot_semaphore) =
+            if config.recalc_enabled {
+                let fork_config = ForkConfig::default();
+                let registry = ForkRegistry::new(fork_config)
+                    .map(Arc::new)
+                    .map_err(|e| tracing::warn!("failed to init fork registry: {}", e))
+                    .ok();
 
-            if let Some(registry) = &registry {
-                registry.clone().start_cleanup_task();
-            }
+                if let Some(registry) = &registry {
+                    registry.clone().start_cleanup_task();
+                }
 
-            let executor = create_executor(&RecalcConfig::default());
-            let backend: Arc<dyn RecalcBackend> = Arc::new(LibreOfficeBackend::new(executor));
-            let backend = if backend.is_available() {
-                Some(backend)
+                let executor = create_executor(&RecalcConfig::default());
+                let backend: Arc<dyn RecalcBackend> = Arc::new(LibreOfficeBackend::new(executor));
+                let backend = if backend.is_available() {
+                    Some(backend)
+                } else {
+                    tracing::warn!("recalc backend not available (soffice not found)");
+                    None
+                };
+
+                let semaphore = GlobalRecalcLock::new(config.max_concurrent_recalcs);
+                let screenshot_semaphore = GlobalScreenshotLock::new();
+
+                (
+                    registry,
+                    backend,
+                    Some(semaphore),
+                    Some(screenshot_semaphore),
+                )
             } else {
-                tracing::warn!("recalc backend not available (soffice not found)");
-                None
+                (None, None, None, None)
             };
-
-            let semaphore = GlobalRecalcLock::new(config.max_concurrent_recalcs);
-
-            (registry, backend, Some(semaphore))
-        } else {
-            (None, None, None)
-        };
 
         Self {
             config,
@@ -76,6 +86,8 @@ impl AppState {
             recalc_backend,
             #[cfg(feature = "recalc")]
             recalc_semaphore,
+            #[cfg(feature = "recalc")]
+            screenshot_semaphore,
         }
     }
 
@@ -96,6 +108,11 @@ impl AppState {
     #[cfg(feature = "recalc")]
     pub fn recalc_semaphore(&self) -> Option<&GlobalRecalcLock> {
         self.recalc_semaphore.as_ref()
+    }
+
+    #[cfg(feature = "recalc")]
+    pub fn screenshot_semaphore(&self) -> Option<&GlobalScreenshotLock> {
+        self.screenshot_semaphore.as_ref()
     }
 
     pub fn list_workbooks(&self, filter: WorkbookFilter) -> Result<WorkbookListResponse> {
