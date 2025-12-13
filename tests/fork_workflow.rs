@@ -9,13 +9,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use spreadsheet_mcp::ServerConfig;
 use spreadsheet_mcp::diff::Change; // Add Change import
-use spreadsheet_mcp::diff::merge::ModificationType;
+use spreadsheet_mcp::diff::merge::{CellDiff, ModificationType};
 use spreadsheet_mcp::model::WorkbookId;
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::fork::{
     CellEdit, CreateForkParams, DiscardForkParams, EditBatchParams, GetChangesetParams,
-    GetEditsParams, ListForksParams, SaveForkParams, create_fork, discard_fork, edit_batch,
-    get_changeset, get_edits, list_forks, save_fork,
+    GetEditsParams, ListForksParams, SaveForkParams, TransformBatchParams, TransformOp,
+    TransformTarget, create_fork, discard_fork, edit_batch, get_changeset, get_edits, list_forks,
+    save_fork, transform_batch,
 };
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
@@ -63,7 +64,13 @@ async fn test_create_fork_basic() -> Result<()> {
     let state = Arc::new(AppState::new(config));
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let response = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let response = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     assert!(!response.fork_id.is_empty());
     assert!(response.base_workbook.contains("source.xlsx"));
@@ -101,7 +108,7 @@ async fn test_create_fork_rejects_non_xlsx() -> Result<()> {
     let result = create_fork(
         state,
         CreateForkParams {
-            workbook_id: list.workbooks[0].workbook_id.clone(),
+            workbook_or_fork_id: list.workbooks[0].workbook_id.clone(),
         },
     )
     .await;
@@ -124,7 +131,13 @@ async fn test_edit_batch_applies_values() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork_response = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork_response = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let edit_response = edit_batch(
         state.clone(),
@@ -165,7 +178,13 @@ async fn test_get_edits_returns_history() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     // Apply multiple batches
     edit_batch(
@@ -232,7 +251,13 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     edit_batch(
         state.clone(),
@@ -260,6 +285,7 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
         GetChangesetParams {
             fork_id: fork.fork_id.clone(),
             sheet_name: None,
+            ..Default::default()
         },
     )
     .await?;
@@ -311,7 +337,13 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     // Edit both sheets
     edit_batch(
@@ -348,6 +380,7 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
         GetChangesetParams {
             fork_id: fork.fork_id.clone(),
             sheet_name: Some("Sheet1".to_string()),
+            ..Default::default()
         },
     )
     .await?;
@@ -380,12 +413,18 @@ async fn test_list_forks() -> Result<()> {
     let fork1 = create_fork(
         state.clone(),
         CreateForkParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
         },
     )
     .await?;
 
-    let fork2 = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork2 = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let list = list_forks(state.clone(), ListForksParams {}).await?;
     assert_eq!(list.forks.len(), 2);
@@ -408,7 +447,13 @@ async fn test_discard_fork() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     // Verify fork exists
     let list = list_forks(state.clone(), ListForksParams {}).await?;
@@ -449,7 +494,13 @@ async fn test_save_fork_overwrites_original() -> Result<()> {
     let state = Arc::new(AppState::new(config));
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     edit_batch(
         state.clone(),
@@ -502,7 +553,13 @@ async fn test_save_fork_to_new_path() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     edit_batch(
         state.clone(),
@@ -574,7 +631,13 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
     assert!(!fork.fork_id.is_empty());
 
     // Step 2: Apply edits (update rent amount)
@@ -611,6 +674,7 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
         GetChangesetParams {
             fork_id: fork.fork_id.clone(),
             sheet_name: None,
+            ..Default::default()
         },
     )
     .await?;
@@ -682,7 +746,13 @@ async fn test_edit_nonexistent_sheet_error() -> Result<()> {
     let state = app_state_with_recalc(&workspace);
     let workbook_id = discover_workbook(state.clone()).await?;
 
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let result = edit_batch(
         state.clone(),
@@ -705,6 +775,225 @@ async fn test_edit_nonexistent_sheet_error() -> Result<()> {
         "error should mention sheet not found: {}",
         err
     );
+
+    Ok(())
+}
+
+fn first_cell_address(changes: &[Change]) -> Option<&str> {
+    for change in changes {
+        if let Change::Cell(cell) = change {
+            match &cell.diff {
+                CellDiff::Added { address, .. }
+                | CellDiff::Deleted { address, .. }
+                | CellDiff::Modified { address, .. } => {
+                    return Some(address.as_str());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn test_get_changeset_paging_limit_offset_and_summary_only() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("changeset_paging.xlsx", |book| {
+        let sheet = book.get_sheet_mut(&0).unwrap();
+        sheet.set_name("Sheet1");
+    });
+
+    let state = app_state_with_recalc(&workspace);
+    let workbook_id = discover_workbook(state.clone()).await?;
+
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    transform_batch(
+        state.clone(),
+        TransformBatchParams {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![TransformOp::FillRange {
+                sheet_name: "Sheet1".to_string(),
+                target: TransformTarget::Range {
+                    range: "A1:T20".to_string(),
+                },
+                value: "x".to_string(),
+                is_formula: false,
+                overwrite_formulas: false,
+            }],
+            mode: Some("apply".to_string()),
+            label: None,
+        },
+    )
+    .await?;
+
+    let page1 = get_changeset(
+        state.clone(),
+        GetChangesetParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            limit: 5,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(page1.changes.len(), 5);
+    assert!(page1.summary.total_changes > 5);
+    assert!(page1.summary.truncated);
+    assert_eq!(page1.summary.next_offset, Some(5));
+    assert_eq!(page1.summary.returned_changes, 5);
+
+    let page2 = get_changeset(
+        state.clone(),
+        GetChangesetParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            limit: 5,
+            offset: page1.summary.next_offset.unwrap(),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(page2.changes.len(), 5);
+    assert_ne!(
+        first_cell_address(&page1.changes),
+        first_cell_address(&page2.changes)
+    );
+
+    let summary_only = get_changeset(
+        state.clone(),
+        GetChangesetParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            summary_only: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert!(summary_only.changes.is_empty());
+    assert_eq!(summary_only.summary.returned_changes, 0);
+    assert_eq!(
+        summary_only.summary.total_changes,
+        page1.summary.total_changes
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_changeset_exclude_recalc_result() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("changeset_filter.xlsx", |book| {
+        let sheet = book.get_sheet_mut(&0).unwrap();
+        sheet.set_name("Sheet1");
+        sheet.get_cell_mut("A1").set_value_number(1);
+        sheet
+            .get_cell_mut("B1")
+            .set_formula("A1*2")
+            .set_formula_result_default("2");
+    });
+
+    let state = app_state_with_recalc(&workspace);
+    let workbook_id = discover_workbook(state.clone()).await?;
+
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    edit_batch(
+        state.clone(),
+        EditBatchParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: "Sheet1".to_string(),
+            edits: vec![CellEdit {
+                address: "A1".to_string(),
+                value: "2".to_string(),
+                is_formula: false,
+            }],
+        },
+    )
+    .await?;
+
+    let registry = state.fork_registry().expect("fork registry");
+    let fork_ctx = registry.get_fork(&fork.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(&work_path)?;
+    let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+    sheet.get_cell_mut("B1").set_formula_result_default("999");
+    umya_spreadsheet::writer::xlsx::write(&book, &work_path)?;
+
+    let unfiltered = get_changeset(
+        state.clone(),
+        GetChangesetParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let has_recalc_result = unfiltered.changes.iter().any(|c| match c {
+        Change::Cell(cell) => matches!(
+            &cell.diff,
+            CellDiff::Modified {
+                address,
+                subtype: ModificationType::RecalcResult,
+                ..
+            } if address == "B1"
+        ),
+        _ => false,
+    });
+    assert!(has_recalc_result);
+
+    let filtered = get_changeset(
+        state.clone(),
+        GetChangesetParams {
+            fork_id: fork.fork_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            exclude_subtypes: Some(vec!["recalc_result".to_string()]),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let filtered_has_recalc_result = filtered.changes.iter().any(|c| match c {
+        Change::Cell(cell) => matches!(
+            &cell.diff,
+            CellDiff::Modified {
+                subtype: ModificationType::RecalcResult,
+                ..
+            }
+        ),
+        _ => false,
+    });
+    assert!(!filtered_has_recalc_result);
+
+    let filtered_has_a1 = filtered.changes.iter().any(|c| match c {
+        Change::Cell(cell) => matches!(
+            &cell.diff,
+            CellDiff::Modified {
+                address,
+                subtype: ModificationType::ValueEdit,
+                ..
+            } if address == "A1"
+        ),
+        _ => false,
+    });
+    assert!(filtered_has_a1);
 
     Ok(())
 }

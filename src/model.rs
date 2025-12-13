@@ -412,6 +412,8 @@ pub struct FindFormulaResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub matches: Vec<FindFormulaMatch>,
+    pub truncated: bool,
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

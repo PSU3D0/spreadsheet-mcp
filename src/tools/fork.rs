@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateForkParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -33,7 +34,7 @@ pub async fn create_fork(
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available (recalc disabled?)"))?;
 
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let base_path = &workbook.path;
     let workspace_root = &state.config().workspace_root;
 
@@ -133,6 +134,257 @@ fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEd
 
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
     Ok(())
+}
+
+fn default_clear_values() -> bool {
+    true
+}
+
+fn default_overwrite_formulas() -> bool {
+    false
+}
+
+fn default_replace_case_sensitive() -> bool {
+    true
+}
+
+fn default_replace_match_mode() -> String {
+    "exact".to_string()
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TransformBatchParams {
+    pub fork_id: String,
+    pub ops: Vec<TransformOp>,
+    #[serde(default)]
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransformOp {
+    ClearRange {
+        sheet_name: String,
+        target: TransformTarget,
+        #[serde(default = "default_clear_values")]
+        clear_values: bool,
+        #[serde(default)]
+        clear_formulas: bool,
+    },
+    FillRange {
+        sheet_name: String,
+        target: TransformTarget,
+        value: String,
+        #[serde(default)]
+        is_formula: bool,
+        #[serde(default = "default_overwrite_formulas")]
+        overwrite_formulas: bool,
+    },
+    ReplaceInRange {
+        sheet_name: String,
+        target: TransformTarget,
+        find: String,
+        replace: String,
+        #[serde(default = "default_replace_match_mode")]
+        match_mode: String, // exact|contains
+        #[serde(default = "default_replace_case_sensitive")]
+        case_sensitive: bool,
+        #[serde(default)]
+        include_formulas: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransformTarget {
+    Range { range: String },
+    Region { region_id: u32 },
+    Cells { cells: Vec<String> },
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TransformBatchResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TransformBatchStagedPayload {
+    ops: Vec<TransformOp>,
+}
+
+pub async fn transform_batch(
+    state: Arc<AppState>,
+    params: TransformBatchParams,
+) -> Result<TransformBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+
+    let mut resolved_ops = Vec::with_capacity(params.ops.len());
+    for op in &params.ops {
+        let (sheet_name, target) = match op {
+            TransformOp::ClearRange {
+                sheet_name, target, ..
+            }
+            | TransformOp::FillRange {
+                sheet_name, target, ..
+            }
+            | TransformOp::ReplaceInRange {
+                sheet_name, target, ..
+            } => (sheet_name, target),
+        };
+
+        let resolved_target = match target {
+            TransformTarget::Region { region_id } => {
+                let metrics = workbook.get_sheet_metrics(sheet_name)?;
+                let region = metrics
+                    .detected_regions
+                    .iter()
+                    .find(|r| r.id == *region_id)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "region_id {} not found on sheet '{}'",
+                            region_id,
+                            sheet_name
+                        )
+                    })?;
+                TransformTarget::Range {
+                    range: region.bounds.clone(),
+                }
+            }
+            other => other.clone(),
+        };
+
+        match op {
+            TransformOp::ClearRange {
+                sheet_name,
+                clear_values,
+                clear_formulas,
+                ..
+            } => {
+                resolved_ops.push(TransformOp::ClearRange {
+                    sheet_name: sheet_name.clone(),
+                    target: resolved_target,
+                    clear_values: *clear_values,
+                    clear_formulas: *clear_formulas,
+                });
+            }
+            TransformOp::FillRange {
+                sheet_name,
+                value,
+                is_formula,
+                overwrite_formulas,
+                ..
+            } => {
+                resolved_ops.push(TransformOp::FillRange {
+                    sheet_name: sheet_name.clone(),
+                    target: resolved_target,
+                    value: value.clone(),
+                    is_formula: *is_formula,
+                    overwrite_formulas: *overwrite_formulas,
+                });
+            }
+            TransformOp::ReplaceInRange {
+                sheet_name,
+                find,
+                replace,
+                match_mode,
+                case_sensitive,
+                include_formulas,
+                ..
+            } => {
+                resolved_ops.push(TransformOp::ReplaceInRange {
+                    sheet_name: sheet_name.clone(),
+                    target: resolved_target,
+                    find: find.clone(),
+                    replace: replace.clone(),
+                    match_mode: match_mode.clone(),
+                    case_sensitive: *case_sensitive,
+                    include_formulas: *include_formulas,
+                });
+            }
+        }
+    }
+
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = Uuid::new_v4().to_string();
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            move || apply_transform_ops_to_file(&snapshot_for_apply, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["transform_batch".to_string()];
+
+        let staged_op = StagedOp {
+            kind: "transform_batch".to_string(),
+            payload: serde_json::to_value(TransformBatchStagedPayload {
+                ops: resolved_ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(TransformBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    } else {
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = resolved_ops.clone();
+            let work_path = work_path.clone();
+            move || apply_transform_ops_to_file(&work_path, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["transform_batch".to_string()];
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(TransformBatchResponse {
+            fork_id: params.fork_id,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1018,6 +1270,7 @@ struct CopyMoveApplyResult {
     warnings: Vec<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ranges_intersect(
     a_min_col: u32,
     a_min_row: u32,
@@ -1034,6 +1287,7 @@ fn ranges_intersect(
         || b_max_row < a_min_row)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_or_move_range(
     book: &mut umya_spreadsheet::Spreadsheet,
     src_sheet_name: &str,
@@ -1801,6 +2055,344 @@ fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
     PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
 }
 
+struct TransformApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn apply_transform_ops_to_file(path: &Path, ops: &[TransformOp]) -> Result<TransformApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let mut sheets: BTreeSet<String> = BTreeSet::new();
+    let mut affected_bounds: Vec<String> = Vec::new();
+
+    let mut cells_touched: u64 = 0;
+    let mut cells_value_cleared: u64 = 0;
+    let mut cells_formula_cleared: u64 = 0;
+    let mut cells_skipped_keep_formulas: u64 = 0;
+
+    let mut cells_value_set: u64 = 0;
+    let mut cells_formula_set: u64 = 0;
+    let mut cells_value_replaced: u64 = 0;
+    let mut cells_formula_replaced: u64 = 0;
+
+    for op in ops {
+        match op {
+            TransformOp::ClearRange {
+                sheet_name,
+                target,
+                clear_values,
+                clear_formulas,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheets.insert(sheet_name.clone());
+
+                match target {
+                    TransformTarget::Range { range } => {
+                        let bounds = parse_range_bounds(range)?;
+                        affected_bounds.push(range.clone());
+
+                        for row in bounds.min_row..=bounds.max_row {
+                            for col in bounds.min_col..=bounds.max_col {
+                                let exists = sheet.get_cell((col, row)).is_some();
+                                if !exists {
+                                    continue;
+                                }
+
+                                let cell = sheet.get_cell_mut((col, row));
+                                let was_formula = cell.is_formula();
+                                cells_touched += 1;
+
+                                if *clear_formulas && was_formula {
+                                    cell.set_formula(String::new());
+                                    cells_formula_cleared += 1;
+                                }
+
+                                if *clear_values {
+                                    if was_formula && !*clear_formulas {
+                                        cells_skipped_keep_formulas += 1;
+                                    } else {
+                                        if !cell.get_value().is_empty() {
+                                            cells_value_cleared += 1;
+                                        }
+                                        cell.set_value(String::new());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TransformTarget::Cells { cells } => {
+                        affected_bounds.extend(cells.iter().cloned());
+                        for addr in cells {
+                            let exists = sheet.get_cell(addr.as_str()).is_some();
+                            if !exists {
+                                continue;
+                            }
+
+                            let cell = sheet.get_cell_mut(addr.as_str());
+                            let was_formula = cell.is_formula();
+                            cells_touched += 1;
+
+                            if *clear_formulas && was_formula {
+                                cell.set_formula(String::new());
+                                cells_formula_cleared += 1;
+                            }
+
+                            if *clear_values {
+                                if was_formula && !*clear_formulas {
+                                    cells_skipped_keep_formulas += 1;
+                                } else {
+                                    if !cell.get_value().is_empty() {
+                                        cells_value_cleared += 1;
+                                    }
+                                    cell.set_value(String::new());
+                                }
+                            }
+                        }
+                    }
+                    TransformTarget::Region { .. } => {
+                        return Err(anyhow!(
+                            "region_id targets must be resolved before apply_transform_ops_to_file"
+                        ));
+                    }
+                }
+            }
+            TransformOp::FillRange {
+                sheet_name,
+                target,
+                value,
+                is_formula,
+                overwrite_formulas,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheets.insert(sheet_name.clone());
+
+                match target {
+                    TransformTarget::Range { range } => {
+                        let bounds = parse_range_bounds(range)?;
+                        affected_bounds.push(range.clone());
+
+                        for row in bounds.min_row..=bounds.max_row {
+                            for col in bounds.min_col..=bounds.max_col {
+                                let cell = sheet.get_cell_mut((col, row));
+                                cells_touched += 1;
+
+                                if !*is_formula && cell.is_formula() {
+                                    if !*overwrite_formulas {
+                                        cells_skipped_keep_formulas += 1;
+                                        continue;
+                                    }
+                                    cell.set_formula(String::new());
+                                    cells_formula_cleared += 1;
+                                }
+
+                                if *is_formula {
+                                    cell.set_formula(value.clone());
+                                    cells_formula_set += 1;
+                                } else {
+                                    cell.set_value(value.clone());
+                                    cells_value_set += 1;
+                                }
+                            }
+                        }
+                    }
+                    TransformTarget::Cells { cells } => {
+                        affected_bounds.extend(cells.iter().cloned());
+                        for addr in cells {
+                            let cell = sheet.get_cell_mut(addr.as_str());
+                            cells_touched += 1;
+
+                            if !*is_formula && cell.is_formula() {
+                                if !*overwrite_formulas {
+                                    cells_skipped_keep_formulas += 1;
+                                    continue;
+                                }
+                                cell.set_formula(String::new());
+                                cells_formula_cleared += 1;
+                            }
+
+                            if *is_formula {
+                                cell.set_formula(value.clone());
+                                cells_formula_set += 1;
+                            } else {
+                                cell.set_value(value.clone());
+                                cells_value_set += 1;
+                            }
+                        }
+                    }
+                    TransformTarget::Region { .. } => {
+                        return Err(anyhow!(
+                            "region_id targets must be resolved before apply_transform_ops_to_file"
+                        ));
+                    }
+                }
+            }
+            TransformOp::ReplaceInRange {
+                sheet_name,
+                target,
+                find,
+                replace,
+                match_mode,
+                case_sensitive,
+                include_formulas,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheets.insert(sheet_name.clone());
+
+                let match_mode = match_mode.to_ascii_lowercase();
+                if match_mode != "exact" && match_mode != "contains" {
+                    return Err(anyhow!(
+                        "invalid match_mode '{}'; expected 'exact' or 'contains'",
+                        match_mode
+                    ));
+                }
+                if match_mode == "contains" && !*case_sensitive {
+                    return Err(anyhow!(
+                        "match_mode 'contains' requires case_sensitive=true"
+                    ));
+                }
+
+                let replace_value = |input: &str| -> Option<String> {
+                    if match_mode == "exact" {
+                        if *case_sensitive {
+                            (input == find).then(|| replace.clone())
+                        } else {
+                            input.eq_ignore_ascii_case(find).then(|| replace.clone())
+                        }
+                    } else if input.contains(find) {
+                        Some(input.replace(find, replace))
+                    } else {
+                        None
+                    }
+                };
+
+                match target {
+                    TransformTarget::Range { range } => {
+                        let bounds = parse_range_bounds(range)?;
+                        affected_bounds.push(range.clone());
+
+                        for row in bounds.min_row..=bounds.max_row {
+                            for col in bounds.min_col..=bounds.max_col {
+                                let exists = sheet.get_cell((col, row)).is_some();
+                                if !exists {
+                                    continue;
+                                }
+
+                                let cell = sheet.get_cell_mut((col, row));
+                                cells_touched += 1;
+
+                                if cell.is_formula() {
+                                    if !*include_formulas {
+                                        cells_skipped_keep_formulas += 1;
+                                        continue;
+                                    }
+
+                                    let formula = cell.get_formula().to_string();
+                                    if formula.is_empty() {
+                                        continue;
+                                    }
+                                    if let Some(next) = replace_value(&formula) {
+                                        cell.set_formula(next);
+                                        cells_formula_replaced += 1;
+                                    }
+                                    continue;
+                                }
+
+                                let value = cell.get_value().to_string();
+                                if value.is_empty() {
+                                    continue;
+                                }
+                                if let Some(next) = replace_value(&value) {
+                                    cell.set_value(next);
+                                    cells_value_replaced += 1;
+                                }
+                            }
+                        }
+                    }
+                    TransformTarget::Cells { cells } => {
+                        affected_bounds.extend(cells.iter().cloned());
+                        for addr in cells {
+                            let exists = sheet.get_cell(addr.as_str()).is_some();
+                            if !exists {
+                                continue;
+                            }
+
+                            let cell = sheet.get_cell_mut(addr.as_str());
+                            cells_touched += 1;
+
+                            if cell.is_formula() {
+                                if !*include_formulas {
+                                    cells_skipped_keep_formulas += 1;
+                                    continue;
+                                }
+
+                                let formula = cell.get_formula().to_string();
+                                if formula.is_empty() {
+                                    continue;
+                                }
+                                if let Some(next) = replace_value(&formula) {
+                                    cell.set_formula(next);
+                                    cells_formula_replaced += 1;
+                                }
+                                continue;
+                            }
+
+                            let value = cell.get_value().to_string();
+                            if value.is_empty() {
+                                continue;
+                            }
+                            if let Some(next) = replace_value(&value) {
+                                cell.set_value(next);
+                                cells_value_replaced += 1;
+                            }
+                        }
+                    }
+                    TransformTarget::Region { .. } => {
+                        return Err(anyhow!(
+                            "region_id targets must be resolved before apply_transform_ops_to_file"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_touched".to_string(), cells_touched);
+    counts.insert("cells_value_cleared".to_string(), cells_value_cleared);
+    counts.insert("cells_formula_cleared".to_string(), cells_formula_cleared);
+    counts.insert(
+        "cells_skipped_keep_formulas".to_string(),
+        cells_skipped_keep_formulas,
+    );
+
+    counts.insert("cells_value_set".to_string(), cells_value_set);
+    counts.insert("cells_formula_set".to_string(), cells_formula_set);
+    counts.insert("cells_value_replaced".to_string(), cells_value_replaced);
+    counts.insert("cells_formula_replaced".to_string(), cells_formula_replaced);
+
+    let summary = ChangeSummary {
+        op_kinds: vec!["transform_batch".to_string()],
+        affected_sheets: sheets.into_iter().collect(),
+        affected_bounds,
+        counts,
+        warnings: Vec::new(),
+    };
+
+    Ok(TransformApplyResult {
+        ops_applied: ops.len(),
+        summary,
+    })
+}
+
 fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
     use crate::styles::{
         StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id,
@@ -1937,10 +2529,56 @@ pub async fn get_edits(state: Arc<AppState>, params: GetEditsParams) -> Result<G
     })
 }
 
+fn default_get_changeset_limit() -> u32 {
+    200
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetChangesetParams {
     pub fork_id: String,
     pub sheet_name: Option<String>,
+    #[serde(default = "default_get_changeset_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default)]
+    pub summary_only: bool,
+    #[serde(default)]
+    pub include_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub exclude_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_subtypes: Option<Vec<String>>,
+    #[serde(default)]
+    pub exclude_subtypes: Option<Vec<String>>,
+}
+
+impl Default for GetChangesetParams {
+    fn default() -> Self {
+        Self {
+            fork_id: String::new(),
+            sheet_name: None,
+            limit: default_get_changeset_limit(),
+            offset: 0,
+            summary_only: false,
+            include_types: None,
+            exclude_types: None,
+            include_subtypes: None,
+            exclude_subtypes: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ChangesetSummary {
+    pub total_changes: u32,
+    pub returned_changes: u32,
+    pub truncated: bool,
+    pub next_offset: Option<u32>,
+    pub counts_by_kind: BTreeMap<String, u32>,
+    pub counts_by_type: BTreeMap<String, u32>,
+    pub counts_by_subtype: BTreeMap<String, u32>,
+    pub affected_sheets: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1948,6 +2586,114 @@ pub struct GetChangesetResponse {
     pub fork_id: String,
     pub base_workbook: String,
     pub changes: Vec<crate::diff::Change>,
+    pub summary: ChangesetSummary,
+}
+
+fn normalize_filter(values: &Option<Vec<String>>) -> Option<BTreeSet<String>> {
+    values.as_ref().map(|items| {
+        items
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>()
+    })
+}
+
+fn change_kind_key(change: &crate::diff::Change) -> &'static str {
+    match change {
+        crate::diff::Change::Cell(_) => "cell",
+        crate::diff::Change::Table(_) => "table",
+        crate::diff::Change::Name(_) => "name",
+    }
+}
+
+fn change_type_key(change: &crate::diff::Change) -> &'static str {
+    use crate::diff::merge::CellDiff;
+    match change {
+        crate::diff::Change::Cell(cell) => match &cell.diff {
+            CellDiff::Added { .. } => "added",
+            CellDiff::Deleted { .. } => "deleted",
+            CellDiff::Modified { .. } => "modified",
+        },
+        crate::diff::Change::Table(table) => match table {
+            crate::diff::tables::TableDiff::TableAdded { .. } => "table_added",
+            crate::diff::tables::TableDiff::TableDeleted { .. } => "table_deleted",
+            crate::diff::tables::TableDiff::TableModified { .. } => "table_modified",
+        },
+        crate::diff::Change::Name(name) => match name {
+            crate::diff::names::NameDiff::NameAdded { .. } => "name_added",
+            crate::diff::names::NameDiff::NameDeleted { .. } => "name_deleted",
+            crate::diff::names::NameDiff::NameModified { .. } => "name_modified",
+        },
+    }
+}
+
+fn change_subtype_key(change: &crate::diff::Change) -> Option<&'static str> {
+    use crate::diff::merge::{CellDiff, ModificationType};
+    match change {
+        crate::diff::Change::Cell(cell) => match &cell.diff {
+            CellDiff::Modified { subtype, .. } => Some(match subtype {
+                ModificationType::FormulaEdit => "formula_edit",
+                ModificationType::RecalcResult => "recalc_result",
+                ModificationType::ValueEdit => "value_edit",
+                ModificationType::StyleEdit => "style_edit",
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn change_sheet_name(change: &crate::diff::Change) -> Option<&str> {
+    match change {
+        crate::diff::Change::Cell(cell) => Some(cell.sheet.as_str()),
+        crate::diff::Change::Table(table) => match table {
+            crate::diff::tables::TableDiff::TableAdded { sheet, .. }
+            | crate::diff::tables::TableDiff::TableDeleted { sheet, .. }
+            | crate::diff::tables::TableDiff::TableModified { sheet, .. } => Some(sheet.as_str()),
+        },
+        crate::diff::Change::Name(name) => match name {
+            crate::diff::names::NameDiff::NameAdded { scope_sheet, .. }
+            | crate::diff::names::NameDiff::NameDeleted { scope_sheet, .. }
+            | crate::diff::names::NameDiff::NameModified { scope_sheet, .. } => {
+                scope_sheet.as_deref()
+            }
+        },
+    }
+}
+
+fn change_passes_filters(
+    change: &crate::diff::Change,
+    include_types: &Option<BTreeSet<String>>,
+    exclude_types: &Option<BTreeSet<String>>,
+    include_subtypes: &Option<BTreeSet<String>>,
+    exclude_subtypes: &Option<BTreeSet<String>>,
+) -> bool {
+    let type_key = change_type_key(change);
+    let subtype_key = change_subtype_key(change);
+
+    if let Some(include) = include_types
+        && !include.contains(type_key)
+    {
+        return false;
+    }
+    if let Some(exclude) = exclude_types
+        && exclude.contains(type_key)
+    {
+        return false;
+    }
+
+    if let Some(include) = include_subtypes
+        && subtype_key.is_none_or(|subtype| !include.contains(subtype))
+    {
+        return false;
+    }
+    if let Some(exclude) = exclude_subtypes
+        && subtype_key.is_some_and(|subtype| exclude.contains(subtype))
+    {
+        return false;
+    }
+
+    true
 }
 
 pub async fn get_changeset(
@@ -1960,7 +2706,7 @@ pub async fn get_changeset(
 
     let fork_ctx = registry.get_fork(&params.fork_id)?;
 
-    let changes = tokio::task::spawn_blocking({
+    let raw_changes = tokio::task::spawn_blocking({
         let base_path = fork_ctx.base_path.clone();
         let work_path = fork_ctx.work_path.clone();
         let sheet_filter = params.sheet_name.clone();
@@ -1968,10 +2714,74 @@ pub async fn get_changeset(
     })
     .await??;
 
+    let include_types = normalize_filter(&params.include_types);
+    let exclude_types = normalize_filter(&params.exclude_types);
+    let include_subtypes = normalize_filter(&params.include_subtypes);
+    let exclude_subtypes = normalize_filter(&params.exclude_subtypes);
+
+    let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
+    let mut counts_by_kind: BTreeMap<String, u32> = BTreeMap::new();
+    let mut counts_by_type: BTreeMap<String, u32> = BTreeMap::new();
+    let mut counts_by_subtype: BTreeMap<String, u32> = BTreeMap::new();
+
+    let mut filtered: Vec<crate::diff::Change> = Vec::new();
+    for change in raw_changes {
+        if !change_passes_filters(
+            &change,
+            &include_types,
+            &exclude_types,
+            &include_subtypes,
+            &exclude_subtypes,
+        ) {
+            continue;
+        }
+
+        *counts_by_kind
+            .entry(change_kind_key(&change).to_string())
+            .or_default() += 1;
+        *counts_by_type
+            .entry(change_type_key(&change).to_string())
+            .or_default() += 1;
+        if let Some(subtype) = change_subtype_key(&change) {
+            *counts_by_subtype.entry(subtype.to_string()).or_default() += 1;
+        }
+        if let Some(sheet) = change_sheet_name(&change) {
+            affected_sheets.insert(sheet.to_string());
+        }
+
+        filtered.push(change);
+    }
+
+    let limit = params.limit.clamp(1, 2000) as usize;
+    let offset = params.offset as usize;
+    let total = filtered.len();
+
+    let (returned_changes, changes, truncated, next_offset) = if params.summary_only {
+        (0u32, Vec::new(), false, None)
+    } else {
+        let end = offset.saturating_add(limit);
+        let truncated = end < total;
+        let next_offset = truncated.then_some(end as u32);
+        let changes: Vec<_> = filtered.into_iter().skip(offset).take(limit).collect();
+        (changes.len() as u32, changes, truncated, next_offset)
+    };
+
+    let summary = ChangesetSummary {
+        total_changes: total as u32,
+        returned_changes,
+        truncated,
+        next_offset,
+        counts_by_kind,
+        counts_by_type,
+        counts_by_subtype,
+        affected_sheets: affected_sheets.into_iter().collect(),
+    };
+
     Ok(GetChangesetResponse {
         fork_id: params.fork_id,
         base_workbook: fork_ctx.base_path.display().to_string(),
         changes,
+        summary,
     })
 }
 
@@ -2426,6 +3236,20 @@ pub async fn apply_staged_change(
 
                 ops_applied += 1;
             }
+            "transform_batch" => {
+                let payload: TransformBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid transform_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_transform_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
             "apply_formula_pattern" => {
                 let payload: ApplyFormulaPatternStagedPayload =
                     serde_json::from_value(op.payload.clone())
@@ -2532,7 +3356,8 @@ const DEFAULT_MAX_PNG_AREA_PX: u64 = 12_000_000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenshotSheetParams {
-    pub workbook_id: WorkbookId,
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
     #[serde(default)]
     pub range: Option<String>,
@@ -2555,7 +3380,7 @@ pub async fn screenshot_sheet(
     let range = params.range.as_deref().unwrap_or(DEFAULT_SCREENSHOT_RANGE);
     let bounds = validate_screenshot_range(range)?;
 
-    let workbook = state.open_workbook(&params.workbook_id).await?;
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let workbook_path = workbook.path.clone();
 
     let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
@@ -2596,7 +3421,7 @@ pub async fn screenshot_sheet(
     enforce_png_pixel_limits(&result.output_path, range, &bounds).await?;
 
     Ok(ScreenshotSheetResponse {
-        workbook_id: params.workbook_id.0,
+        workbook_id: params.workbook_or_fork_id.0,
         sheet_name: params.sheet_name,
         range: range.to_string(),
         output_path: format!("file://{}", result.output_path.display()),

@@ -48,7 +48,7 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
     let description = describe_workbook(
         state.clone(),
         DescribeWorkbookParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
         },
     )
     .await?;
@@ -59,7 +59,7 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
     let sheets = list_sheets(
         state.clone(),
         ListSheetsParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
         },
     )
     .await?;
@@ -74,7 +74,7 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
     let overview = sheet_overview(
         state,
         SheetOverviewParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Data".to_string(),
         },
     )
@@ -91,7 +91,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     let page = sheet_page(
         state.clone(),
         SheetPageParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             start_row: 2,
             page_size: 5,
@@ -121,7 +121,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     let stats = sheet_statistics(
         state.clone(),
         SheetStatisticsParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             sample_rows: None,
         },
@@ -151,7 +151,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     let formula_map = sheet_formula_map(
         state.clone(),
         SheetFormulaMapParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             range: Some("D2:D21".to_string()),
             expand: false,
@@ -168,7 +168,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     let limited_map = sheet_formula_map(
         state.clone(),
         SheetFormulaMapParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             range: None,
             expand: false,
@@ -195,7 +195,7 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
     let trace = formula_trace(
         state.clone(),
         FormulaTraceParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             cell_address: "E21".to_string(),
             direction: TraceDirection::Precedents,
@@ -223,10 +223,13 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
     let matches = find_formula(
         state.clone(),
         FindFormulaParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             query: "SUM(".to_string(),
             sheet_name: None,
             case_sensitive: false,
+            include_context: true,
+            limit: 50,
+            offset: 0,
         },
     )
     .await?;
@@ -242,7 +245,7 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
     let volatiles = scan_volatiles(
         state,
         ScanVolatilesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Data".to_string()),
         },
     )
@@ -257,7 +260,7 @@ async fn naming_and_styles_suite(state: Arc<AppState>, workbook_id: WorkbookId) 
     let _names = named_ranges(
         state.clone(),
         NamedRangesParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: None,
             name_prefix: Some("Sales".to_string()),
         },
@@ -267,7 +270,7 @@ async fn naming_and_styles_suite(state: Arc<AppState>, workbook_id: WorkbookId) 
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             scope: None,
             granularity: None,
@@ -290,7 +293,7 @@ async fn manifest_suite(state: Arc<AppState>, workbook_id: WorkbookId) -> Result
     let manifest = get_manifest_stub(
         state,
         ManifestStubParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_filter: None,
         },
     )
@@ -395,4 +398,90 @@ fn build_featured_workbook(book: &mut Spreadsheet) {
     data_sheet
         .add_defined_name("SalesLatest", "Data!$E$21")
         .expect("sheet defined name");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn find_formula_defaults_and_paging() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("find_formula_paging.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.set_name("Sheet1");
+        for row in 1..=5 {
+            sheet
+                .get_cell_mut((2, row))
+                .set_formula(format!("SUM(A{row}:A{row})"));
+        }
+    });
+
+    let state = workspace.app_state();
+    let list_response = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+        },
+    )
+    .await?;
+    let workbook_id = list_response.workbooks[0].workbook_id.clone();
+
+    let first_page = find_formula(
+        state.clone(),
+        FindFormulaParams {
+            workbook_or_fork_id: workbook_id.clone(),
+            query: "SUM(".to_string(),
+            sheet_name: Some("Sheet1".to_string()),
+            case_sensitive: false,
+            include_context: false,
+            limit: 2,
+            offset: 0,
+        },
+    )
+    .await?;
+
+    assert_eq!(first_page.matches.len(), 2);
+    assert!(first_page.matches.iter().all(|m| m.context.is_empty()));
+    assert!(first_page.truncated);
+    assert_eq!(first_page.next_offset, Some(2));
+
+    let second_page = find_formula(
+        state.clone(),
+        FindFormulaParams {
+            workbook_or_fork_id: workbook_id.clone(),
+            query: "SUM(".to_string(),
+            sheet_name: Some("Sheet1".to_string()),
+            case_sensitive: false,
+            include_context: false,
+            limit: 2,
+            offset: first_page.next_offset.unwrap(),
+        },
+    )
+    .await?;
+
+    assert!(!second_page.matches.is_empty());
+    assert_ne!(
+        first_page.matches[0].address,
+        second_page.matches[0].address
+    );
+
+    let with_context = find_formula(
+        state,
+        FindFormulaParams {
+            workbook_or_fork_id: workbook_id,
+            query: "SUM(".to_string(),
+            sheet_name: Some("Sheet1".to_string()),
+            case_sensitive: false,
+            include_context: true,
+            limit: 50,
+            offset: 0,
+        },
+    )
+    .await?;
+
+    assert!(!with_context.matches.is_empty());
+    assert!(!with_context.matches[0].context.is_empty());
+    assert!(!with_context.truncated);
+    assert!(with_context.next_offset.is_none());
+
+    Ok(())
 }

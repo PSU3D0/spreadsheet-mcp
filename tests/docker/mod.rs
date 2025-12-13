@@ -3,4 +3,5 @@ pub mod staging;
 pub mod structure_batch;
 pub mod style_batch;
 pub mod styles;
+pub mod transform_batch;
 pub mod workbook_styles;

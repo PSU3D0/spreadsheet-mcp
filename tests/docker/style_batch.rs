@@ -26,7 +26,7 @@ async fn test_style_batch_apply_emits_style_diff_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -89,7 +89,7 @@ async fn test_style_batch_large_range_counts_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;

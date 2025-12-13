@@ -71,7 +71,7 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: None,
             granularity: None,
@@ -141,7 +141,7 @@ async fn sheet_styles_runs_respect_scope() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: Some(SheetStylesScope::Range {
                 range: "A1:C1".to_string(),
@@ -194,7 +194,7 @@ async fn sheet_styles_cells_truncates() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: Some(SheetStylesScope::Range {
                 range: "A1:C1".to_string(),
@@ -246,7 +246,7 @@ async fn sheet_styles_truncates_large_style_counts() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: None,
             granularity: None,
@@ -292,7 +292,7 @@ async fn sheet_styles_truncates_ranges_for_disjoint_runs() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: None,
             granularity: None,
@@ -367,7 +367,7 @@ async fn sheet_styles_maps_gradient_pattern_underline_borders_rotation() -> Resu
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: None,
             granularity: None,
@@ -449,7 +449,7 @@ async fn sheet_styles_dedupes_identical_visible_formats() -> Result<()> {
     let styles = sheet_styles(
         state,
         SheetStylesParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: "Sheet1".to_string(),
             scope: None,
             granularity: None,

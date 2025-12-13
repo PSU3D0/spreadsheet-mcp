@@ -50,7 +50,7 @@ async fn test_workbook_style_summary_reports_theme_and_conditional_formats_in_do
         &client
             .call_tool(call_tool(
                 "workbook_style_summary",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -100,7 +100,7 @@ async fn test_workbook_style_summary_works_on_forks_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "workbook_style_summary",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -116,7 +116,7 @@ async fn test_workbook_style_summary_works_on_forks_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -142,7 +142,7 @@ async fn test_workbook_style_summary_works_on_forks_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "workbook_style_summary",
-                json!({ "workbook_id": fork_id }),
+                json!({ "workbook_or_fork_id": fork_id }),
             ))
             .await?,
     )?;

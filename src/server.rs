@@ -41,6 +41,8 @@ to dive deep on specific outputs (e.g., trace the total cell to understand calc 
 unstructured sheets. Prefer read_table for tabular data.
 - find_value with mode='label': For key-value layouts (label in col A, value in col B). \
 Use direction='right' or 'below' hints.
+- find_formula: Search formulas. Default returns no context and only first 50 matches. \
+Use include_context=true for header+cell snapshots, and use limit/offset to page.
 
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 
@@ -56,29 +58,30 @@ Fork-based editing allows 'what-if' analysis without modifying original files.
 WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
 2) Optional: checkpoint_fork before large edits.
-3) edit_batch/style_batch/structure_batch/apply_formula_pattern: Apply edits to the fork.
+3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern: Apply edits to the fork.
 4) recalculate: Trigger LibreOffice to recompute all formulas.
-5) get_changeset: Diff fork against original. Shows cell/table/name changes.
+5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
 6) save_fork: Write changes to file.
 7) discard_fork: Delete fork without saving.
 
 SAFETY:
 - checkpoint_fork before large/structural edits; restore_checkpoint to rollback if needed.
-- Preview-based tools (future) will create staged changes; use apply_staged_change or discard_staged_change.
+- Tools with mode='preview' create staged changes (transform_batch/style_batch/structure_batch/apply_formula_pattern); use list_staged_changes + apply_staged_change/discard_staged_change.
 
 TOOL DETAILS:
 - create_fork: Only .xlsx supported. Returns fork_id for subsequent operations.
 - edit_batch: {fork_id, sheet_name, edits:[{address, value, is_formula}]}. \
 Formulas should NOT include leading '='.
+- transform_batch: Range-first clear/fill/replace. Prefer for bulk edits (blank/fill/rename) to avoid per-cell edit_batch bloat.
 - recalculate: Required after edit_batch to update formula results. \
 May take several seconds for complex workbooks.
-- get_changeset: Returns cell-level diffs with modification types: \
-ValueEdit, FormulaEdit, RecalcResult, Added, Deleted. \
-Use sheet_name param to filter to specific sheet.
-- screenshot_sheet: {workbook_id, sheet_name, range?}. Renders a cropped PNG for inspecting an area visually.
-  workbook_id may be either a real workbook_id OR a fork_id (to screenshot an edited fork).
-  The PNG is returned directly in the tool response, and also written under workspace_root/screenshots/ (Docker default: /data/screenshots/).
+- get_changeset: Returns a paged diff + summary. Use limit/offset to page. \
+Use include_types/exclude_types/include_subtypes/exclude_subtypes to filter (e.g. exclude_subtypes=['recalc_result']). \
+Use summary_only=true when you only need counts.
+- screenshot_sheet: {workbook_or_fork_id, sheet_name, range?}. Renders a cropped PNG for inspecting an area visually.
+  workbook_or_fork_id may be either a real workbook_id OR a fork_id (to screenshot an edited fork).
+  Returns a file:// URI under workspace_root/screenshots/ (Docker default: /data/screenshots/).
   DO NOT call save_fork just to get a screenshot.
   If formulas changed, run recalculate on the fork first.
 - save_fork: Requires target_path for new file location.
@@ -382,7 +385,10 @@ impl SpreadsheetServer {
             .map_err(to_mcp_error)
     }
 
-    #[tool(name = "find_formula", description = "Search formulas containing text")]
+    #[tool(
+        name = "find_formula",
+        description = "Search formulas containing text. Defaults: include_context=false, limit=50; use offset for paging."
+    )]
     pub async fn find_formula(
         &self,
         Parameters(params): Parameters<tools::FindFormulaParams>,
@@ -506,6 +512,23 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "transform_batch",
+        description = "Range-oriented transforms for a fork (clear/fill/replace). Supports targets by range, region_id, or explicit cells. \
+Mode: preview or apply (default apply)."
+    )]
+    pub async fn transform_batch(
+        &self,
+        Parameters(params): Parameters<tools::fork::TransformBatchParams>,
+    ) -> Result<Json<tools::fork::TransformBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("transform_batch")
+            .map_err(to_mcp_error)?;
+        tools::fork::transform_batch(self.state.clone(), params)
+            .await
+            .map(Json)
+            .map_err(to_mcp_error)
+    }
+
+    #[tool(
         name = "style_batch",
         description = "Apply batch style edits to a fork. Supports targets by range, region_id, or explicit cells. \
 Mode: preview or apply (default apply). Op mode: merge (default), set, or clear."
@@ -574,7 +597,7 @@ run recalculate and review get_changeset after applying."
 
     #[tool(
         name = "get_changeset",
-        description = "Calculate diff between fork and base workbook"
+        description = "Calculate diff between fork and base workbook. Defaults: limit=200. Supports limit/offset paging and type/subtype filters; returns summary."
     )]
     pub async fn get_changeset(
         &self,

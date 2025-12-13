@@ -37,7 +37,7 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
     let overview = spreadsheet_mcp::tools::sheet_overview(
         state.clone(),
         spreadsheet_mcp::tools::SheetOverviewParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Sheet1".into(),
         },
     )
@@ -47,7 +47,7 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
     let table = read_table(
         state.clone(),
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".into()),
             region_id: Some(region_id),
             limit: Some(10),
@@ -62,7 +62,7 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
     let ranged = read_table(
         state,
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".into()),
             range: Some("A5:B7".into()),
             header_row: Some(5),
@@ -108,7 +108,7 @@ async fn read_table_handles_multi_row_headers_and_filters() -> Result<()> {
     let table = read_table(
         state.clone(),
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".into()),
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
@@ -169,7 +169,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
     let table = read_table(
         state.clone(),
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".into()),
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
@@ -188,7 +188,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
     let neq = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".into()),
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
@@ -234,7 +234,7 @@ async fn read_table_large_range_stops_after_limit_and_counts() -> Result<()> {
     let table = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".into()),
             header_row: Some(1),
             filters: Some(vec![TableFilter {
@@ -290,7 +290,7 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
     let table = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".into()),
             header_row: Some(1),
             limit: Some(10),
@@ -340,7 +340,7 @@ async fn read_table_handles_empty_header_cells_in_multi_row() -> Result<()> {
     let table = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".into()),
             header_rows: Some(2),
             limit: Some(10),
@@ -384,7 +384,7 @@ async fn read_table_filter_contains_case_insensitive() -> Result<()> {
     let table = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".into()),
             filters: Some(vec![TableFilter {
                 column: "Name".into(),
@@ -437,7 +437,7 @@ async fn read_table_resolves_excel_table_by_name() -> Result<()> {
     let table = read_table(
         state,
         ReadTableParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             table_name: Some("SalesData".into()),
             limit: Some(10),
             ..Default::default()

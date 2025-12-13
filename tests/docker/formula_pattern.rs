@@ -31,7 +31,7 @@ async fn test_apply_formula_pattern_recalc_fidelity_in_docker() -> Result<()> {
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -61,7 +61,7 @@ async fn test_apply_formula_pattern_recalc_fidelity_in_docker() -> Result<()> {
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 3,
@@ -106,7 +106,7 @@ async fn test_apply_formula_pattern_2d_fill_resolves_dependencies_in_docker() ->
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -136,7 +136,7 @@ async fn test_apply_formula_pattern_2d_fill_resolves_dependencies_in_docker() ->
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 3,
@@ -184,7 +184,7 @@ async fn test_apply_formula_pattern_abs_rows_freezes_row_offsets_in_docker() -> 
         &client
             .call_tool(call_tool(
                 "create_fork",
-                json!({ "workbook_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id }),
             ))
             .await?,
     )?;
@@ -215,7 +215,7 @@ async fn test_apply_formula_pattern_abs_rows_freezes_row_offsets_in_docker() -> 
             .call_tool(call_tool(
                 "sheet_page",
                 json!({
-                    "workbook_id": fork_id,
+                    "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
                     "page_size": 3,

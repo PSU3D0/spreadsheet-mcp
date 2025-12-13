@@ -40,7 +40,13 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     structure_batch(
         state.clone(),
@@ -105,7 +111,13 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     structure_batch(
         state.clone(),
@@ -162,7 +174,13 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     structure_batch(
         state.clone(),
@@ -226,7 +244,13 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let err = structure_batch(
         state.clone(),
@@ -270,7 +294,13 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let preview = structure_batch(
         state.clone(),
@@ -343,7 +373,13 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let preview = structure_batch(
         state.clone(),
@@ -393,7 +429,13 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     structure_batch(
         state.clone(),
@@ -436,7 +478,13 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     structure_batch(
         state.clone(),
@@ -477,7 +525,13 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
     )
     .await?;
     let workbook_id = list.workbooks[0].workbook_id.clone();
-    let fork = create_fork(state.clone(), CreateForkParams { workbook_id }).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
 
     let err = structure_batch(
         state.clone(),

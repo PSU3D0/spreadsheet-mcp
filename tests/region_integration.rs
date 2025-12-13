@@ -28,7 +28,7 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
     let overview = sheet_overview(
         state.clone(),
         SheetOverviewParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Sheet1".to_string(),
         },
     )
@@ -51,7 +51,7 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
     let table = read_table(
         state.clone(),
         ReadTableParams {
-            workbook_id: workbook_id.clone(),
+            workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".to_string()),
             region_id: Some(left.id),
             ..Default::default()
@@ -81,7 +81,7 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
     let find = find_value(
         state.clone(),
         FindValueParams {
-            workbook_id,
+            workbook_or_fork_id: workbook_id,
             sheet_name: Some("Sheet1".to_string()),
             region_id: Some(right.id),
             query: "Target".to_string(),
