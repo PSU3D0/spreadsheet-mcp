@@ -10,7 +10,7 @@ The system allows users to create isolated copies (forks) of a spreadsheet, appl
 
 ### 1. Forks
 A **Fork** is a temporary, writable session based on an existing `.xlsx` file.
-- Stored in `/tmp/mcp-forks/{uuid}.xlsx`.
+- Stored in `/tmp/mcp-forks/{fork_id}.xlsx`.
 - Ephemeral: cleaned up after 1 hour (TTL) or when discarded.
 - Isolated: edits do not affect the original file until `save_fork` is called.
 

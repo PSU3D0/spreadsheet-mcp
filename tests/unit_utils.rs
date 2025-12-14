@@ -17,12 +17,12 @@ fn column_name_and_cell_address_round_trip() {
 }
 
 #[test]
-fn make_short_workbook_id_sanitizes_slug() {
-    let short = make_short_workbook_id("Quarterly P&L 🚀", "abcdef0123456789");
-    assert_eq!(short, "quarterlypl-abcdef01");
+fn make_short_workbook_id_simplifies_workbook_id() {
+    let short = make_short_workbook_id("Quarterly P&L 🚀", "wb-23456789ab");
+    assert_eq!(short, "23456789ab");
 
-    let fallback = make_short_workbook_id("!!!", "1234567890");
-    assert_eq!(fallback, "wb-12345678");
+    let passthrough = make_short_workbook_id("ignored", "alreadyshort");
+    assert_eq!(passthrough, "alreadyshort");
 }
 
 #[test]
@@ -50,6 +50,8 @@ fn hash_path_metadata_changes_with_file_contents() {
     let hash2 = hash_path_metadata(&path, &meta2);
 
     assert_ne!(hash1, hash2);
-    assert_eq!(hash1.len(), 64);
-    assert_eq!(hash2.len(), 64);
+    assert!(hash1.starts_with("wb-"));
+    assert!(hash2.starts_with("wb-"));
+    assert_eq!(hash1.len(), 13);
+    assert_eq!(hash2.len(), 13);
 }

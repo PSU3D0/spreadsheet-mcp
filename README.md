@@ -77,7 +77,7 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 {
   "tool": "find_formula",
   "arguments": {
-    "workbook_or_fork_id": "budget-2024-a1b2c3",
+    "workbook_or_fork_id": "wb-23456789ab",
     "sheet_name": "Calc",
     "query": "SUM(",
     "include_context": false,
@@ -92,7 +92,7 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 {
   "tool": "get_changeset",
   "arguments": {
-    "fork_id": "fork-123",
+    "fork_id": "fork-23456789abcd",
     "summary_only": true,
     "exclude_subtypes": ["recalc_result"],
     "limit": 200,
@@ -133,7 +133,7 @@ See [docs/RECALC.md](docs/RECALC.md) for architecture details.
 {
   "tool": "table_profile",
   "arguments": {
-    "workbook_id": "budget-2024-a1b2c3",
+    "workbook_id": "wb-23456789ab",
     "sheet_name": "Q1 Actuals",
     "region_id": 1,
     "sample_size": 10,
