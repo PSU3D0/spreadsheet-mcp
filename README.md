@@ -195,7 +195,7 @@ Two image variants are published:
 | Image | Size | Write/Recalc |
 | --- | --- | --- |
 | `ghcr.io/psu3d0/spreadsheet-mcp:latest` | ~15MB | No |
-| `ghcr.io/psu3d0/spreadsheet-mcp:full` | ~800MB | Yes (includes LibreOffice) |
+| `ghcr.io/psu3d0/spreadsheet-mcp:latest-full` | ~800MB | Yes (includes LibreOffice) |
 
 ```bash
 # Read-only (slim image)
@@ -249,7 +249,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcpServers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "-i", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
     }
   }
 }
@@ -275,7 +275,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcp.servers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "-i",  "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
     }
   }
 }
@@ -287,7 +287,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcp.servers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "-i", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
     }
   }
 }
