@@ -239,7 +239,7 @@ impl AppState {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "workbook".to_string());
             let short_id = make_short_workbook_id(&slug, canonical.as_str());
-            if candidate == canonical.as_str() || candidate_lower == short_id {
+            if candidate_lower == canonical.as_str() || candidate_lower == short_id {
                 return Ok(LocatedWorkbook {
                     workbook_id: canonical,
                     short_id,
@@ -270,7 +270,7 @@ impl AppState {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "workbook".to_string());
             let short_id = make_short_workbook_id(&slug, canonical.as_str());
-            if candidate == canonical.as_str() || candidate_lower == short_id {
+            if candidate_lower == canonical.as_str() || candidate_lower == short_id {
                 return Ok(LocatedWorkbook {
                     workbook_id: canonical,
                     short_id,
@@ -285,6 +285,7 @@ impl AppState {
         self.index
             .write()
             .insert(located.workbook_id.clone(), located.path.clone());
+
         self.alias_index.write().insert(
             located.short_id.to_ascii_lowercase(),
             located.workbook_id.clone(),

@@ -2,6 +2,7 @@ use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{StylePatch, WorkbookId};
 use crate::state::AppState;
+use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use formualizer_parse::tokenizer::Tokenizer;
@@ -11,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateForkParams {
@@ -324,7 +324,7 @@ pub async fn transform_batch(
         .to_ascii_lowercase();
 
     if mode == "preview" {
-        let change_id = Uuid::new_v4().to_string();
+        let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
         fs::copy(&work_path, &snapshot_path)?;
@@ -471,7 +471,7 @@ pub async fn style_batch(
         .to_ascii_lowercase();
 
     if mode == "preview" {
-        let change_id = Uuid::new_v4().to_string();
+        let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
         fs::copy(&work_path, &snapshot_path)?;
@@ -603,7 +603,7 @@ pub async fn apply_formula_pattern(
         .to_ascii_lowercase();
 
     if mode == "preview" {
-        let change_id = Uuid::new_v4().to_string();
+        let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
         fs::copy(&work_path, &snapshot_path)?;
@@ -901,7 +901,7 @@ pub async fn structure_batch(
         .to_ascii_lowercase();
 
     if mode == "preview" {
-        let change_id = Uuid::new_v4().to_string();
+        let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
         fs::copy(&work_path, &snapshot_path)?;

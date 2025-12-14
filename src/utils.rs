@@ -1,4 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::fs::Metadata;
 use std::path::Path;
@@ -12,7 +13,7 @@ pub fn system_time_to_rfc3339(time: SystemTime) -> Option<DateTime<Utc>> {
     system_time_to_datetime(time)
 }
 
-pub fn hash_path_metadata(path: &Path, metadata: &Metadata) -> String {
+fn hash_path_metadata_digest(path: &Path, metadata: &Metadata) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
     hasher.update(metadata.len().to_le_bytes());
@@ -21,7 +22,40 @@ pub fn hash_path_metadata(path: &Path, metadata: &Metadata) -> String {
     {
         hasher.update(dt.to_rfc3339_opts(SecondsFormat::Micros, true).as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().into()
+}
+
+pub fn hash_path_metadata_full(path: &Path, metadata: &Metadata) -> String {
+    let digest = hash_path_metadata_digest(path, metadata);
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+const WORKBOOK_ID_TOKEN_LEN: usize = 10;
+
+fn encode_base32_u64_prefix(value: u64, len: usize) -> String {
+    let mut out = String::with_capacity(len);
+    for i in 0..len {
+        let shift = 64 - (i + 1) * 5;
+        let idx = ((value >> shift) & 31) as usize;
+        out.push(SHORT_ID_ALPHABET[idx] as char);
+    }
+    out
+}
+
+pub fn hash_path_metadata(path: &Path, metadata: &Metadata) -> String {
+    let digest = hash_path_metadata_digest(path, metadata);
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    let value = u64::from_be_bytes(bytes);
+
+    format!(
+        "wb-{}",
+        encode_base32_u64_prefix(value, WORKBOOK_ID_TOKEN_LEN)
+    )
 }
 
 pub fn column_number_to_name(column: u32) -> String {
@@ -39,20 +73,11 @@ pub fn cell_address(column: u32, row: u32) -> String {
     format!("{}{}", column_number_to_name(column), row)
 }
 
-pub fn make_short_workbook_id(slug: &str, canonical_id: &str) -> String {
-    let mut slug_part: String = slug
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    if slug_part.is_empty() {
-        slug_part = "wb".to_string();
-    }
-    if slug_part.len() > 12 {
-        slug_part.truncate(12);
-    }
-    let short_hash: String = canonical_id.chars().take(8).collect();
-    format!("{}-{}", slug_part, short_hash)
+pub fn make_short_workbook_id(_slug: &str, canonical_id: &str) -> String {
+    canonical_id
+        .strip_prefix("wb-")
+        .unwrap_or(canonical_id)
+        .to_string()
 }
 
 pub fn path_to_forward_slashes(path: &Path) -> String {
@@ -62,4 +87,23 @@ pub fn path_to_forward_slashes(path: &Path) -> String {
     } else {
         raw.into_owned()
     }
+}
+
+const SHORT_ID_ALPHABET: &[u8] = b"23456789abcdefghijkmnpqrstuvwxyz";
+
+pub fn make_short_random_id(prefix: &str, len: usize) -> String {
+    let mut rng = rand::thread_rng();
+
+    let mut out = String::with_capacity(prefix.len() + if prefix.is_empty() { 0 } else { 1 } + len);
+    if !prefix.is_empty() {
+        out.push_str(prefix);
+        out.push('-');
+    }
+
+    for _ in 0..len {
+        let idx = rng.gen_range(0..SHORT_ID_ALPHABET.len());
+        out.push(SHORT_ID_ALPHABET[idx] as char);
+    }
+
+    out
 }

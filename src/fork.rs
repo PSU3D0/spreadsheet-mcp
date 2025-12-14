@@ -1,3 +1,4 @@
+use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -223,7 +224,21 @@ impl ForkRegistry {
             ));
         }
 
-        let fork_id = uuid::Uuid::new_v4().to_string();
+        let fork_id = {
+            let mut attempts: u32 = 0;
+            loop {
+                let candidate = make_short_random_id("fork", 12);
+                let work_path = self.config.fork_dir.join(format!("{}.xlsx", candidate));
+                let exists_in_registry = self.forks.lock().contains_key(&candidate);
+                if !exists_in_registry && !work_path.exists() {
+                    break candidate;
+                }
+                attempts += 1;
+                if attempts > 20 {
+                    return Err(anyhow!("failed to allocate unique fork id"));
+                }
+            }
+        };
         let work_path = self.config.fork_dir.join(format!("{}.xlsx", fork_id));
 
         fs::copy(base_path, &work_path)?;
@@ -331,7 +346,7 @@ impl ForkRegistry {
             ctx.work_path.clone()
         };
 
-        let checkpoint_id = uuid::Uuid::new_v4().to_string();
+        let checkpoint_id = make_short_random_id("cp", 12);
         let dir = PathBuf::from(CHECKPOINT_DIR).join(fork_id);
         fs::create_dir_all(&dir)?;
         let snapshot_path = dir.join(format!("{}.xlsx", checkpoint_id));
