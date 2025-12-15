@@ -814,3 +814,47 @@ pub struct CloseWorkbookResponse {
     pub workbook_id: WorkbookId,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VbaProjectSummaryResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub has_vba: bool,
+    pub code_page: Option<u16>,
+    pub sys_kind: Option<String>,
+    pub modules: Vec<VbaModuleDescriptor>,
+    pub modules_truncated: bool,
+    pub references: Vec<VbaReferenceDescriptor>,
+    pub references_truncated: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VbaModuleDescriptor {
+    pub name: String,
+    pub stream_name: String,
+    pub doc_string: String,
+    pub text_offset: u64,
+    pub help_context: u32,
+    pub module_type: String,
+    pub read_only: bool,
+    pub private: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VbaReferenceDescriptor {
+    pub kind: String,
+    pub debug: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VbaModuleSourceResponse {
+    pub workbook_id: WorkbookId,
+    pub workbook_short_id: String,
+    pub module_name: String,
+    pub offset_lines: u32,
+    pub limit_lines: u32,
+    pub total_lines: u32,
+    pub truncated: bool,
+    pub source: String,
+}

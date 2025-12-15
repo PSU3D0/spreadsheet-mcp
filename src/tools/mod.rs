@@ -1,6 +1,7 @@
 pub mod filters;
 #[cfg(feature = "recalc")]
 pub mod fork;
+pub mod vba;
 
 use crate::analysis::{formula::FormulaGraph, stats};
 use crate::model::*;

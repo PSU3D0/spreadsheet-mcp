@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_CACHE_CAPACITY: usize = 5;
 const DEFAULT_MAX_RECALCS: usize = 2;
-const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xls", "xlsb"];
+const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb"];
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8079";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -39,6 +39,7 @@ pub struct ServerConfig {
     pub transport: TransportKind,
     pub http_bind_address: SocketAddr,
     pub recalc_enabled: bool,
+    pub vba_enabled: bool,
     pub max_concurrent_recalcs: usize,
     pub allow_overwrite: bool,
 }
@@ -55,6 +56,7 @@ impl ServerConfig {
             transport: cli_transport,
             http_bind: cli_http_bind,
             recalc_enabled: cli_recalc_enabled,
+            vba_enabled: cli_vba_enabled,
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
             allow_overwrite: cli_allow_overwrite,
         } = args;
@@ -74,6 +76,7 @@ impl ServerConfig {
             transport: file_transport,
             http_bind: file_http_bind,
             recalc_enabled: file_recalc_enabled,
+            vba_enabled: file_vba_enabled,
             max_concurrent_recalcs: file_max_concurrent_recalcs,
             allow_overwrite: file_allow_overwrite,
         } = file_config;
@@ -174,6 +177,7 @@ impl ServerConfig {
         });
 
         let recalc_enabled = cli_recalc_enabled || file_recalc_enabled.unwrap_or(false);
+        let vba_enabled = cli_vba_enabled || file_vba_enabled.unwrap_or(false);
 
         let max_concurrent_recalcs = cli_max_concurrent_recalcs
             .or(file_max_concurrent_recalcs)
@@ -191,6 +195,7 @@ impl ServerConfig {
             transport,
             http_bind_address,
             recalc_enabled,
+            vba_enabled,
             max_concurrent_recalcs,
             allow_overwrite,
         })
@@ -323,6 +328,13 @@ pub struct CliArgs {
 
     #[arg(
         long,
+        env = "SPREADSHEET_MCP_VBA_ENABLED",
+        help = "Enable VBA introspection tools (read-only)"
+    )]
+    pub vba_enabled: bool,
+
+    #[arg(
+        long,
         env = "SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS",
         help = "Max concurrent LibreOffice instances"
     )]
@@ -346,6 +358,7 @@ struct PartialConfig {
     transport: Option<TransportKind>,
     http_bind: Option<SocketAddr>,
     recalc_enabled: Option<bool>,
+    vba_enabled: Option<bool>,
     max_concurrent_recalcs: Option<usize>,
     allow_overwrite: Option<bool>,
 }

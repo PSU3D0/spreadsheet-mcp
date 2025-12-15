@@ -12,7 +12,8 @@ MCP server for spreadsheet analysis and editing. Slim, token-efficient tool surf
 
 Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually unnecessary. Most spreadsheet tasks need surgical access: find a region, profile its structure, read a filtered slice. This server exposes tools that let agents **discover → profile → extract** without burning tokens on cells they don't need.
 
-- **Full support:** `.xlsx` (via `umya-spreadsheet`)
+- **Full support:** `.xlsx`, `.xlsm` (via `umya-spreadsheet`)
+- **VBA source inspection (optional):** `.xlsm` via `SPREADSHEET_MCP_VBA_ENABLED=true` / `--vba-enabled` (parses embedded `xl/vbaProject.bin` via `ovba`)
 - **Discovery only:** `.xls`, `.xlsb` (enumerated, not parsed)
 
 ## Architecture
@@ -36,8 +37,25 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 | `sheet_formula_map`, `formula_trace`, `scan_volatiles` | Formula analysis and tracing |
 | `sheet_styles`, `workbook_style_summary` | Style inspection (sheet-scoped + workbook-wide) |
 | `named_ranges` | List defined names + tables |
+| `vba_project_summary`, `vba_module_source` | Read VBA project metadata + module source (disabled by default; `.xlsm`) |
 | `get_manifest_stub` | Generate manifest scaffold |
 | `close_workbook` | Evict workbook from cache |
+
+## VBA Support (Read-Only)
+
+VBA tools are **disabled by default**. When enabled, the server can extract and parse the embedded VBA project from `.xlsm` files and return module source code.
+
+Enable via:
+- CLI: `--vba-enabled`
+- Env: `SPREADSHEET_MCP_VBA_ENABLED=true`
+
+Tools:
+- `vba_project_summary`: Lists modules + basic project metadata
+- `vba_module_source`: Returns paged source for a single module
+
+Notes:
+- This does **not** execute macros; it only reads and returns text.
+- Responses are size-limited; page through module source.
 
 ## Write & Recalc Support
 
@@ -201,6 +219,9 @@ Two image variants are published:
 # Read-only (slim image)
 docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
 
+# Read-only + VBA tools enabled
+docker run -v /path/to/workbooks:/data -p 8079:8079 -e SPREADSHEET_MCP_VBA_ENABLED=true ghcr.io/psu3d0/spreadsheet-mcp:latest
+
 # With write/recalc support (full image)
 docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
@@ -211,6 +232,9 @@ docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-m
 # Read-only
 cargo install spreadsheet-mcp
 spreadsheet-mcp --workspace-root /path/to/workbooks
+
+# Enable VBA tools
+SPREADSHEET_MCP_VBA_ENABLED=true spreadsheet-mcp --workspace-root /path/to/workbooks
 ```
 
 **Note:** For write/recalc features, use the `:full` Docker image instead of cargo install. The Docker image includes LibreOffice with required macro configuration.
@@ -243,13 +267,25 @@ Add to `~/.claude.json` or project `.mcp.json`:
 }
 ```
 
+**Read-only + VBA tools enabled:**
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio", "--vba-enabled"]
+    }
+  }
+}
+```
+
 **With write/recalc (full image):**
 ```json
 {
   "mcpServers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "-i", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
     }
   }
 }
@@ -275,7 +311,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcp.servers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "-i",  "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
     }
   }
 }
@@ -287,7 +323,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
   "mcp.servers": {
     "spreadsheet": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "-i", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
     }
   }
 }

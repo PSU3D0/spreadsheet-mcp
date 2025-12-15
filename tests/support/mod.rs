@@ -12,7 +12,7 @@ use spreadsheet_mcp::{ServerConfig, SpreadsheetServer, TransportKind};
 use tempfile::{TempDir, tempdir};
 use umya_spreadsheet::{self, Spreadsheet};
 
-const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xls", "xlsb"];
+const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb"];
 
 #[allow(dead_code)]
 pub fn build_workbook<F>(f: F) -> PathBuf
@@ -90,6 +90,7 @@ impl TestWorkspace {
             transport: TransportKind::Http,
             http_bind_address: "127.0.0.1:8079".parse().unwrap(),
             recalc_enabled: false,
+            vba_enabled: false,
             max_concurrent_recalcs: 2,
             allow_overwrite: false,
         }
