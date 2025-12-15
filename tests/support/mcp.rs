@@ -22,6 +22,7 @@ pub struct McpTestClient {
     workspace: TestWorkspace,
     workspace_path: String,
     allow_overwrite: bool,
+    vba_enabled: bool,
     env_overrides: Vec<(String, String)>,
 }
 
@@ -33,12 +34,18 @@ impl McpTestClient {
             workspace,
             workspace_path,
             allow_overwrite: false,
+            vba_enabled: false,
             env_overrides: Vec::new(),
         }
     }
 
     pub fn with_allow_overwrite(mut self) -> Self {
         self.allow_overwrite = true;
+        self
+    }
+
+    pub fn with_vba_enabled(mut self) -> Self {
+        self.vba_enabled = true;
         self
     }
 
@@ -55,6 +62,7 @@ impl McpTestClient {
         let image_tag = ensure_image().await?;
         let workspace_path = self.workspace_path.clone();
         let allow_overwrite = self.allow_overwrite;
+        let vba_enabled = self.vba_enabled;
         let mut env_overrides = self.env_overrides.clone();
         if let Ok(v) = std::env::var("SPREADSHEET_MCP_MAX_PNG_DIM_PX") {
             env_overrides.push(("SPREADSHEET_MCP_MAX_PNG_DIM_PX".to_string(), v));
@@ -105,6 +113,9 @@ impl McpTestClient {
                     "--workspace-root".into(),
                     "/data".into(),
                 ]);
+                if vba_enabled {
+                    args.push("--vba-enabled".into());
+                }
                 if allow_overwrite {
                     args.push("--allow-overwrite".into());
                 }
