@@ -9,7 +9,7 @@ use crate::model::{
 };
 use crate::state::AppState;
 use crate::tools;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use rmcp::{
     ErrorData as McpError, Json, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -17,6 +17,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
     transport::stdio,
 };
+use std::future::Future;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -215,6 +216,24 @@ impl SpreadsheetServer {
             Err(RecalcDisabledError.into())
         }
     }
+
+    async fn run_tool_with_timeout<T, F>(&self, tool: &str, fut: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        if let Some(timeout_duration) = self.state.config().tool_timeout() {
+            match tokio::time::timeout(timeout_duration, fut).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow!(
+                    "tool '{}' timed out after {}ms",
+                    tool,
+                    timeout_duration.as_millis()
+                )),
+            }
+        } else {
+            fut.await
+        }
+    }
 }
 
 #[tool_router]
@@ -229,10 +248,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<WorkbookListResponse>, McpError> {
         self.ensure_tool_enabled("list_workbooks")
             .map_err(to_mcp_error)?;
-        tools::list_workbooks(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "list_workbooks",
+            tools::list_workbooks(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "describe_workbook", description = "Describe workbook metadata")]
@@ -242,10 +264,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<WorkbookDescription>, McpError> {
         self.ensure_tool_enabled("describe_workbook")
             .map_err(to_mcp_error)?;
-        tools::describe_workbook(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "describe_workbook",
+            tools::describe_workbook(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -258,10 +283,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<WorkbookSummaryResponse>, McpError> {
         self.ensure_tool_enabled("workbook_summary")
             .map_err(to_mcp_error)?;
-        tools::workbook_summary(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "workbook_summary",
+            tools::workbook_summary(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "list_sheets", description = "List sheets with summaries")]
@@ -271,10 +299,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetListResponse>, McpError> {
         self.ensure_tool_enabled("list_sheets")
             .map_err(to_mcp_error)?;
-        tools::list_sheets(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "list_sheets",
+            tools::list_sheets(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -287,10 +318,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetOverviewResponse>, McpError> {
         self.ensure_tool_enabled("sheet_overview")
             .map_err(to_mcp_error)?;
-        tools::sheet_overview(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "sheet_overview",
+            tools::sheet_overview(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "sheet_page", description = "Page through sheet cells")]
@@ -300,7 +334,7 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetPageResponse>, McpError> {
         self.ensure_tool_enabled("sheet_page")
             .map_err(to_mcp_error)?;
-        tools::sheet_page(self.state.clone(), params)
+        self.run_tool_with_timeout("sheet_page", tools::sheet_page(self.state.clone(), params))
             .await
             .map(Json)
             .map_err(to_mcp_error)
@@ -313,7 +347,7 @@ impl SpreadsheetServer {
     ) -> Result<Json<FindValueResponse>, McpError> {
         self.ensure_tool_enabled("find_value")
             .map_err(to_mcp_error)?;
-        tools::find_value(self.state.clone(), params)
+        self.run_tool_with_timeout("find_value", tools::find_value(self.state.clone(), params))
             .await
             .map(Json)
             .map_err(to_mcp_error)
@@ -329,7 +363,7 @@ impl SpreadsheetServer {
     ) -> Result<Json<ReadTableResponse>, McpError> {
         self.ensure_tool_enabled("read_table")
             .map_err(to_mcp_error)?;
-        tools::read_table(self.state.clone(), params)
+        self.run_tool_with_timeout("read_table", tools::read_table(self.state.clone(), params))
             .await
             .map(Json)
             .map_err(to_mcp_error)
@@ -342,10 +376,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<TableProfileResponse>, McpError> {
         self.ensure_tool_enabled("table_profile")
             .map_err(to_mcp_error)?;
-        tools::table_profile(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "table_profile",
+            tools::table_profile(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -358,10 +395,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<RangeValuesResponse>, McpError> {
         self.ensure_tool_enabled("range_values")
             .map_err(to_mcp_error)?;
-        tools::range_values(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "range_values",
+            tools::range_values(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -374,10 +414,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetStatisticsResponse>, McpError> {
         self.ensure_tool_enabled("sheet_statistics")
             .map_err(to_mcp_error)?;
-        tools::sheet_statistics(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "sheet_statistics",
+            tools::sheet_statistics(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -390,10 +433,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetFormulaMapResponse>, McpError> {
         self.ensure_tool_enabled("sheet_formula_map")
             .map_err(to_mcp_error)?;
-        tools::sheet_formula_map(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "sheet_formula_map",
+            tools::sheet_formula_map(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -406,10 +452,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<FormulaTraceResponse>, McpError> {
         self.ensure_tool_enabled("formula_trace")
             .map_err(to_mcp_error)?;
-        tools::formula_trace(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "formula_trace",
+            tools::formula_trace(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "named_ranges", description = "List named ranges and tables")]
@@ -419,10 +468,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<NamedRangesResponse>, McpError> {
         self.ensure_tool_enabled("named_ranges")
             .map_err(to_mcp_error)?;
-        tools::named_ranges(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "named_ranges",
+            tools::named_ranges(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -435,10 +487,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<FindFormulaResponse>, McpError> {
         self.ensure_tool_enabled("find_formula")
             .map_err(to_mcp_error)?;
-        tools::find_formula(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "find_formula",
+            tools::find_formula(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "scan_volatiles", description = "Scan for volatile formulas")]
@@ -448,10 +503,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<VolatileScanResponse>, McpError> {
         self.ensure_tool_enabled("scan_volatiles")
             .map_err(to_mcp_error)?;
-        tools::scan_volatiles(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "scan_volatiles",
+            tools::scan_volatiles(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -464,10 +522,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<SheetStylesResponse>, McpError> {
         self.ensure_tool_enabled("sheet_styles")
             .map_err(to_mcp_error)?;
-        tools::sheet_styles(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "sheet_styles",
+            tools::sheet_styles(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -480,10 +541,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<WorkbookStyleSummaryResponse>, McpError> {
         self.ensure_tool_enabled("workbook_style_summary")
             .map_err(to_mcp_error)?;
-        tools::workbook_style_summary(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "workbook_style_summary",
+            tools::workbook_style_summary(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -496,10 +560,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<ManifestStubResponse>, McpError> {
         self.ensure_tool_enabled("get_manifest_stub")
             .map_err(to_mcp_error)?;
-        tools::get_manifest_stub(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "get_manifest_stub",
+            tools::get_manifest_stub(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "close_workbook", description = "Evict a workbook from cache")]
@@ -509,10 +576,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<CloseWorkbookResponse>, McpError> {
         self.ensure_tool_enabled("close_workbook")
             .map_err(to_mcp_error)?;
-        tools::close_workbook(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "close_workbook",
+            tools::close_workbook(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 }
 
@@ -528,10 +598,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<crate::model::VbaProjectSummaryResponse>, McpError> {
         self.ensure_vba_enabled("vba_project_summary")
             .map_err(to_mcp_error)?;
-        tools::vba::vba_project_summary(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "vba_project_summary",
+            tools::vba::vba_project_summary(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -544,10 +617,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<crate::model::VbaModuleSourceResponse>, McpError> {
         self.ensure_vba_enabled("vba_module_source")
             .map_err(to_mcp_error)?;
-        tools::vba::vba_module_source(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "vba_module_source",
+            tools::vba::vba_module_source(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 }
 
@@ -564,10 +640,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<tools::fork::CreateForkResponse>, McpError> {
         self.ensure_recalc_enabled("create_fork")
             .map_err(to_mcp_error)?;
-        tools::fork::create_fork(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "create_fork",
+            tools::fork::create_fork(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -580,10 +659,13 @@ impl SpreadsheetServer {
     ) -> Result<Json<tools::fork::EditBatchResponse>, McpError> {
         self.ensure_recalc_enabled("edit_batch")
             .map_err(to_mcp_error)?;
-        tools::fork::edit_batch(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "edit_batch",
+            tools::fork::edit_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -597,10 +679,13 @@ Mode: preview or apply (default apply)."
     ) -> Result<Json<tools::fork::TransformBatchResponse>, McpError> {
         self.ensure_recalc_enabled("transform_batch")
             .map_err(to_mcp_error)?;
-        tools::fork::transform_batch(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "transform_batch",
+            tools::fork::transform_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -614,10 +699,13 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
     ) -> Result<Json<tools::fork::StyleBatchResponse>, McpError> {
         self.ensure_recalc_enabled("style_batch")
             .map_err(to_mcp_error)?;
-        tools::fork::style_batch(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "style_batch",
+            tools::fork::style_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -633,10 +721,13 @@ fill_direction: down, right, both (default both)."
     ) -> Result<Json<tools::fork::ApplyFormulaPatternResponse>, McpError> {
         self.ensure_recalc_enabled("apply_formula_pattern")
             .map_err(to_mcp_error)?;
-        tools::fork::apply_formula_pattern(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "apply_formula_pattern",
+            tools::fork::apply_formula_pattern(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -651,10 +742,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::StructureBatchResponse>, McpError> {
         self.ensure_recalc_enabled("structure_batch")
             .map_err(to_mcp_error)?;
-        tools::fork::structure_batch(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "structure_batch",
+            tools::fork::structure_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
@@ -664,10 +758,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::GetEditsResponse>, McpError> {
         self.ensure_recalc_enabled("get_edits")
             .map_err(to_mcp_error)?;
-        tools::fork::get_edits(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "get_edits",
+            tools::fork::get_edits(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -680,10 +777,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::GetChangesetResponse>, McpError> {
         self.ensure_recalc_enabled("get_changeset")
             .map_err(to_mcp_error)?;
-        tools::fork::get_changeset(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "get_changeset",
+            tools::fork::get_changeset(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -696,10 +796,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::RecalculateResponse>, McpError> {
         self.ensure_recalc_enabled("recalculate")
             .map_err(to_mcp_error)?;
-        tools::fork::recalculate(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "recalculate",
+            tools::fork::recalculate(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "list_forks", description = "List all active forks")]
@@ -709,10 +812,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::ListForksResponse>, McpError> {
         self.ensure_recalc_enabled("list_forks")
             .map_err(to_mcp_error)?;
-        tools::fork::list_forks(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "list_forks",
+            tools::fork::list_forks(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "discard_fork", description = "Discard a fork without saving")]
@@ -722,10 +828,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::DiscardForkResponse>, McpError> {
         self.ensure_recalc_enabled("discard_fork")
             .map_err(to_mcp_error)?;
-        tools::fork::discard_fork(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "discard_fork",
+            tools::fork::discard_fork(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -738,10 +847,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::SaveForkResponse>, McpError> {
         self.ensure_recalc_enabled("save_fork")
             .map_err(to_mcp_error)?;
-        tools::fork::save_fork(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "save_fork",
+            tools::fork::save_fork(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -754,10 +866,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::CheckpointForkResponse>, McpError> {
         self.ensure_recalc_enabled("checkpoint_fork")
             .map_err(to_mcp_error)?;
-        tools::fork::checkpoint_fork(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "checkpoint_fork",
+            tools::fork::checkpoint_fork(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(name = "list_checkpoints", description = "List checkpoints for a fork")]
@@ -767,10 +882,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::ListCheckpointsResponse>, McpError> {
         self.ensure_recalc_enabled("list_checkpoints")
             .map_err(to_mcp_error)?;
-        tools::fork::list_checkpoints(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "list_checkpoints",
+            tools::fork::list_checkpoints(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -783,10 +901,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::RestoreCheckpointResponse>, McpError> {
         self.ensure_recalc_enabled("restore_checkpoint")
             .map_err(to_mcp_error)?;
-        tools::fork::restore_checkpoint(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "restore_checkpoint",
+            tools::fork::restore_checkpoint(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -799,10 +920,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::DeleteCheckpointResponse>, McpError> {
         self.ensure_recalc_enabled("delete_checkpoint")
             .map_err(to_mcp_error)?;
-        tools::fork::delete_checkpoint(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "delete_checkpoint",
+            tools::fork::delete_checkpoint(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -815,10 +939,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::ListStagedChangesResponse>, McpError> {
         self.ensure_recalc_enabled("list_staged_changes")
             .map_err(to_mcp_error)?;
-        tools::fork::list_staged_changes(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "list_staged_changes",
+            tools::fork::list_staged_changes(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -831,10 +958,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::ApplyStagedChangeResponse>, McpError> {
         self.ensure_recalc_enabled("apply_staged_change")
             .map_err(to_mcp_error)?;
-        tools::fork::apply_staged_change(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "apply_staged_change",
+            tools::fork::apply_staged_change(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -847,10 +977,13 @@ run recalculate and review get_changeset after applying."
     ) -> Result<Json<tools::fork::DiscardStagedChangeResponse>, McpError> {
         self.ensure_recalc_enabled("discard_staged_change")
             .map_err(to_mcp_error)?;
-        tools::fork::discard_staged_change(self.state.clone(), params)
-            .await
-            .map(Json)
-            .map_err(to_mcp_error)
+        self.run_tool_with_timeout(
+            "discard_staged_change",
+            tools::fork::discard_staged_change(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
     }
 
     #[tool(
@@ -868,35 +1001,37 @@ run recalculate and review get_changeset after applying."
         self.ensure_recalc_enabled("screenshot_sheet")
             .map_err(to_mcp_error)?;
 
-        let response = tools::fork::screenshot_sheet(self.state.clone(), params)
-            .await
-            .map_err(to_mcp_error)?;
+        self.run_tool_with_timeout("screenshot_sheet", async {
+            let response = tools::fork::screenshot_sheet(self.state.clone(), params).await?;
 
-        let mut content = Vec::new();
+            let mut content = Vec::new();
 
-        let fs_path = response
-            .output_path
-            .strip_prefix("file://")
-            .ok_or_else(|| to_mcp_error(anyhow::anyhow!("unexpected screenshot output_path")))?;
-        let bytes = tokio::fs::read(fs_path)
-            .await
-            .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to read screenshot: {}", e)))?;
+            let fs_path = response
+                .output_path
+                .strip_prefix("file://")
+                .ok_or_else(|| anyhow!("unexpected screenshot output_path"))?;
+            let bytes = tokio::fs::read(fs_path)
+                .await
+                .map_err(|e| anyhow!("failed to read screenshot: {}", e))?;
 
-        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        content.push(Content::image(data, "image/png"));
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            content.push(Content::image(data, "image/png"));
 
-        // Always include a small text hint for clients that ignore structured_content.
-        content.push(Content::text(response.output_path.clone()));
+            // Always include a small text hint for clients that ignore structured_content.
+            content.push(Content::text(response.output_path.clone()));
 
-        let structured_content = serde_json::to_value(&response)
-            .map_err(|e| to_mcp_error(anyhow::anyhow!("failed to serialize response: {}", e)))?;
+            let structured_content = serde_json::to_value(&response)
+                .map_err(|e| anyhow!("failed to serialize response: {}", e))?;
 
-        Ok(rmcp::model::CallToolResult {
-            content,
-            structured_content: Some(structured_content),
-            is_error: Some(false),
-            meta: None,
+            Ok(rmcp::model::CallToolResult {
+                content,
+                structured_content: Some(structured_content),
+                is_error: Some(false),
+                meta: None,
+            })
         })
+        .await
+        .map_err(to_mcp_error)
     }
 }
 

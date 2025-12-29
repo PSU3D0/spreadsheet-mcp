@@ -12,4 +12,5 @@ exec docker run --rm -i \
     "$IMAGE_NAME" \
     --workspace-root /data \
     --transport stdio \
-    --recalc-enabled
+    --recalc-enabled \
+    --vba-enabled

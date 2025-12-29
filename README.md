@@ -382,6 +382,7 @@ Then point your MCP client to the binary:
 | `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address (default: `127.0.0.1:8079`) |
 | `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | Enable write/recalc tools (default: false) |
 | `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | Parallel recalc limit (default: 2) |
+| `--tool-timeout-ms <MS>` | `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | Tool request timeout in milliseconds (default: 30000; 0 disables) |
 | `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | Allow `save_fork` to overwrite original files (default: false) |
 
 ## Performance
