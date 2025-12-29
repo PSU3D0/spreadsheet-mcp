@@ -62,6 +62,7 @@ fn empty_extensions_is_error() {
         recalc_enabled: false,
         vba_enabled: false,
         max_concurrent_recalcs: None,
+        tool_timeout_ms: None,
         allow_overwrite: false,
     };
     let err = ServerConfig::from_args(args).expect_err("expected failure");
@@ -81,6 +82,7 @@ fn ensure_workspace_root_errors_for_missing_dir() {
         recalc_enabled: false,
         vba_enabled: false,
         max_concurrent_recalcs: 2,
+        tool_timeout_ms: Some(30_000),
         allow_overwrite: false,
     };
     let err = config.ensure_workspace_root().expect_err("missing dir");

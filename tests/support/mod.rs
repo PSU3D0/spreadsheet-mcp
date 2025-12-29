@@ -92,6 +92,7 @@ impl TestWorkspace {
             recalc_enabled: false,
             vba_enabled: false,
             max_concurrent_recalcs: 2,
+            tool_timeout_ms: Some(30_000),
             allow_overwrite: false,
         }
     }

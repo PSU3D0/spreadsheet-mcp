@@ -5,11 +5,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const DEFAULT_CACHE_CAPACITY: usize = 5;
 const DEFAULT_MAX_RECALCS: usize = 2;
 const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb"];
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8079";
+const DEFAULT_TOOL_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +43,7 @@ pub struct ServerConfig {
     pub recalc_enabled: bool,
     pub vba_enabled: bool,
     pub max_concurrent_recalcs: usize,
+    pub tool_timeout_ms: Option<u64>,
     pub allow_overwrite: bool,
 }
 
@@ -58,6 +61,7 @@ impl ServerConfig {
             recalc_enabled: cli_recalc_enabled,
             vba_enabled: cli_vba_enabled,
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
+            tool_timeout_ms: cli_tool_timeout_ms,
             allow_overwrite: cli_allow_overwrite,
         } = args;
 
@@ -78,6 +82,7 @@ impl ServerConfig {
             recalc_enabled: file_recalc_enabled,
             vba_enabled: file_vba_enabled,
             max_concurrent_recalcs: file_max_concurrent_recalcs,
+            tool_timeout_ms: file_tool_timeout_ms,
             allow_overwrite: file_allow_overwrite,
         } = file_config;
 
@@ -184,6 +189,15 @@ impl ServerConfig {
             .unwrap_or(DEFAULT_MAX_RECALCS)
             .max(1);
 
+        let tool_timeout_ms = cli_tool_timeout_ms
+            .or(file_tool_timeout_ms)
+            .unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
+        let tool_timeout_ms = if tool_timeout_ms == 0 {
+            None
+        } else {
+            Some(tool_timeout_ms)
+        };
+
         let allow_overwrite = cli_allow_overwrite || file_allow_overwrite.unwrap_or(false);
 
         Ok(Self {
@@ -197,6 +211,7 @@ impl ServerConfig {
             recalc_enabled,
             vba_enabled,
             max_concurrent_recalcs,
+            tool_timeout_ms,
             allow_overwrite,
         })
     }
@@ -245,6 +260,16 @@ impl ServerConfig {
             Some(set) => set.contains(&tool.to_ascii_lowercase()),
             None => true,
         }
+    }
+
+    pub fn tool_timeout(&self) -> Option<Duration> {
+        self.tool_timeout_ms.and_then(|ms| {
+            if ms > 0 {
+                Some(Duration::from_millis(ms))
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -342,6 +367,15 @@ pub struct CliArgs {
 
     #[arg(
         long,
+        env = "SPREADSHEET_MCP_TOOL_TIMEOUT_MS",
+        value_name = "MS",
+        help = "Tool request timeout in milliseconds (default: 30000; 0 disables)",
+        value_parser = clap::value_parser!(u64)
+    )]
+    pub tool_timeout_ms: Option<u64>,
+
+    #[arg(
+        long,
         env = "SPREADSHEET_MCP_ALLOW_OVERWRITE",
         help = "Allow save_fork to overwrite original workbook files"
     )]
@@ -360,6 +394,7 @@ struct PartialConfig {
     recalc_enabled: Option<bool>,
     vba_enabled: Option<bool>,
     max_concurrent_recalcs: Option<usize>,
+    tool_timeout_ms: Option<u64>,
     allow_overwrite: Option<bool>,
 }
 
