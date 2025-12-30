@@ -6,6 +6,7 @@ pub mod vba;
 use crate::analysis::{formula::FormulaGraph, stats};
 use crate::model::*;
 use crate::state::AppState;
+use crate::utils::column_number_to_name;
 use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Result, anyhow};
 use regex::Regex;
@@ -26,6 +27,13 @@ const TRACE_RANGE_VALUE_SAMPLES: usize = 3;
 const TRACE_RANGE_FORMULA_SAMPLES: usize = 2;
 const TRACE_GROUP_SAMPLE_LIMIT: usize = 5;
 const TRACE_DEPENDENTS_PER_CELL_LIMIT: usize = 500;
+
+const DEFAULT_OVERVIEW_MAX_REGIONS: u32 = 25;
+const DEFAULT_OVERVIEW_MAX_HEADERS: u32 = 50;
+const DEFAULT_OVERVIEW_INCLUDE_HEADERS: bool = true;
+
+const ENTRY_POINT_MAX_ROWS: u32 = 10_000;
+const ENTRY_POINT_MAX_COLS: u32 = 200;
 
 pub async fn list_workbooks(
     state: Arc<AppState>,
@@ -88,6 +96,12 @@ pub struct SheetOverviewParams {
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: String,
+    #[serde(default)]
+    pub max_regions: Option<u32>,
+    #[serde(default)]
+    pub max_headers: Option<u32>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -101,6 +115,10 @@ pub async fn workbook_summary(
     params: WorkbookSummaryParams,
 ) -> Result<WorkbookSummaryResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    Ok(tokio::task::spawn_blocking(move || build_workbook_summary(workbook)).await??)
+}
+
+fn build_workbook_summary(workbook: Arc<WorkbookContext>) -> Result<WorkbookSummaryResponse> {
     let sheet_names = workbook.sheet_names();
 
     let mut total_cells: u64 = 0;
@@ -109,11 +127,13 @@ pub async fn workbook_summary(
     let mut region_counts = RegionCountSummary::default();
     let mut entry_points: Vec<EntryPoint> = Vec::new();
     let mut key_named_ranges: Vec<NamedRangeDescriptor> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
 
     for sheet_name in &sheet_names {
-        let entry = workbook.get_sheet_metrics(sheet_name)?;
+        let entry = workbook.get_sheet_metrics_fast(sheet_name)?;
         total_cells += (entry.metrics.row_count as u64) * (entry.metrics.column_count as u64);
         total_formulas += entry.metrics.formula_cells as u64;
+
         match entry.metrics.classification {
             SheetClassification::Calculator => breakdown.calculator_sheets += 1,
             SheetClassification::Metadata => breakdown.metadata_sheets += 1,
@@ -121,55 +141,27 @@ pub async fn workbook_summary(
             _ => breakdown.data_sheets += 1,
         }
 
-        for region in &entry.detected_regions {
-            match region
-                .region_kind
-                .clone()
-                .unwrap_or(region.classification.clone())
-            {
-                RegionKind::Calculator => region_counts.calculator += 1,
-                RegionKind::Metadata => region_counts.metadata += 1,
-                RegionKind::Parameters => region_counts.parameters += 1,
-                RegionKind::Outputs => region_counts.outputs += 1,
-                RegionKind::Data | RegionKind::Table => region_counts.data += 1,
-                _ => region_counts.other += 1,
-            }
-            if region.confidence >= 0.3 {
-                let kind = region
-                    .region_kind
-                    .as_ref()
-                    .unwrap_or(&region.classification);
-                let priority = match kind {
-                    RegionKind::Parameters => 0,
-                    RegionKind::Data | RegionKind::Table => 1,
-                    RegionKind::Outputs => 2,
-                    RegionKind::Calculator => 3,
-                    RegionKind::Metadata => 4,
-                    _ => 5,
-                };
-                entry_points.push(EntryPoint {
-                    sheet_name: sheet_name.clone(),
-                    region_id: Some(region.id),
-                    bounds: Some(region.bounds.clone()),
-                    rationale: format!(
-                        "{:?} region ({} rows, {:.0}% conf, p{})",
-                        kind,
-                        region.row_count,
-                        region.confidence * 100.0,
-                        priority
-                    ),
-                });
-            }
+        if entry.metrics.non_empty_cells == 0 {
+            continue;
         }
 
-        if entry.detected_regions.is_empty() && entry.metrics.non_empty_cells > 0 {
-            entry_points.push(EntryPoint {
-                sheet_name: sheet_name.clone(),
-                region_id: None,
-                bounds: None,
-                rationale: "Whole sheet is non-empty; start at top-left".to_string(),
-            });
+        match entry.metrics.classification {
+            SheetClassification::Calculator => region_counts.calculator += 1,
+            SheetClassification::Metadata => region_counts.metadata += 1,
+            SheetClassification::Empty => {}
+            _ => region_counts.data += 1,
         }
+
+        let priority = entry_point_priority(&entry.metrics.classification);
+        entry_points.push(EntryPoint {
+            sheet_name: sheet_name.clone(),
+            region_id: None,
+            bounds: entry_point_bounds(&entry.metrics),
+            rationale: format!(
+                "Fast summary p{}: {:?} sheet",
+                priority, entry.metrics.classification
+            ),
+        });
     }
 
     entry_points.sort_by(|a, b| {
@@ -184,6 +176,7 @@ pub async fn workbook_summary(
             })
             .then_with(|| a.sheet_name.cmp(&b.sheet_name))
     });
+    let entry_points_truncated = entry_points.len() > 5;
     entry_points.truncate(5);
 
     let mut seen_ranges = std::collections::HashSet::new();
@@ -200,6 +193,8 @@ pub async fn workbook_summary(
         }
     }
 
+    notes.push("Region counts and entry points are inferred from sheet metrics; use sheet_overview for full region detection.".to_string());
+
     Ok(WorkbookSummaryResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
@@ -209,9 +204,34 @@ pub async fn workbook_summary(
         total_formulas,
         breakdown,
         region_counts,
+        region_counts_truncated: true,
         key_named_ranges,
         suggested_entry_points: entry_points,
+        entry_points_truncated,
+        notes,
     })
+}
+
+fn entry_point_priority(classification: &SheetClassification) -> u32 {
+    match classification {
+        SheetClassification::Data => 1,
+        SheetClassification::Mixed => 2,
+        SheetClassification::Calculator => 3,
+        SheetClassification::Metadata => 4,
+        SheetClassification::Empty => 5,
+    }
+}
+
+fn entry_point_bounds(metrics: &crate::workbook::SheetMetrics) -> Option<String> {
+    if metrics.row_count == 0 || metrics.column_count == 0 {
+        return None;
+    }
+    if metrics.row_count > ENTRY_POINT_MAX_ROWS || metrics.column_count > ENTRY_POINT_MAX_COLS {
+        return None;
+    }
+    let end_col = column_number_to_name(metrics.column_count.max(1));
+    let end_cell = format!("{}{}", end_col, metrics.row_count.max(1));
+    Some(format!("A1:{}", end_cell))
 }
 
 fn priority_from_rationale(rationale: &str) -> u32 {
@@ -235,7 +255,71 @@ pub async fn sheet_overview(
     params: SheetOverviewParams,
 ) -> Result<SheetOverviewResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let overview = workbook.sheet_overview(&params.sheet_name)?;
+    let sheet_name = params.sheet_name.clone();
+    let mut overview =
+        tokio::task::spawn_blocking(move || workbook.sheet_overview(&sheet_name)).await??;
+
+    let max_regions = params
+        .max_regions
+        .unwrap_or(DEFAULT_OVERVIEW_MAX_REGIONS)
+        .max(1);
+    let max_headers = params
+        .max_headers
+        .unwrap_or(DEFAULT_OVERVIEW_MAX_HEADERS)
+        .max(1);
+    let include_headers = params
+        .include_headers
+        .unwrap_or(DEFAULT_OVERVIEW_INCLUDE_HEADERS);
+
+    let region_limit = if params.max_regions == Some(0) {
+        usize::MAX
+    } else {
+        max_regions as usize
+    };
+    let header_limit = if params.max_headers == Some(0) {
+        usize::MAX
+    } else {
+        max_headers as usize
+    };
+
+    let total_regions = overview.detected_regions.len() as u32;
+    let mut headers_truncated = false;
+
+    for region in &mut overview.detected_regions {
+        let header_count = region.header_count.max(region.headers.len() as u32);
+        region.header_count = header_count;
+        if !include_headers {
+            region.headers.clear();
+        } else if region.headers.len() > header_limit {
+            region.headers.truncate(header_limit);
+        }
+        region.headers_truncated = region.headers.len() as u32 != header_count;
+        headers_truncated |= region.headers_truncated;
+    }
+
+    let regions_truncated = if overview.detected_regions.len() > region_limit {
+        overview.detected_regions.truncate(region_limit);
+        true
+    } else {
+        false
+    };
+
+    overview.detected_region_count = total_regions;
+    overview.detected_regions_truncated = regions_truncated;
+
+    if regions_truncated {
+        overview.notes.push(format!(
+            "Detected regions truncated to {} ({} total).",
+            region_limit, total_regions
+        ));
+    }
+    if headers_truncated {
+        overview.notes.push(format!(
+            "Region headers truncated to {} columns.",
+            header_limit
+        ));
+    }
+
     Ok(overview)
 }
 
@@ -418,7 +502,7 @@ pub async fn sheet_page(
     }
 
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
+    let metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let format = params.format.unwrap_or_default();
 
     let start_row = params.start_row.max(1);
@@ -950,7 +1034,7 @@ pub async fn sheet_statistics(
     params: SheetStatisticsParams,
 ) -> Result<SheetStatisticsResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let sheet_metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
+    let sheet_metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let sample_rows = params.sample_rows.unwrap_or_else(default_stats_sample);
     let stats = workbook.with_sheet(&params.sheet_name, |sheet| {
         stats::compute_sheet_statistics(sheet, sample_rows)
@@ -1077,7 +1161,7 @@ fn resolve_table_target(
         });
     }
 
-    let metrics = workbook.get_sheet_metrics(&sheet_name)?;
+    let metrics = workbook.get_sheet_metrics_fast(&sheet_name)?;
     let end_col = metrics.metrics.column_count.max(1);
     let end_row = metrics.metrics.row_count.max(1);
     Ok(TableTarget {
@@ -2060,7 +2144,7 @@ pub async fn sheet_styles(
     const STYLE_LIMIT: usize = 200;
     const MAX_MAX_ITEMS: usize = 5000;
 
-    let metrics = workbook.get_sheet_metrics(&params.sheet_name)?;
+    let metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let full_bounds = (
         (1, 1),
         (
@@ -2256,7 +2340,7 @@ pub async fn find_value(
     };
 
     for sheet_name in target_sheets {
-        let metrics_entry = workbook.get_sheet_metrics(&sheet_name)?;
+        let metrics_entry = workbook.get_sheet_metrics_fast(&sheet_name)?;
         let default_bounds = (
             (1, 1),
             (

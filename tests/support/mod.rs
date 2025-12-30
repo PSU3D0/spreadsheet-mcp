@@ -93,6 +93,7 @@ impl TestWorkspace {
             vba_enabled: false,
             max_concurrent_recalcs: 2,
             tool_timeout_ms: Some(30_000),
+            max_response_bytes: Some(1_000_000),
             allow_overwrite: false,
         }
     }

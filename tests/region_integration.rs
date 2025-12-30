@@ -30,6 +30,9 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
         SheetOverviewParams {
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Sheet1".to_string(),
+            max_regions: None,
+            max_headers: None,
+            include_headers: None,
         },
     )
     .await?;

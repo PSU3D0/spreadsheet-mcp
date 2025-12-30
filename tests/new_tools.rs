@@ -50,6 +50,9 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         SheetOverviewParams {
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: target.clone(),
+            max_regions: None,
+            max_headers: None,
+            include_headers: None,
         },
     )
     .await?;

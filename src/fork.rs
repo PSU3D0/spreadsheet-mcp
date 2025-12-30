@@ -16,7 +16,7 @@ const FORK_DIR: &str = "/tmp/mcp-forks";
 const CHECKPOINT_DIR: &str = "/tmp/mcp-checkpoints";
 #[allow(dead_code)]
 const STAGED_SNAPSHOT_DIR: &str = "/tmp/mcp-staged";
-const DEFAULT_TTL_SECS: u64 = 3600;
+const DEFAULT_TTL_SECS: u64 = 0;
 const DEFAULT_MAX_FORKS: usize = 10;
 const CLEANUP_TASK_CHECK_SECS: u64 = 60;
 const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
@@ -72,6 +72,7 @@ pub struct ForkContext {
     pub base_path: PathBuf,
     pub work_path: PathBuf,
     pub created_at: Instant,
+    pub last_accessed: Instant,
     pub edits: Vec<EditOp>,
     pub staged_changes: Vec<StagedChange>,
     pub checkpoints: Vec<Checkpoint>,
@@ -90,6 +91,7 @@ impl ForkContext {
             base_path,
             work_path,
             created_at: Instant::now(),
+            last_accessed: Instant::now(),
             edits: Vec::new(),
             staged_changes: Vec::new(),
             checkpoints: Vec::new(),
@@ -99,7 +101,14 @@ impl ForkContext {
     }
 
     pub fn is_expired(&self, ttl: Duration) -> bool {
-        self.created_at.elapsed() > ttl
+        if ttl.is_zero() {
+            return false;
+        }
+        self.last_accessed.elapsed() > ttl
+    }
+
+    pub fn touch(&mut self) {
+        self.last_accessed = Instant::now();
     }
 
     pub fn validate_base_unchanged(&self) -> Result<()> {
@@ -173,6 +182,9 @@ impl ForkRegistry {
     }
 
     pub fn start_cleanup_task(self: Arc<Self>) {
+        if self.config.ttl.is_zero() {
+            return;
+        }
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(CLEANUP_TASK_CHECK_SECS));
             loop {
@@ -253,16 +265,21 @@ impl ForkRegistry {
     pub fn get_fork(&self, fork_id: &str) -> Result<Arc<ForkContext>> {
         self.evict_expired();
 
-        let forks = self.forks.lock();
-        forks
-            .get(fork_id)
-            .map(|ctx| Arc::new(ctx.clone()))
-            .ok_or_else(|| anyhow!("fork not found: {}", fork_id))
+        let mut forks = self.forks.lock();
+        let ctx = forks
+            .get_mut(fork_id)
+            .ok_or_else(|| anyhow!("fork not found: {}", fork_id))?;
+        ctx.touch();
+        Ok(Arc::new(ctx.clone()))
     }
 
     pub fn get_fork_path(&self, fork_id: &str) -> Option<PathBuf> {
-        let forks = self.forks.lock();
-        forks.get(fork_id).map(|ctx| ctx.work_path.clone())
+        let mut forks = self.forks.lock();
+        if let Some(ctx) = forks.get_mut(fork_id) {
+            ctx.touch();
+            return Some(ctx.work_path.clone());
+        }
+        None
     }
 
     pub fn with_fork_mut<F, R>(&self, fork_id: &str, f: F) -> Result<R>
@@ -273,6 +290,7 @@ impl ForkRegistry {
         let ctx = forks
             .get_mut(fork_id)
             .ok_or_else(|| anyhow!("fork not found: {}", fork_id))?;
+        ctx.touch();
         f(ctx)
     }
 
@@ -318,6 +336,10 @@ impl ForkRegistry {
         }
 
         Ok(())
+    }
+
+    pub fn ttl(&self) -> Duration {
+        self.config.ttl
     }
 
     pub fn list_forks(&self) -> Vec<ForkInfo> {
@@ -454,6 +476,9 @@ impl ForkRegistry {
     }
 
     fn evict_expired(&self) {
+        if self.config.ttl.is_zero() {
+            return;
+        }
         let mut forks = self.forks.lock();
         let expired: Vec<String> = forks
             .iter()
@@ -513,6 +538,7 @@ impl Clone for ForkContext {
             base_path: self.base_path.clone(),
             work_path: self.work_path.clone(),
             created_at: self.created_at,
+            last_accessed: self.last_accessed,
             edits: self.edits.clone(),
             staged_changes: self.staged_changes.clone(),
             checkpoints: self.checkpoints.clone(),

@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use umya_spreadsheet::reader::xlsx;
 use umya_spreadsheet::{DefinedName, Spreadsheet, Worksheet};
 
@@ -49,6 +50,17 @@ const HEADER_NUMBER_PENALTY: f32 = 0.3;
 const HEADER_SINGLE_COL_MIN_SCORE: f32 = 1.5;
 const HEADER_SCORE_TIE_THRESHOLD: f32 = 0.3;
 const HEADER_SECOND_ROW_MIN_SCORE_RATIO: f32 = 0.6;
+const HEADER_MAX_COLUMNS: u32 = 200;
+
+const DETECT_MAX_ROWS: u32 = 10_000;
+const DETECT_MAX_COLS: u32 = 500;
+const DETECT_MAX_AREA: u64 = 5_000_000;
+const DETECT_MAX_CELLS: usize = 200_000;
+const DETECT_MAX_LEAVES: usize = 200;
+const DETECT_MAX_DEPTH: u32 = 12;
+const DETECT_MAX_MS: u64 = 200;
+const DETECT_OUTLIER_FRACTION: f32 = 0.01;
+const DETECT_OUTLIER_MIN_CELLS: usize = 50;
 
 pub struct WorkbookContext {
     pub id: WorkbookId,
@@ -67,7 +79,8 @@ pub struct SheetCacheEntry {
     pub metrics: SheetMetrics,
     pub style_tags: Vec<String>,
     pub named_ranges: Vec<NamedRangeDescriptor>,
-    pub detected_regions: Vec<crate::model::DetectedRegion>,
+    detected_regions: RwLock<Option<Vec<crate::model::DetectedRegion>>>,
+    region_notes: RwLock<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +100,41 @@ pub struct StyleUsage {
     pub occurrences: u32,
     pub tags: Vec<String>,
     pub example_cells: Vec<String>,
+}
+
+impl SheetCacheEntry {
+    pub fn detected_regions(&self) -> Vec<crate::model::DetectedRegion> {
+        self.detected_regions
+            .read()
+            .as_ref()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn region_notes(&self) -> Vec<String> {
+        self.region_notes.read().clone()
+    }
+
+    pub fn has_detected_regions(&self) -> bool {
+        self.detected_regions.read().is_some()
+    }
+
+    pub fn set_detected_regions(&self, regions: Vec<crate::model::DetectedRegion>) {
+        let mut guard = self.detected_regions.write();
+        if guard.is_none() {
+            *guard = Some(regions);
+        }
+    }
+
+    pub fn set_region_notes(&self, notes: Vec<String>) {
+        if notes.is_empty() {
+            return;
+        }
+        let mut guard = self.region_notes.write();
+        if guard.is_empty() {
+            *guard = notes;
+        }
+    }
 }
 
 impl WorkbookContext {
@@ -153,7 +201,7 @@ impl WorkbookContext {
         }
     }
 
-    pub fn get_sheet_metrics(&self, sheet_name: &str) -> Result<Arc<SheetCacheEntry>> {
+    pub fn get_sheet_metrics_fast(&self, sheet_name: &str) -> Result<Arc<SheetCacheEntry>> {
         if let Some(entry) = self.sheet_cache.read().get(sheet_name) {
             return Ok(entry.clone());
         }
@@ -169,16 +217,32 @@ impl WorkbookContext {
             .ok_or_else(|| anyhow!("sheet {} not found", sheet_name))?;
         let (metrics, style_tags) = compute_sheet_metrics(sheet);
         let named_ranges = gather_named_ranges(sheet, book.get_defined_names());
-        let detected_regions = detect_regions(sheet, &metrics);
 
         let entry = Arc::new(SheetCacheEntry {
             metrics,
             style_tags,
             named_ranges,
-            detected_regions,
+            detected_regions: RwLock::new(None),
+            region_notes: RwLock::new(Vec::new()),
         });
 
         writer.insert(sheet_name.to_string(), entry.clone());
+        Ok(entry)
+    }
+
+    pub fn get_sheet_metrics(&self, sheet_name: &str) -> Result<Arc<SheetCacheEntry>> {
+        let entry = self.get_sheet_metrics_fast(sheet_name)?;
+        if entry.has_detected_regions() {
+            return Ok(entry);
+        }
+
+        let book = self.spreadsheet.read();
+        let sheet = book
+            .get_sheet_by_name(sheet_name)
+            .ok_or_else(|| anyhow!("sheet {} not found", sheet_name))?;
+        let detected = detect_regions(sheet, &entry.metrics);
+        entry.set_detected_regions(detected.regions);
+        entry.set_region_notes(detected.notes);
         Ok(entry)
     }
 
@@ -187,7 +251,7 @@ impl WorkbookContext {
         let mut summaries = Vec::new();
         for sheet in book.get_sheet_collection() {
             let name = sheet.get_name().to_string();
-            let entry = self.get_sheet_metrics(&name)?;
+            let entry = self.get_sheet_metrics_fast(&name)?;
             summaries.push(SheetSummary {
                 name: name.clone(),
                 visible: sheet.get_sheet_state() != "hidden",
@@ -283,7 +347,7 @@ impl WorkbookContext {
         let narrative = classification::narrative(&entry.metrics);
         let regions = classification::regions(&entry.metrics);
         let key_ranges = classification::key_ranges(&entry.metrics);
-        let detected_regions = entry.detected_regions.clone();
+        let detected_regions = entry.detected_regions();
 
         Ok(SheetOverviewResponse {
             workbook_id: self.id.clone(),
@@ -291,7 +355,9 @@ impl WorkbookContext {
             sheet_name: sheet_name.to_string(),
             narrative,
             regions,
-            detected_regions,
+            detected_regions: detected_regions.clone(),
+            detected_region_count: detected_regions.len() as u32,
+            detected_regions_truncated: false,
             key_ranges,
             formula_ratio: if entry.metrics.non_empty_cells == 0 {
                 0.0
@@ -299,6 +365,7 @@ impl WorkbookContext {
                 entry.metrics.formula_cells as f32 / entry.metrics.non_empty_cells as f32
             },
             notable_features: entry.style_tags.clone(),
+            notes: entry.region_notes(),
         })
     }
 
@@ -309,7 +376,7 @@ impl WorkbookContext {
     ) -> Result<crate::model::DetectedRegion> {
         let entry = self.get_sheet_metrics(sheet_name)?;
         entry
-            .detected_regions
+            .detected_regions()
             .iter()
             .find(|r| r.id == id)
             .cloned()
@@ -524,46 +591,116 @@ struct CellInfo {
 #[derive(Debug)]
 struct Occupancy {
     cells: HashMap<(u32, u32), CellInfo>,
+    rows: HashMap<u32, Vec<u32>>,
+    cols: HashMap<u32, Vec<u32>>,
+    min_row: u32,
+    max_row: u32,
+    min_col: u32,
+    max_col: u32,
 }
 
 impl Occupancy {
+    fn bounds_rect(&self) -> Option<Rect> {
+        if self.cells.is_empty() {
+            None
+        } else {
+            Some(Rect {
+                start_row: self.min_row,
+                end_row: self.max_row,
+                start_col: self.min_col,
+                end_col: self.max_col,
+            })
+        }
+    }
+
+    fn dense_bounds(&self) -> Option<Rect> {
+        let bounds = self.bounds_rect()?;
+        let total_cells = self.cells.len();
+        if total_cells < DETECT_OUTLIER_MIN_CELLS {
+            return Some(bounds);
+        }
+        let trim_cells = ((total_cells as f32) * DETECT_OUTLIER_FRACTION).round() as usize;
+        if trim_cells == 0 || trim_cells * 2 >= total_cells {
+            return Some(bounds);
+        }
+
+        let mut row_counts: Vec<(u32, usize)> = self
+            .rows
+            .iter()
+            .map(|(row, cols)| (*row, cols.len()))
+            .collect();
+        row_counts.sort_by_key(|(row, _)| *row);
+
+        let mut col_counts: Vec<(u32, usize)> = self
+            .cols
+            .iter()
+            .map(|(col, rows)| (*col, rows.len()))
+            .collect();
+        col_counts.sort_by_key(|(col, _)| *col);
+
+        let (start_row, end_row) =
+            trim_bounds_by_cells(&row_counts, trim_cells, bounds.start_row, bounds.end_row);
+        let (start_col, end_col) =
+            trim_bounds_by_cells(&col_counts, trim_cells, bounds.start_col, bounds.end_col);
+
+        if start_row > end_row || start_col > end_col {
+            return Some(bounds);
+        }
+
+        Some(Rect {
+            start_row,
+            end_row,
+            start_col,
+            end_col,
+        })
+    }
+
     fn row_col_counts(&self, rect: &Rect) -> (Vec<u32>, Vec<u32>) {
-        let mut row_counts = vec![0u32; (rect.end_row - rect.start_row + 1) as usize];
-        let mut col_counts = vec![0u32; (rect.end_col - rect.start_col + 1) as usize];
-        for ((row, col), _) in self.cells.iter() {
-            if *row >= rect.start_row
-                && *row <= rect.end_row
-                && *col >= rect.start_col
-                && *col <= rect.end_col
-            {
-                row_counts[(row - rect.start_row) as usize] += 1;
-                col_counts[(col - rect.start_col) as usize] += 1;
+        let height = (rect.end_row - rect.start_row + 1) as usize;
+        let width = (rect.end_col - rect.start_col + 1) as usize;
+        let mut row_counts = vec![0u32; height];
+        let mut col_counts = vec![0u32; width];
+
+        for (row, cols) in &self.rows {
+            if *row < rect.start_row || *row > rect.end_row {
+                continue;
             }
+            let count = count_in_sorted_range(cols, rect.start_col, rect.end_col);
+            row_counts[(row - rect.start_row) as usize] = count;
+        }
+        for (col, rows) in &self.cols {
+            if *col < rect.start_col || *col > rect.end_col {
+                continue;
+            }
+            let count = count_in_sorted_range(rows, rect.start_row, rect.end_row);
+            col_counts[(col - rect.start_col) as usize] = count;
         }
         (row_counts, col_counts)
     }
 
     fn stats_in_rect(&self, rect: &Rect) -> RegionStats {
         let mut stats = RegionStats::default();
-        for ((row, col), info) in self.cells.iter() {
-            if *row < rect.start_row
-                || *row > rect.end_row
-                || *col < rect.start_col
-                || *col > rect.end_col
-            {
+        for (row, cols) in &self.rows {
+            if *row < rect.start_row || *row > rect.end_row {
                 continue;
             }
-            stats.non_empty += 1;
-            if info.is_formula {
-                stats.formulas += 1;
-            }
-            if let Some(val) = &info.value {
-                match val {
-                    crate::model::CellValue::Text(_) => stats.text += 1,
-                    crate::model::CellValue::Number(_) => stats.numbers += 1,
-                    crate::model::CellValue::Bool(_) => stats.bools += 1,
-                    crate::model::CellValue::Date(_) => stats.dates += 1,
-                    crate::model::CellValue::Error(_) => stats.errors += 1,
+            let start_idx = lower_bound(cols, rect.start_col);
+            let end_idx = upper_bound(cols, rect.end_col);
+            for col in &cols[start_idx..end_idx] {
+                if let Some(info) = self.cells.get(&(*row, *col)) {
+                    stats.non_empty += 1;
+                    if info.is_formula {
+                        stats.formulas += 1;
+                    }
+                    if let Some(val) = &info.value {
+                        match val {
+                            crate::model::CellValue::Text(_) => stats.text += 1,
+                            crate::model::CellValue::Number(_) => stats.numbers += 1,
+                            crate::model::CellValue::Bool(_) => stats.bools += 1,
+                            crate::model::CellValue::Date(_) => stats.dates += 1,
+                            crate::model::CellValue::Error(_) => stats.errors += 1,
+                        }
+                    }
                 }
             }
         }
@@ -573,6 +710,90 @@ impl Occupancy {
     fn value_at(&self, row: u32, col: u32) -> Option<&crate::model::CellValue> {
         self.cells.get(&(row, col)).and_then(|c| c.value.as_ref())
     }
+}
+
+fn lower_bound(values: &[u32], target: u32) -> usize {
+    let mut left = 0;
+    let mut right = values.len();
+    while left < right {
+        let mid = (left + right) / 2;
+        if values[mid] < target {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
+}
+
+fn upper_bound(values: &[u32], target: u32) -> usize {
+    let mut left = 0;
+    let mut right = values.len();
+    while left < right {
+        let mid = (left + right) / 2;
+        if values[mid] <= target {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
+}
+
+fn count_in_sorted_range(values: &[u32], start: u32, end: u32) -> u32 {
+    if values.is_empty() {
+        return 0;
+    }
+    let start_idx = lower_bound(values, start);
+    let end_idx = upper_bound(values, end);
+    end_idx.saturating_sub(start_idx) as u32
+}
+
+fn trim_bounds_by_cells(
+    entries: &[(u32, usize)],
+    trim_cells: usize,
+    default_start: u32,
+    default_end: u32,
+) -> (u32, u32) {
+    if entries.is_empty() {
+        return (default_start, default_end);
+    }
+
+    let mut remaining = trim_cells;
+    let mut start_idx = 0usize;
+    while start_idx < entries.len() {
+        let count = entries[start_idx].1;
+        if remaining < count {
+            break;
+        }
+        remaining -= count;
+        start_idx += 1;
+    }
+
+    let mut remaining = trim_cells;
+    let mut end_idx = entries.len();
+    while end_idx > 0 {
+        let count = entries[end_idx - 1].1;
+        if remaining < count {
+            break;
+        }
+        remaining -= count;
+        end_idx -= 1;
+    }
+
+    let start = entries
+        .get(start_idx)
+        .map(|(idx, _)| *idx)
+        .unwrap_or(default_start);
+    let end = if end_idx == 0 {
+        default_end
+    } else {
+        entries
+            .get(end_idx - 1)
+            .map(|(idx, _)| *idx)
+            .unwrap_or(default_end)
+    };
+    (start, end)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -592,33 +813,154 @@ enum Gutter {
     Col { start: u32, end: u32 },
 }
 
-fn detect_regions(sheet: &Worksheet, metrics: &SheetMetrics) -> Vec<crate::model::DetectedRegion> {
-    if metrics.row_count == 0 || metrics.column_count == 0 {
-        return Vec::new();
+#[derive(Debug, Default)]
+struct DetectRegionsResult {
+    regions: Vec<crate::model::DetectedRegion>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug)]
+struct DetectLimits {
+    start: Instant,
+    max_ms: u64,
+    max_leaves: usize,
+    max_depth: u32,
+    leaves: usize,
+    exceeded_time: bool,
+    exceeded_leaves: bool,
+}
+
+impl DetectLimits {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            max_ms: DETECT_MAX_MS,
+            max_leaves: DETECT_MAX_LEAVES,
+            max_depth: DETECT_MAX_DEPTH,
+            leaves: 0,
+            exceeded_time: false,
+            exceeded_leaves: false,
+        }
     }
+
+    fn should_stop(&mut self) -> bool {
+        if !self.exceeded_time && self.start.elapsed().as_millis() as u64 >= self.max_ms {
+            self.exceeded_time = true;
+        }
+        self.exceeded_time || self.exceeded_leaves
+    }
+
+    fn note_leaf(&mut self) {
+        self.leaves += 1;
+        if self.leaves >= self.max_leaves {
+            self.exceeded_leaves = true;
+        }
+    }
+}
+
+fn detect_regions(sheet: &Worksheet, metrics: &SheetMetrics) -> DetectRegionsResult {
+    if metrics.row_count == 0 || metrics.column_count == 0 {
+        return DetectRegionsResult::default();
+    }
+
     let occupancy = build_occupancy(sheet);
-    let root = Rect {
+    if occupancy.cells.is_empty() {
+        return DetectRegionsResult::default();
+    }
+
+    let area = (metrics.row_count as u64) * (metrics.column_count as u64);
+    let exceeds_caps = metrics.row_count > DETECT_MAX_ROWS
+        || metrics.column_count > DETECT_MAX_COLS
+        || area > DETECT_MAX_AREA
+        || occupancy.cells.len() > DETECT_MAX_CELLS;
+
+    if exceeds_caps {
+        let mut result = DetectRegionsResult::default();
+        if let Some(bounds) = occupancy.dense_bounds() {
+            result.regions.push(build_fallback_region(&bounds, metrics));
+        }
+        result.notes.push(format!(
+            "Region detection capped: rows {}, cols {}, occupied {}.",
+            metrics.row_count,
+            metrics.column_count,
+            occupancy.cells.len()
+        ));
+        return result;
+    }
+
+    let root = occupancy.bounds_rect().unwrap_or(Rect {
         start_row: 1,
         end_row: metrics.row_count.max(1),
         start_col: 1,
         end_col: metrics.column_count.max(1),
-    };
+    });
 
     let mut leaves = Vec::new();
-    split_rect(&occupancy, &root, &mut leaves);
+    let mut limits = DetectLimits::new();
+    split_rect(&occupancy, &root, 0, &mut limits, &mut leaves);
 
     let mut regions = Vec::new();
     for (idx, rect) in leaves.into_iter().enumerate() {
-        if let Some(trimmed) = trim_rect(&occupancy, rect) {
+        if limits.should_stop() {
+            break;
+        }
+        if let Some(trimmed) = trim_rect(&occupancy, rect, &mut limits) {
             let region = build_region(&occupancy, &trimmed, metrics, idx as u32);
             regions.push(region);
         }
     }
-    regions
+
+    let mut notes = Vec::new();
+    if limits.exceeded_time || limits.exceeded_leaves {
+        notes.push("Region detection truncated due to time/complexity caps.".to_string());
+    }
+    if regions.is_empty() {
+        if let Some(bounds) = occupancy.dense_bounds() {
+            regions.push(build_fallback_region(&bounds, metrics));
+            notes.push("Region detection returned no regions; fallback bounds used.".to_string());
+        }
+    }
+
+    DetectRegionsResult { regions, notes }
+}
+
+fn build_fallback_region(rect: &Rect, metrics: &SheetMetrics) -> crate::model::DetectedRegion {
+    let kind = match metrics.classification {
+        SheetClassification::Calculator => crate::model::RegionKind::Calculator,
+        SheetClassification::Metadata => crate::model::RegionKind::Metadata,
+        _ => crate::model::RegionKind::Data,
+    };
+    let end_col = crate::utils::column_number_to_name(rect.end_col.max(1));
+    let end_cell = format!("{}{}", end_col, rect.end_row.max(1));
+    let header_count = rect.end_col - rect.start_col + 1;
+    crate::model::DetectedRegion {
+        id: 0,
+        bounds: format!(
+            "{}{}:{}",
+            crate::utils::column_number_to_name(rect.start_col),
+            rect.start_row,
+            end_cell
+        ),
+        header_row: None,
+        headers: Vec::new(),
+        header_count,
+        headers_truncated: header_count > 0,
+        row_count: rect.end_row - rect.start_row + 1,
+        classification: kind.clone(),
+        region_kind: Some(kind),
+        confidence: 0.2,
+    }
 }
 
 fn build_occupancy(sheet: &Worksheet) -> Occupancy {
     let mut cells = HashMap::new();
+    let mut rows: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut cols: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut min_row = u32::MAX;
+    let mut max_row = 0u32;
+    let mut min_col = u32::MAX;
+    let mut max_col = 0u32;
+
     for cell in sheet.get_cell_collection() {
         let coord = cell.get_coordinate();
         let row = *coord.get_row_num();
@@ -626,16 +968,55 @@ fn build_occupancy(sheet: &Worksheet) -> Occupancy {
         let value = cell_to_value(cell);
         let is_formula = cell.is_formula();
         cells.insert((row, col), CellInfo { value, is_formula });
+        rows.entry(row).or_default().push(col);
+        cols.entry(col).or_default().push(row);
+        min_row = min_row.min(row);
+        max_row = max_row.max(row);
+        min_col = min_col.min(col);
+        max_col = max_col.max(col);
     }
-    Occupancy { cells }
+
+    for cols in rows.values_mut() {
+        cols.sort_unstable();
+    }
+    for rows in cols.values_mut() {
+        rows.sort_unstable();
+    }
+
+    if cells.is_empty() {
+        min_row = 0;
+        min_col = 0;
+    }
+
+    Occupancy {
+        cells,
+        rows,
+        cols,
+        min_row,
+        max_row,
+        min_col,
+        max_col,
+    }
 }
 
-fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
-    if rect.start_row >= rect.end_row && rect.start_col >= rect.end_col {
+fn split_rect(
+    occupancy: &Occupancy,
+    rect: &Rect,
+    depth: u32,
+    limits: &mut DetectLimits,
+    leaves: &mut Vec<Rect>,
+) {
+    if limits.should_stop() || depth >= limits.max_depth {
+        limits.note_leaf();
         leaves.push(*rect);
         return;
     }
-    if let Some(gutter) = find_best_gutter(occupancy, rect) {
+    if rect.start_row >= rect.end_row && rect.start_col >= rect.end_col {
+        limits.note_leaf();
+        leaves.push(*rect);
+        return;
+    }
+    if let Some(gutter) = find_best_gutter(occupancy, rect, limits) {
         match gutter {
             Gutter::Row { start, end } => {
                 if start > rect.start_row {
@@ -645,7 +1026,7 @@ fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
                         start_col: rect.start_col,
                         end_col: rect.end_col,
                     };
-                    split_rect(occupancy, &upper, leaves);
+                    split_rect(occupancy, &upper, depth + 1, limits, leaves);
                 }
                 if end < rect.end_row {
                     let lower = Rect {
@@ -654,7 +1035,7 @@ fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
                         start_col: rect.start_col,
                         end_col: rect.end_col,
                     };
-                    split_rect(occupancy, &lower, leaves);
+                    split_rect(occupancy, &lower, depth + 1, limits, leaves);
                 }
             }
             Gutter::Col { start, end } => {
@@ -665,7 +1046,7 @@ fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
                         start_col: rect.start_col,
                         end_col: start - 1,
                     };
-                    split_rect(occupancy, &left, leaves);
+                    split_rect(occupancy, &left, depth + 1, limits, leaves);
                 }
                 if end < rect.end_col {
                     let right = Rect {
@@ -674,16 +1055,24 @@ fn split_rect(occupancy: &Occupancy, rect: &Rect, leaves: &mut Vec<Rect>) {
                         start_col: end + 1,
                         end_col: rect.end_col,
                     };
-                    split_rect(occupancy, &right, leaves);
+                    split_rect(occupancy, &right, depth + 1, limits, leaves);
                 }
             }
         }
         return;
     }
+    limits.note_leaf();
     leaves.push(*rect);
 }
 
-fn find_best_gutter(occupancy: &Occupancy, rect: &Rect) -> Option<Gutter> {
+fn find_best_gutter(
+    occupancy: &Occupancy,
+    rect: &Rect,
+    limits: &mut DetectLimits,
+) -> Option<Gutter> {
+    if limits.should_stop() {
+        return None;
+    }
     let (row_counts, col_counts) = occupancy.row_col_counts(rect);
     let width = rect.end_col - rect.start_col + 1;
     let height = rect.end_row - rect.start_row + 1;
@@ -753,9 +1142,12 @@ fn find_blank_runs(counts: &[u32], span: u32) -> Option<(u32, u32, u32)> {
     }
 }
 
-fn trim_rect(occupancy: &Occupancy, rect: Rect) -> Option<Rect> {
+fn trim_rect(occupancy: &Occupancy, rect: Rect, limits: &mut DetectLimits) -> Option<Rect> {
     let mut r = rect;
     loop {
+        if limits.should_stop() {
+            return Some(r);
+        }
         let (row_counts, col_counts) = occupancy.row_col_counts(&r);
         let width = r.end_col - r.start_col + 1;
         let height = r.end_row - r.start_row + 1;
@@ -813,6 +1205,9 @@ fn build_region(
     let header_info = detect_headers(occupancy, rect);
     let stats = occupancy.stats_in_rect(rect);
     let (kind, confidence) = classify_region(rect, &stats, &header_info, metrics);
+    let header_len = header_info.headers.len() as u32;
+    let header_count = rect.end_col - rect.start_col + 1;
+    let headers_truncated = header_len != header_count;
     crate::model::DetectedRegion {
         id,
         bounds: format!(
@@ -824,6 +1219,8 @@ fn build_region(
         ),
         header_row: header_info.header_row,
         headers: header_info.headers,
+        header_count,
+        headers_truncated,
         row_count: rect.end_row - rect.start_row + 1,
         classification: kind.clone(),
         region_kind: Some(kind),
@@ -943,6 +1340,15 @@ fn detect_headers(occupancy: &Occupancy, rect: &Rect) -> HeaderInfo {
             header_row: None,
             headers,
             is_key_value: true,
+        };
+    }
+
+    let width = rect.end_col - rect.start_col + 1;
+    if width > HEADER_MAX_COLUMNS {
+        return HeaderInfo {
+            header_row: None,
+            headers: Vec::new(),
+            is_key_value: false,
         };
     }
 

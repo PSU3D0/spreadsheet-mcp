@@ -39,6 +39,9 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
         spreadsheet_mcp::tools::SheetOverviewParams {
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Sheet1".into(),
+            max_regions: None,
+            max_headers: None,
+            include_headers: None,
         },
     )
     .await?;

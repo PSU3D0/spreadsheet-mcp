@@ -17,6 +17,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
     transport::stdio,
 };
+use serde::Serialize;
 use std::future::Future;
 use std::sync::Arc;
 use thiserror::Error;
@@ -220,8 +221,9 @@ impl SpreadsheetServer {
     async fn run_tool_with_timeout<T, F>(&self, tool: &str, fut: F) -> Result<T>
     where
         F: Future<Output = Result<T>>,
+        T: Serialize,
     {
-        if let Some(timeout_duration) = self.state.config().tool_timeout() {
+        let result = if let Some(timeout_duration) = self.state.config().tool_timeout() {
             match tokio::time::timeout(timeout_duration, fut).await {
                 Ok(result) => result,
                 Err(_) => Err(anyhow!(
@@ -232,7 +234,22 @@ impl SpreadsheetServer {
             }
         } else {
             fut.await
+        }?;
+
+        self.ensure_response_size(tool, &result)?;
+        Ok(result)
+    }
+
+    fn ensure_response_size<T: Serialize>(&self, tool: &str, value: &T) -> Result<()> {
+        let Some(limit) = self.state.config().max_response_bytes() else {
+            return Ok(());
+        };
+        let payload = serde_json::to_vec(value)
+            .map_err(|e| anyhow!("failed to serialize response for {}: {}", tool, e))?;
+        if payload.len() > limit {
+            return Err(ResponseTooLargeError::new(tool, payload.len(), limit).into());
         }
+        Ok(())
     }
 }
 
@@ -1001,8 +1018,13 @@ run recalculate and review get_changeset after applying."
         self.ensure_recalc_enabled("screenshot_sheet")
             .map_err(to_mcp_error)?;
 
-        self.run_tool_with_timeout("screenshot_sheet", async {
-            let response = tools::fork::screenshot_sheet(self.state.clone(), params).await?;
+        let result = async {
+            let response = self
+                .run_tool_with_timeout(
+                    "screenshot_sheet",
+                    tools::fork::screenshot_sheet(self.state.clone(), params),
+                )
+                .await?;
 
             let mut content = Vec::new();
 
@@ -1013,6 +1035,18 @@ run recalculate and review get_changeset after applying."
             let bytes = tokio::fs::read(fs_path)
                 .await
                 .map_err(|e| anyhow!("failed to read screenshot: {}", e))?;
+
+            if let Some(limit) = self.state.config().max_response_bytes() {
+                let encoded_len = ((bytes.len() + 2) / 3) * 4;
+                let meta = serde_json::to_vec(&response)
+                    .map_err(|e| anyhow!("failed to serialize response: {}", e))?;
+                let estimated = encoded_len + meta.len() + response.output_path.len();
+                if estimated > limit {
+                    return Err(
+                        ResponseTooLargeError::new("screenshot_sheet", estimated, limit).into(),
+                    );
+                }
+            }
 
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
             content.push(Content::image(data, "image/png"));
@@ -1029,9 +1063,10 @@ run recalculate and review get_changeset after applying."
                 is_error: Some(false),
                 meta: None,
             })
-        })
-        .await
-        .map_err(to_mcp_error)
+        }
+        .await;
+
+        result.map_err(to_mcp_error)
     }
 }
 
@@ -1063,6 +1098,8 @@ impl ServerHandler for SpreadsheetServer {
 fn to_mcp_error(error: anyhow::Error) -> McpError {
     if error.downcast_ref::<ToolDisabledError>().is_some() {
         McpError::invalid_request(error.to_string(), None)
+    } else if error.downcast_ref::<ResponseTooLargeError>().is_some() {
+        McpError::invalid_request(error.to_string(), None)
     } else {
         McpError::internal_error(error.to_string(), None)
     }
@@ -1078,6 +1115,26 @@ impl ToolDisabledError {
     fn new(tool_name: &str) -> Self {
         Self {
             tool_name: tool_name.to_ascii_lowercase(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error(
+    "tool '{tool_name}' response too large ({size} bytes > {limit} bytes); reduce request size or page results"
+)]
+struct ResponseTooLargeError {
+    tool_name: String,
+    size: usize,
+    limit: usize,
+}
+
+impl ResponseTooLargeError {
+    fn new(tool_name: &str, size: usize, limit: usize) -> Self {
+        Self {
+            tool_name: tool_name.to_ascii_lowercase(),
+            size,
+            limit,
         }
     }
 }

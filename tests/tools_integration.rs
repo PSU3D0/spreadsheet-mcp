@@ -76,6 +76,9 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
         SheetOverviewParams {
             workbook_or_fork_id: workbook_id,
             sheet_name: "Data".to_string(),
+            max_regions: None,
+            max_headers: None,
+            include_headers: None,
         },
     )
     .await?;

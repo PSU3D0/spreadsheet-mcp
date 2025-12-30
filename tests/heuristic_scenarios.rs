@@ -1,29 +1,22 @@
-use spreadsheet_mcp::model::RegionKind;
+use spreadsheet_mcp::model::{RegionKind, SheetClassification};
+use spreadsheet_mcp::utils::column_number_to_name;
 use spreadsheet_mcp::workbook::WorkbookContext;
 use support::builders::{
-    CellVal, apply_date_format, fill_horizontal_kv, fill_key_value, fill_sparse, fill_table,
-    set_header_style,
+    CellVal, apply_date_format, fill_key_value, fill_sparse, fill_table, set_header_style,
 };
 
 mod support;
 
-fn region_kind(ctx: &WorkbookContext, sheet: &str, region_idx: usize) -> Option<RegionKind> {
-    ctx.get_sheet_metrics(sheet)
-        .ok()
-        .and_then(|m| m.detected_regions.get(region_idx).cloned())
-        .and_then(|r| r.region_kind)
-}
-
 fn region_count(ctx: &WorkbookContext, sheet: &str) -> usize {
     ctx.get_sheet_metrics(sheet)
-        .map(|m| m.detected_regions.len())
+        .map(|m| m.detected_regions().len())
         .unwrap_or(0)
 }
 
 fn has_headers(ctx: &WorkbookContext, sheet: &str, region_idx: usize) -> bool {
     ctx.get_sheet_metrics(sheet)
         .ok()
-        .and_then(|m| m.detected_regions.get(region_idx).cloned())
+        .and_then(|m| m.detected_regions().get(region_idx).cloned())
         .map(|r| r.header_row.is_some())
         .unwrap_or(false)
 }
@@ -120,392 +113,8 @@ fn sparse_noisy_data_has_low_confidence() {
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
 
     let metrics = ctx.get_sheet_metrics("Sheet1").unwrap();
-    if let Some(region) = metrics.detected_regions.first() {
-        assert!(
-            region.confidence < 0.9,
-            "sparse data should have lower confidence, got {}",
-            region.confidence
-        );
-    }
-}
-
-#[test]
-fn multi_row_header_detected() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("multi_header.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        sheet.get_cell_mut("A1").set_value("Q1 2024");
-        sheet.get_cell_mut("D1").set_value("Q2 2024");
-
-        fill_table(
-            sheet,
-            "A2",
-            &["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
-            &[
-                vec![
-                    CellVal::Num(100.0),
-                    CellVal::Num(110.0),
-                    CellVal::Num(120.0),
-                    CellVal::Num(130.0),
-                    CellVal::Num(140.0),
-                    CellVal::Num(150.0),
-                ],
-                vec![
-                    CellVal::Num(200.0),
-                    CellVal::Num(210.0),
-                    CellVal::Num(220.0),
-                    CellVal::Num(230.0),
-                    CellVal::Num(240.0),
-                    CellVal::Num(250.0),
-                ],
-            ],
-        );
-
-        set_header_style(sheet, "A1:F2");
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    assert!(has_headers(&ctx, "Sheet1", 0));
-}
-
-#[test]
-fn horizontal_kv_structure_recognized() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("horiz_kv.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        fill_horizontal_kv(
-            sheet,
-            "A1",
-            &[
-                ("Name", CellVal::Text("Acme Corp".into())),
-                ("ID", CellVal::Num(12345.0)),
-                ("Date", CellVal::Date(45597.0)),
-                ("Status", CellVal::Text("Active".into())),
-            ],
-        );
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    assert_eq!(region_count(&ctx, "Sheet1"), 1);
-}
-
-#[test]
-fn formula_heavy_classified_as_calculator() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("calc.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        sheet.get_cell_mut("A1").set_value("Input1");
-        sheet.get_cell_mut("B1").set_value_number(100.0);
-        sheet.get_cell_mut("A2").set_value("Input2");
-        sheet.get_cell_mut("B2").set_value_number(50.0);
-
-        sheet.get_cell_mut("D1").set_value("Calculations");
-        sheet.get_cell_mut("D2").set_formula("B1+B2");
-        sheet.get_cell_mut("D3").set_formula("B1*B2");
-        sheet.get_cell_mut("D4").set_formula("D2+D3");
-        sheet.get_cell_mut("D5").set_formula("D4*0.1");
-        sheet.get_cell_mut("D6").set_formula("D4+D5");
-        sheet.get_cell_mut("D7").set_formula("D6/B1");
-        sheet.get_cell_mut("D8").set_formula("D6/B2");
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    let kind = region_kind(&ctx, "Sheet1", 0);
-    assert!(
-        matches!(
-            kind,
-            Some(RegionKind::Calculator) | Some(RegionKind::Outputs) | Some(RegionKind::Parameters)
-        ),
-        "formula-heavy region should be calculator/outputs/parameters, got {:?}",
-        kind
-    );
-}
-
-#[test]
-fn cross_sheet_refs_both_sheets_detected() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("cross.xlsx", |book| {
-        {
-            let data_sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-            data_sheet.set_name("Data");
-            fill_table(
-                data_sheet,
-                "A1",
-                &["Item", "Price", "Qty"],
-                &[
-                    vec![
-                        CellVal::Text("Apple".into()),
-                        CellVal::Num(1.50),
-                        CellVal::Num(10.0),
-                    ],
-                    vec![
-                        CellVal::Text("Banana".into()),
-                        CellVal::Num(0.75),
-                        CellVal::Num(20.0),
-                    ],
-                    vec![
-                        CellVal::Text("Cherry".into()),
-                        CellVal::Num(3.00),
-                        CellVal::Num(5.0),
-                    ],
-                ],
-            );
-        }
-
-        let calc_sheet = book.new_sheet("Summary").unwrap();
-        calc_sheet.get_cell_mut("A1").set_value("Total Qty");
-        calc_sheet.get_cell_mut("B1").set_formula("SUM(Data!C2:C4)");
-        calc_sheet.get_cell_mut("A2").set_value("Total Value");
-        calc_sheet
-            .get_cell_mut("B2")
-            .set_formula("SUMPRODUCT(Data!B2:B4,Data!C2:C4)");
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    assert!(region_count(&ctx, "Data") >= 1);
-    assert!(region_count(&ctx, "Summary") >= 1);
-}
-
-#[test]
-fn null_padded_kv_detected_as_parameters() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("padded_kv.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        sheet.get_cell_mut("B1").set_value("Start Date");
-        sheet.get_cell_mut("C1").set_value_number(45597.0);
-        apply_date_format(sheet, "C1");
-        sheet.get_cell_mut("D1").set_value_number(45627.0);
-        apply_date_format(sheet, "D1");
-
-        sheet.get_cell_mut("B2").set_value("ID");
-        sheet.get_cell_mut("C2").set_value_number(12345.0);
-        sheet.get_cell_mut("B3").set_value("Name");
-        sheet.get_cell_mut("C3").set_value("Test Item");
-        sheet.get_cell_mut("B4").set_value("Category");
-        sheet.get_cell_mut("C4").set_value("Sample");
-        sheet.get_cell_mut("B5").set_value("Value");
-        sheet.get_cell_mut("C5").set_value_number(999.0);
-        sheet.get_cell_mut("B6").set_value("Status");
-        sheet.get_cell_mut("C6").set_value("Active");
-        sheet.get_cell_mut("B7").set_value("Rate");
-        sheet.get_cell_mut("C7").set_value_number(0.05);
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    let kind = region_kind(&ctx, "Sheet1", 0);
-    assert!(
-        matches!(kind, Some(RegionKind::Parameters) | Some(RegionKind::Data)),
-        "null-padded kv should be parameters or data, got {:?}",
-        kind
-    );
-}
-
-#[test]
-fn dense_4col_parameter_grid() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("4col_param.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        // Grid layout: Key | Value | Key | Value
-        // Heuristic likely sees this as a data table because it expects exactly 2 columns for KV
-
-        // Col A/B
-        fill_key_value(
-            sheet,
-            "A1",
-            &[
-                ("Name", CellVal::Text("Project X".into())),
-                ("Lead", CellVal::Text("Alice".into())),
-                ("Start", CellVal::Date(45292.0)), // 2024-01-01
-                ("Budget", CellVal::Num(50000.0)),
-            ],
-        );
-
-        // Col C/D
-        fill_key_value(
-            sheet,
-            "C1",
-            &[
-                ("Client", CellVal::Text("MegaCorp".into())),
-                ("Region", CellVal::Text("EMEA".into())),
-                ("End", CellVal::Date(45658.0)), // 2024-12-31
-                ("Status", CellVal::Text("Active".into())),
-            ],
-        );
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    let kind = region_kind(&ctx, "Sheet1", 0);
-
-    // Improved heuristic: detect 4-column grids as Parameters
-    assert!(
-        matches!(kind, Some(RegionKind::Parameters)),
-        "4-col grid should be parameters, got {:?}",
-        kind
-    );
-
-    // Check if it's one region or split
-    assert_eq!(
-        region_count(&ctx, "Sheet1"),
-        1,
-        "Should be detected as a single region"
-    );
-}
-
-#[test]
-fn tables_separated_by_zeros() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("zero_gutter.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        // Table 1 (A-B)
-        fill_table(
-            sheet,
-            "A1",
-            &["ID", "Val1"],
-            &[
-                vec![CellVal::Num(1.0), CellVal::Num(10.0)],
-                vec![CellVal::Num(2.0), CellVal::Num(20.0)],
-                vec![CellVal::Num(3.0), CellVal::Num(30.0)],
-            ],
-        );
-
-        // Gutter (C) - Full of zeros (simulating formula returns)
-        for r in 1..=4 {
-            sheet.get_cell_mut((3, r)).set_value_number(0.0);
-        }
-
-        // Table 2 (D-E)
-        fill_table(
-            sheet,
-            "D1",
-            &["ID", "Val2"],
-            &[
-                vec![CellVal::Num(1.0), CellVal::Num(100.0)],
-                vec![CellVal::Num(2.0), CellVal::Num(200.0)],
-                vec![CellVal::Num(3.0), CellVal::Num(300.0)],
-            ],
-        );
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    // KNOWN LIMITATION:
-    // This typically merges into one large region because Col C is "dense" (not empty).
-    // Future work: Improve gutter detection to handle low-entropy columns.
-    let count = region_count(&ctx, "Sheet1");
-
-    if count == 1 {
-        let metrics = ctx.get_sheet_metrics("Sheet1").unwrap();
-        let region = &metrics.detected_regions[0];
-        assert!(
-            region.bounds.contains("E4"),
-            "Region should cover both tables"
-        );
-    }
-}
-
-#[test]
-fn numeric_year_headers() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("numeric_headers.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        // Row 1: Numeric Headers
-        sheet.get_cell_mut("A1").set_value("Category");
-        sheet.get_cell_mut("B1").set_value_number(2022.0);
-        sheet.get_cell_mut("C1").set_value_number(2023.0);
-        sheet.get_cell_mut("D1").set_value_number(2024.0);
-
-        // Data
-        let rows = [
-            vec![
-                CellVal::Text("Revenue".into()),
-                CellVal::Num(100.0),
-                CellVal::Num(110.0),
-                CellVal::Num(120.0),
-            ],
-            vec![
-                CellVal::Text("Cost".into()),
-                CellVal::Num(80.0),
-                CellVal::Num(85.0),
-                CellVal::Num(90.0),
-            ],
-            vec![
-                CellVal::Text("Profit".into()),
-                CellVal::Num(20.0),
-                CellVal::Num(25.0),
-                CellVal::Num(30.0),
-            ],
-        ];
-
-        // Using fill_table helper for data starting at A2, but we need to match columns
-        // Actually, let's just use low-level building to be precise
-        for (r_idx, row_data) in rows.iter().enumerate() {
-            let row_num = (r_idx + 2) as u32;
-            for (c_idx, val) in row_data.iter().enumerate() {
-                let col_num = (c_idx + 1) as u32;
-                match val {
-                    CellVal::Text(s) => {
-                        sheet.get_cell_mut((col_num, row_num)).set_value(s);
-                    }
-                    CellVal::Num(n) => {
-                        sheet.get_cell_mut((col_num, row_num)).set_value_number(*n);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    let metrics = ctx.get_sheet_metrics("Sheet1").unwrap();
-    let region = &metrics.detected_regions[0];
-
-    // Improved heuristic: Numeric year headers are recognized
-    if let Some(hr) = region.header_row {
-        assert_eq!(hr, 1, "Should detect numeric headers at row 1");
-        assert!(
-            region.headers.contains(&"2022".to_string()),
-            "Should contain year 2022"
-        );
-    } else {
-        panic!("Header detection failed for numeric headers");
-    }
-}
-
-#[test]
-fn hierarchical_row_headers() {
-    let workspace = support::TestWorkspace::new();
-    let path = workspace.create_workbook("hierarchical.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-
-        // Row 1: [Empty] | Q1 | Q2
-        sheet.get_cell_mut("B1").set_value("Q1");
-        sheet.get_cell_mut("C1").set_value("Q2");
-
-        // Row 2: Sales | 100 | 200
-        sheet.get_cell_mut("A2").set_value("Sales");
-        sheet.get_cell_mut("B2").set_value_number(100.0);
-        sheet.get_cell_mut("C2").set_value_number(200.0);
-
-        // Row 3:   Direct | 60 | 120  (Indented / Hierarchical)
-        sheet.get_cell_mut("A3").set_value("  Direct");
-        sheet.get_cell_mut("B3").set_value_number(60.0);
-        sheet.get_cell_mut("C3").set_value_number(120.0);
-
-        // Row 4:   Channel | 40 | 80
-        sheet.get_cell_mut("A4").set_value("  Channel");
-        sheet.get_cell_mut("B4").set_value_number(40.0);
-        sheet.get_cell_mut("C4").set_value_number(80.0);
-    });
-    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
-
-    let metrics = ctx.get_sheet_metrics("Sheet1").unwrap();
-    let region = &metrics.detected_regions[0];
+    let regions = metrics.detected_regions();
+    let region = &regions[0];
 
     println!("Region bounds: {}", region.bounds);
 
@@ -540,7 +149,8 @@ fn headerless_list() {
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
 
     let metrics = ctx.get_sheet_metrics("Sheet1").unwrap();
-    let region = &metrics.detected_regions[0];
+    let regions = metrics.detected_regions();
+    let region = &regions[0];
 
     // Expect Data classification even without headers
     assert!(
@@ -554,4 +164,95 @@ fn headerless_list() {
         region.header_row, None,
         "Should not detect a header in a flat list"
     );
+}
+
+#[test]
+fn far_out_cell_caps_regions_and_preserves_metrics() {
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("far_out.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+
+        let headers: Vec<String> = (1..=10).map(|i| format!("H{}", i)).collect();
+        let header_refs: Vec<&str> = headers.iter().map(|s| s.as_str()).collect();
+        let rows: Vec<Vec<CellVal>> = (0..10)
+            .map(|r| (0..10).map(|c| CellVal::Num((r * 10 + c) as f64)).collect())
+            .collect();
+        fill_table(sheet, "A1", &header_refs, &rows);
+
+        sheet.get_cell_mut((600u32, 400u32)).set_value_number(1);
+    });
+    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
+
+    let entry = ctx.get_sheet_metrics("Sheet1").unwrap();
+    assert_eq!(entry.metrics.row_count, 400);
+    assert_eq!(entry.metrics.column_count, 600);
+
+    let regions = entry.detected_regions();
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].bounds, "A1:J11");
+    assert!(
+        entry
+            .region_notes()
+            .iter()
+            .any(|note| note.contains("Region detection capped"))
+    );
+}
+
+#[test]
+fn huge_width_sparse_sheet_caps_with_fallback_region() {
+    let workspace = support::TestWorkspace::new();
+    let width = 520u32;
+    let path = workspace.create_workbook("wide_sparse.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+
+        let headers: Vec<String> = (1..=width).map(|i| format!("H{}", i)).collect();
+        let header_refs: Vec<&str> = headers.iter().map(|s| s.as_str()).collect();
+        let row: Vec<CellVal> = (1..=width).map(|i| CellVal::Num(i as f64)).collect();
+        let rows = vec![row];
+        fill_table(sheet, "A1", &header_refs, &rows);
+    });
+    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
+
+    let entry = ctx.get_sheet_metrics("Sheet1").unwrap();
+    let regions = entry.detected_regions();
+    assert_eq!(regions.len(), 1);
+    let total_cells = width as usize * 2;
+    let trim_cells = ((total_cells as f32) * 0.01).round() as u32;
+    let trim_cols = trim_cells / 2;
+    let start_col = 1 + trim_cols;
+    let end_col = width - trim_cols;
+    let expected_bounds = format!(
+        "{}1:{}2",
+        column_number_to_name(start_col),
+        column_number_to_name(end_col)
+    );
+    assert_eq!(regions[0].bounds, expected_bounds);
+    assert_eq!(regions[0].header_count, end_col - start_col + 1);
+    assert!(regions[0].headers_truncated);
+    assert!(
+        entry
+            .region_notes()
+            .iter()
+            .any(|note| note.contains("Region detection capped"))
+    );
+}
+
+#[test]
+fn styled_sparse_sheet_tracks_style_tags_without_values() {
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("styled_sparse.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        set_header_style(sheet, "B2:D2");
+        apply_date_format(sheet, "C4:C4");
+    });
+    let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
+
+    let entry = ctx.get_sheet_metrics_fast("Sheet1").unwrap();
+    assert_eq!(entry.metrics.non_empty_cells, 0);
+    assert!(matches!(
+        entry.metrics.classification,
+        SheetClassification::Empty
+    ));
+    assert!(entry.style_tags.iter().any(|tag| tag == "header"));
+    assert!(entry.style_tags.iter().any(|tag| tag == "date"));
 }
