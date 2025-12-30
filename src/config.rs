@@ -12,6 +12,7 @@ const DEFAULT_MAX_RECALCS: usize = 2;
 const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb"];
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8079";
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_MAX_RESPONSE_BYTES: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -44,6 +45,7 @@ pub struct ServerConfig {
     pub vba_enabled: bool,
     pub max_concurrent_recalcs: usize,
     pub tool_timeout_ms: Option<u64>,
+    pub max_response_bytes: Option<u64>,
     pub allow_overwrite: bool,
 }
 
@@ -62,6 +64,7 @@ impl ServerConfig {
             vba_enabled: cli_vba_enabled,
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
             tool_timeout_ms: cli_tool_timeout_ms,
+            max_response_bytes: cli_max_response_bytes,
             allow_overwrite: cli_allow_overwrite,
         } = args;
 
@@ -83,6 +86,7 @@ impl ServerConfig {
             vba_enabled: file_vba_enabled,
             max_concurrent_recalcs: file_max_concurrent_recalcs,
             tool_timeout_ms: file_tool_timeout_ms,
+            max_response_bytes: file_max_response_bytes,
             allow_overwrite: file_allow_overwrite,
         } = file_config;
 
@@ -198,6 +202,15 @@ impl ServerConfig {
             Some(tool_timeout_ms)
         };
 
+        let max_response_bytes = cli_max_response_bytes
+            .or(file_max_response_bytes)
+            .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES);
+        let max_response_bytes = if max_response_bytes == 0 {
+            None
+        } else {
+            Some(max_response_bytes)
+        };
+
         let allow_overwrite = cli_allow_overwrite || file_allow_overwrite.unwrap_or(false);
 
         Ok(Self {
@@ -212,6 +225,7 @@ impl ServerConfig {
             vba_enabled,
             max_concurrent_recalcs,
             tool_timeout_ms,
+            max_response_bytes,
             allow_overwrite,
         })
     }
@@ -266,6 +280,16 @@ impl ServerConfig {
         self.tool_timeout_ms.and_then(|ms| {
             if ms > 0 {
                 Some(Duration::from_millis(ms))
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn max_response_bytes(&self) -> Option<usize> {
+        self.max_response_bytes.and_then(|bytes| {
+            if bytes > 0 {
+                Some(bytes as usize)
             } else {
                 None
             }
@@ -376,6 +400,15 @@ pub struct CliArgs {
 
     #[arg(
         long,
+        env = "SPREADSHEET_MCP_MAX_RESPONSE_BYTES",
+        value_name = "BYTES",
+        help = "Max response size in bytes (default: 1000000; 0 disables)",
+        value_parser = clap::value_parser!(u64)
+    )]
+    pub max_response_bytes: Option<u64>,
+
+    #[arg(
+        long,
         env = "SPREADSHEET_MCP_ALLOW_OVERWRITE",
         help = "Allow save_fork to overwrite original workbook files"
     )]
@@ -395,6 +428,7 @@ struct PartialConfig {
     vba_enabled: Option<bool>,
     max_concurrent_recalcs: Option<usize>,
     tool_timeout_ms: Option<u64>,
+    max_response_bytes: Option<u64>,
     allow_overwrite: Option<bool>,
 }
 

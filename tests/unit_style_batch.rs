@@ -451,11 +451,8 @@ async fn style_batch_region_target_resolves() -> Result<()> {
         .open_workbook(&spreadsheet_mcp::model::WorkbookId(fork.fork_id.clone()))
         .await?;
     let metrics = fork_wb.get_sheet_metrics("Sheet1")?;
-    let region_id = metrics
-        .detected_regions
-        .first()
-        .expect("region detected")
-        .id;
+    let regions = metrics.detected_regions();
+    let region_id = regions.first().expect("region detected").id;
 
     let patch = StylePatch {
         font: Some(Some(FontPatch {

@@ -42,6 +42,14 @@ async fn workbook_summary_reports_regions_and_entry_points() -> Result<()> {
         + summary.region_counts.other;
     assert!(total_regions >= 1);
     assert!(!summary.suggested_entry_points.is_empty());
+    assert!(summary.region_counts_truncated);
+    assert!(!summary.entry_points_truncated);
+    assert!(
+        summary
+            .notes
+            .iter()
+            .any(|note| note.contains("Region counts and entry points are inferred"))
+    );
 
     Ok(())
 }

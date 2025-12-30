@@ -22,7 +22,7 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 - **LRU cache** keeps recently-accessed workbooks in memory (configurable capacity)
 - **Lazy sheet metrics** computed once per sheet, reused across tools
-- **Region detection** runs once and caches bounds for `sheet_overview`, `find_value`, `read_table`, `table_profile`
+- **Region detection on demand** runs for `sheet_overview` and is cached for `region_id` lookups (`find_value`, `read_table`, `table_profile`)
 
 ## Tool Surface
 
@@ -383,14 +383,16 @@ Then point your MCP client to the binary:
 | `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | Enable write/recalc tools (default: false) |
 | `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | Parallel recalc limit (default: 2) |
 | `--tool-timeout-ms <MS>` | `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | Tool request timeout in milliseconds (default: 30000; 0 disables) |
+| `--max-response-bytes <BYTES>` | `SPREADSHEET_MCP_MAX_RESPONSE_BYTES` | Max response size in bytes (default: 1000000; 0 disables) |
 | `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | Allow `save_fork` to overwrite original files (default: false) |
 
 ## Performance
 
 - **LRU workbook cache** — Recently opened workbooks stay in memory; oldest evicted when capacity exceeded
 - **Lazy metrics** — Sheet metrics computed on first access, cached for subsequent calls
-- **Region caching** — Detection runs once per sheet; `region_id` lookups are O(1)
+- **Region detection on demand** — Runs on `sheet_overview` (or `region_id` lookups) and is cached thereafter
 - **Sampling modes** — `distributed` sampling reads evenly across rows without loading everything
+- **Output caps** — `sheet_overview` truncates regions/headers by default; use tool params to request more
 - **Compact formats** — `values_only` and `compact` output modes reduce response size
 
 ## Testing

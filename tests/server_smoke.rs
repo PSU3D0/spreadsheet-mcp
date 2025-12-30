@@ -98,6 +98,42 @@ async fn server_tool_handlers_return_json() -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn response_size_guard_rejects_large_payloads() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("oversize.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        for row in 1..=25u32 {
+            sheet
+                .get_cell_mut((1u32, row))
+                .set_value(format!("Row{}", row));
+            sheet.get_cell_mut((2u32, row)).set_value_number(row as i32);
+        }
+    });
+
+    let config = workspace.config_with(|cfg| {
+        cfg.max_response_bytes = Some(1);
+    });
+    let server = SpreadsheetServer::new(Arc::new(config)).await?;
+
+    let err = match server
+        .list_workbooks(Parameters(ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("expected response size error"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.code, ErrorCode::INVALID_REQUEST);
+    assert!(err.message.contains("response too large"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn disabled_tools_return_invalid_request() -> Result<()> {
     let workspace = support::TestWorkspace::new();
     let workbook_path = workspace.create_workbook("locked.xlsx", |_| {});

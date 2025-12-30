@@ -55,8 +55,11 @@ pub struct WorkbookSummaryResponse {
     pub total_formulas: u64,
     pub breakdown: WorkbookBreakdown,
     pub region_counts: RegionCountSummary,
+    pub region_counts_truncated: bool,
     pub key_named_ranges: Vec<NamedRangeDescriptor>,
     pub suggested_entry_points: Vec<EntryPoint>,
+    pub entry_points_truncated: bool,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -123,9 +126,12 @@ pub struct SheetOverviewResponse {
     pub narrative: String,
     pub regions: Vec<SheetRegion>,
     pub detected_regions: Vec<DetectedRegion>,
+    pub detected_region_count: u32,
+    pub detected_regions_truncated: bool,
     pub key_ranges: Vec<String>,
     pub formula_ratio: f32,
     pub notable_features: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -163,6 +169,8 @@ pub struct DetectedRegion {
     pub bounds: String,
     pub header_row: Option<u32>,
     pub headers: Vec<String>,
+    pub header_count: u32,
+    pub headers_truncated: bool,
     pub row_count: u32,
     pub classification: RegionKind,
     pub region_kind: Option<RegionKind>,

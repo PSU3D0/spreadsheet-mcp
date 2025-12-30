@@ -28,7 +28,7 @@ fn single_table_no_gutters() {
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
     let metrics = ctx.get_sheet_metrics("Sheet1").expect("metrics");
-    let regions = &metrics.detected_regions;
+    let regions = metrics.detected_regions();
     assert_eq!(regions.len(), 1);
     let region = &regions[0];
     assert_eq!(region.bounds, "A1:C4");
@@ -65,10 +65,10 @@ fn two_tables_vertical_gutter() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let regions = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions;
+        .detected_regions();
     assert_eq!(regions.len(), 2);
     assert_eq!(regions[0].bounds, "A1:B3");
     assert_eq!(regions[1].bounds, "A6:B8");
@@ -99,10 +99,10 @@ fn two_tables_horizontal_gutter() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let regions = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions;
+        .detected_regions();
     assert_eq!(regions.len(), 2);
     assert_eq!(regions[0].bounds, "A1:B4");
     assert_eq!(regions[1].bounds, "E1:F4");
@@ -125,10 +125,11 @@ fn parameters_block_classified() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
     assert!(matches!(
         region.region_kind,
         Some(spreadsheet_mcp::model::RegionKind::Parameters)
@@ -153,10 +154,11 @@ fn calculator_region_detected() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
     assert!(matches!(
         region.region_kind,
         Some(spreadsheet_mcp::model::RegionKind::Calculator)
@@ -182,10 +184,10 @@ fn metadata_footer_split() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let regions = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions;
+        .detected_regions();
     assert_eq!(regions.len(), 2);
     assert!(regions.iter().any(|r| r.bounds == "A1:B3"));
     let meta = regions.iter().find(|r| r.bounds.contains("9")).unwrap();
@@ -216,10 +218,11 @@ fn multi_row_headers_detected() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
     eprintln!("headers {:?} at {:?}", region.headers, region.header_row);
     assert_eq!(region.header_row, Some(1));
     assert!(region.headers.iter().any(|h| h.contains("FY")));
@@ -242,9 +245,9 @@ fn region_ids_stable_across_reads() {
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
     let first = ctx.get_sheet_metrics("Sheet1").expect("metrics");
-    let ids_first: Vec<u32> = first.detected_regions.iter().map(|r| r.id).collect();
+    let ids_first: Vec<u32> = first.detected_regions().iter().map(|r| r.id).collect();
     let second = ctx.get_sheet_metrics("Sheet1").expect("metrics");
-    let ids_second: Vec<u32> = second.detected_regions.iter().map(|r| r.id).collect();
+    let ids_second: Vec<u32> = second.detected_regions().iter().map(|r| r.id).collect();
     assert_eq!(ids_first, ids_second);
 }
 
@@ -266,8 +269,7 @@ fn stacked_and_side_by_side_quadrants() {
     let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions
-        .clone();
+        .detected_regions();
     assert_eq!(regions.len(), 4);
     assert!(regions.iter().any(|r| r.bounds == "A1:B1"));
     assert!(regions.iter().any(|r| r.bounds == "A6:B6"));
@@ -298,8 +300,7 @@ fn outputs_band_detected() {
     let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions
-        .clone();
+        .detected_regions();
     assert!(!regions.is_empty(), "expected at least 1 region");
     let outputs_region = regions
         .iter()
@@ -328,8 +329,7 @@ fn noisy_sparse_sheet_stays_single_region_low_confidence() {
     let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions
-        .clone();
+        .detected_regions();
     assert!(!regions.is_empty());
     let avg_conf: f32 = regions.iter().map(|r| r.confidence).sum::<f32>() / regions.len() as f32;
     assert!(avg_conf <= 1.0);
@@ -349,8 +349,7 @@ fn edge_gutter_bias_trims_leading_blank_area() {
     let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions
-        .clone();
+        .detected_regions();
     assert_eq!(regions.len(), 1);
     assert_eq!(regions[0].bounds, "E10:F11");
 }
@@ -366,8 +365,7 @@ fn small_min_size_guard_keeps_tiny_block() {
     let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions
-        .clone();
+        .detected_regions();
     assert_eq!(regions.len(), 1);
     assert_eq!(regions[0].bounds, "B2:B2");
 }
@@ -385,10 +383,11 @@ fn formula_mixed_with_values_classifies_mixed() {
         sheet.get_cell_mut("A2").set_value("text");
     });
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
     assert!(region.confidence > 0.3);
 }
 
@@ -405,10 +404,11 @@ fn header_false_positive_guard_uses_text_row() {
         sheet.get_cell_mut("B3").set_value_number(10);
     });
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
     assert_eq!(region.header_row, Some(2));
 }
 
@@ -431,10 +431,11 @@ fn key_value_layout_detected_as_parameters() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
 
     assert!(
         matches!(
@@ -472,10 +473,11 @@ fn proper_noun_penalized_in_header_scoring() {
 
     let config = Arc::new(workspace.config());
     let ctx = WorkbookContext::load(&config, &path).expect("load");
-    let region = &ctx
+    let regions = ctx
         .get_sheet_metrics("Sheet1")
         .expect("metrics")
-        .detected_regions[0];
+        .detected_regions();
+    let region = &regions[0];
 
     assert_eq!(
         region.header_row,

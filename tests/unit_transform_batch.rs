@@ -206,6 +206,9 @@ async fn transform_batch_region_target_resolves() -> Result<()> {
         SheetOverviewParams {
             workbook_or_fork_id: WorkbookId(fork.fork_id.clone()),
             sheet_name: "Sheet1".to_string(),
+            max_regions: None,
+            max_headers: None,
+            include_headers: None,
         },
     )
     .await?;

@@ -43,7 +43,7 @@ pub async fn create_fork(
     Ok(CreateForkResponse {
         fork_id,
         base_workbook: base_path.display().to_string(),
-        ttl_seconds: 3600,
+        ttl_seconds: registry.ttl().as_secs(),
     })
 }
 
@@ -248,17 +248,14 @@ pub async fn transform_batch(
         let resolved_target = match target {
             TransformTarget::Region { region_id } => {
                 let metrics = workbook.get_sheet_metrics(sheet_name)?;
-                let region = metrics
-                    .detected_regions
-                    .iter()
-                    .find(|r| r.id == *region_id)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "region_id {} not found on sheet '{}'",
-                            region_id,
-                            sheet_name
-                        )
-                    })?;
+                let regions = metrics.detected_regions();
+                let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
+                    anyhow!(
+                        "region_id {} not found on sheet '{}'",
+                        region_id,
+                        sheet_name
+                    )
+                })?;
                 TransformTarget::Range {
                     range: region.bounds.clone(),
                 }
@@ -446,17 +443,14 @@ pub async fn style_batch(
         let mut resolved = op.clone();
         if let StyleTarget::Region { region_id } = &op.target {
             let metrics = workbook.get_sheet_metrics(&op.sheet_name)?;
-            let region = metrics
-                .detected_regions
-                .iter()
-                .find(|r| r.id == *region_id)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "region_id {} not found on sheet '{}'",
-                        region_id,
-                        op.sheet_name
-                    )
-                })?;
+            let regions = metrics.detected_regions();
+            let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
+                anyhow!(
+                    "region_id {} not found on sheet '{}'",
+                    region_id,
+                    op.sheet_name
+                )
+            })?;
             resolved.target = StyleTarget::Range {
                 range: region.bounds.clone(),
             };
