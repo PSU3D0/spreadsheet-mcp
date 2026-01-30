@@ -182,11 +182,17 @@ pub struct SheetPageResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub sheet_name: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<RowSnapshot>,
-    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub header_row: Option<RowSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compact: Option<SheetPageCompact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub values_only: Option<SheetPageValues>,
     pub format: SheetPageFormat,
 }
@@ -218,9 +224,34 @@ pub enum CellValue {
     Date(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+pub enum CellValueKind {
+    Text,
+    Number,
+    Bool,
+    Error,
+    Date,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum CellValuePrimitive {
+    Text(String),
+    Number(f64),
+    Bool(bool),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TableOutputFormat {
+    Json,
+    Values,
+    Csv,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum SheetPageFormat {
     #[default]
     Full,
@@ -772,10 +803,21 @@ pub struct ReadTableResponse {
     pub workbook_short_id: String,
     pub sheet_name: String,
     pub table_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<TableRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<Vec<Option<CellValueKind>>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<String>,
     pub total_rows: u32,
-    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -814,7 +856,16 @@ pub struct RangeValuesResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesEntry {
     pub range: String,
-    pub rows: Vec<Vec<Option<CellValue>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<Vec<Option<CellValue>>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_start_row: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

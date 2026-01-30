@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use spreadsheet_mcp::model::{TraceDirection, WorkbookId};
+use spreadsheet_mcp::model::{SheetPageFormat, TraceDirection, WorkbookId};
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::{
     DescribeWorkbookParams, FindFormulaParams, FormulaTraceParams, ListSheetsParams,
@@ -103,12 +103,12 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             include_formulas: true,
             include_styles: true,
             include_header: true,
-            format: None,
+            format: Some(SheetPageFormat::Full),
         },
     )
     .await?;
     assert_eq!(page.rows.len(), 5);
-    assert!(page.has_more);
+    assert_eq!(page.has_more, Some(true));
     assert!(page.next_start_row.unwrap() > 5);
     assert!(page.header_row.is_some());
     let first_row = &page.rows[0];

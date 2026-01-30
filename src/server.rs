@@ -46,6 +46,12 @@ Use direction='right' or 'below' hints.
 - find_formula: Search formulas. Default returns no context and only first 50 matches. \
 Use include_context=true for header+cell snapshots, and use limit/offset to page.
 
+OUTPUT DEFAULTS (token-dense profile):
+- read_table defaults to format=csv (flat string). Use format=values for raw arrays, or format=json for typed cells.
+- range_values defaults to format=values. Use format=csv or format=json as needed.
+- sheet_page defaults to format=compact; set format=full for per-cell objects.
+- Pagination fields (has_more/next_offset/next_start_row) only appear when truncated.
+
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 
 DATES: Cells with date formats return ISO-8601 strings (YYYY-MM-DD).

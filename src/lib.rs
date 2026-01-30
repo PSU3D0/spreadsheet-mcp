@@ -16,7 +16,7 @@ pub mod tools;
 pub mod utils;
 pub mod workbook;
 
-pub use config::{CliArgs, ServerConfig, TransportKind};
+pub use config::{CliArgs, OutputProfile, ServerConfig, TransportKind};
 pub use server::SpreadsheetServer;
 
 use anyhow::Result;

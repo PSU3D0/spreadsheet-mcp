@@ -1,7 +1,7 @@
 use std::fs;
 
 use clap::Parser;
-use spreadsheet_mcp::{CliArgs, ServerConfig, TransportKind};
+use spreadsheet_mcp::{CliArgs, OutputProfile, ServerConfig, TransportKind};
 
 #[test]
 fn merges_config_file_and_cli_overrides() {
@@ -64,6 +64,10 @@ fn empty_extensions_is_error() {
         max_concurrent_recalcs: None,
         tool_timeout_ms: None,
         max_response_bytes: None,
+        output_profile: None,
+        max_payload_bytes: None,
+        max_cells: None,
+        max_items: None,
         allow_overwrite: false,
     };
     let err = ServerConfig::from_args(args).expect_err("expected failure");
@@ -85,6 +89,10 @@ fn ensure_workspace_root_errors_for_missing_dir() {
         max_concurrent_recalcs: 2,
         tool_timeout_ms: Some(30_000),
         max_response_bytes: Some(1_000_000),
+        output_profile: OutputProfile::TokenDense,
+        max_payload_bytes: Some(65_536),
+        max_cells: Some(10_000),
+        max_items: Some(500),
         allow_overwrite: false,
     };
     let err = config.ensure_workspace_root().expect_err("missing dir");
