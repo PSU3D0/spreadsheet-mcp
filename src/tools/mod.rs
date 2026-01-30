@@ -411,6 +411,10 @@ pub struct FindValueParams {
     pub direction: Option<LabelDirection>,
     #[serde(default = "default_find_limit")]
     pub limit: u32,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub context_width: Option<u32>,
 }
 
 impl Default for FindValueParams {
@@ -429,6 +433,8 @@ impl Default for FindValueParams {
             search_headers_only: false,
             direction: None,
             limit: default_find_limit(),
+            context: None,
+            context_width: None,
         }
     }
 }
@@ -614,6 +620,12 @@ pub struct SheetFormulaMapParams {
     pub limit: Option<u32>,
     #[serde(default)]
     pub sort_by: Option<FormulaSortBy>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub include_addresses: Option<bool>,
+    #[serde(default)]
+    pub addresses_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
@@ -630,6 +642,16 @@ pub async fn sheet_formula_map(
     params: SheetFormulaMapParams,
 ) -> Result<SheetFormulaMapResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
+    let include_addresses = params.include_addresses.unwrap_or(!summary_only);
+    let addresses_limit = params.addresses_limit.unwrap_or(15);
+    let max_items = config.max_items();
+    let max_payload_bytes = config.max_payload_bytes();
+
     let graph = workbook.formula_graph(&params.sheet_name)?;
     let mut groups = Vec::new();
     let mut truncated = false;
@@ -641,17 +663,25 @@ pub async fn sheet_formula_map(
                 continue;
             }
         }
-        if !params.expand && group.addresses.len() > 15 {
-            group.addresses.truncate(15);
+
+        let address_count = group.addresses.len();
+
+        if summary_only {
+            group.addresses.clear();
+        } else if !include_addresses {
+            group.addresses.clear();
+        } else if !params.expand && address_count > addresses_limit as usize {
+            group.addresses.truncate(addresses_limit as usize);
             truncated = true;
         }
+
         groups.push(group);
     }
 
     let sort_by = params.sort_by.unwrap_or_default();
     match sort_by {
         FormulaSortBy::Address => {
-            groups.sort_by(|a, b| a.addresses.first().cmp(&b.addresses.first()));
+            groups.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         }
         FormulaSortBy::Complexity => {
             groups.sort_by(|a, b| b.formula.len().cmp(&a.formula.len()));
@@ -668,12 +698,47 @@ pub async fn sheet_formula_map(
         truncated = true;
     }
 
+    if let Some(max_items) = max_items {
+        if groups.len() > max_items {
+            groups.truncate(max_items);
+            truncated = true;
+        }
+    }
+
+    if let Some(max_bytes) = max_payload_bytes {
+        let group_limit = cap_rows_by_payload_bytes(groups.len(), Some(max_bytes), |count| {
+            let response = SheetFormulaMapResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                sheet_name: params.sheet_name.clone(),
+                groups: groups[..count].to_vec(),
+                truncated: false,
+                next_offset: None,
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+
+        if group_limit < groups.len() {
+            groups.truncate(group_limit);
+            truncated = true;
+        }
+    }
+
+    let next_offset = if truncated {
+        Some(params.limit.unwrap_or(50))
+    } else {
+        None
+    };
+
     let response = SheetFormulaMapResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name.clone(),
         groups,
         truncated,
+        next_offset,
     };
     Ok(response)
 }
@@ -2153,6 +2218,10 @@ pub struct FindFormulaParams {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
+    #[serde(default)]
+    pub context_rows: Option<u32>,
+    #[serde(default)]
+    pub context_cols: Option<u32>,
 }
 
 pub async fn find_formula(
@@ -2174,6 +2243,8 @@ pub async fn find_formula(
 
     let limit = params.limit.clamp(1, 500);
     let offset = params.offset;
+    let context_rows = params.context_rows.unwrap_or(1);
+    let context_cols = params.context_cols.unwrap_or(1);
 
     let mut matches = Vec::new();
     let mut seen: u32 = 0;
@@ -2188,6 +2259,8 @@ pub async fn find_formula(
                     &query,
                     params.case_sensitive,
                     params.include_context,
+                    context_rows,
+                    context_cols,
                     offset,
                     limit,
                     seen,
@@ -2218,6 +2291,12 @@ pub struct ScanVolatilesParams {
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
     pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub include_addresses: Option<bool>,
+    #[serde(default)]
+    pub addresses_limit: Option<u32>,
 }
 
 pub async fn scan_volatiles(
@@ -2225,6 +2304,16 @@ pub async fn scan_volatiles(
     params: ScanVolatilesParams,
 ) -> Result<VolatileScanResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
+    let include_addresses = params.include_addresses.unwrap_or(!summary_only);
+    let addresses_limit = params.addresses_limit.unwrap_or(15);
+    let max_items = config.max_items();
+    let max_payload_bytes = config.max_payload_bytes();
+
     let target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
         vec![sheet.clone()]
     } else {
@@ -2240,25 +2329,76 @@ pub async fn scan_volatiles(
             if !group.is_volatile {
                 continue;
             }
-            for address in group.addresses.iter().take(50) {
+
+            if summary_only {
                 items.push(VolatileScanEntry {
-                    address: address.clone(),
+                    address: String::new(),
+                    sheet_name: sheet_name.clone(),
+                    function: "volatile".to_string(),
+                    note: Some(format!("Count: {}", group.addresses.len())),
+                });
+            } else if include_addresses {
+                for address in group.addresses.iter().take(addresses_limit as usize) {
+                    items.push(VolatileScanEntry {
+                        address: address.clone(),
+                        sheet_name: sheet_name.clone(),
+                        function: "volatile".to_string(),
+                        note: Some(group.formula.clone()),
+                    });
+                }
+                if group.addresses.len() > addresses_limit as usize {
+                    truncated = true;
+                }
+            } else {
+                items.push(VolatileScanEntry {
+                    address: String::new(),
                     sheet_name: sheet_name.clone(),
                     function: "volatile".to_string(),
                     note: Some(group.formula.clone()),
                 });
             }
-            if group.addresses.len() > 50 {
-                truncated = true;
-            }
         }
     }
+
+    if let Some(max_items) = max_items {
+        if items.len() > max_items {
+            items.truncate(max_items);
+            truncated = true;
+        }
+    }
+
+    if let Some(max_bytes) = max_payload_bytes {
+        let item_limit = cap_rows_by_payload_bytes(items.len(), Some(max_bytes), |count| {
+            let response = VolatileScanResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                items: items[..count].to_vec(),
+                truncated: false,
+                next_offset: None,
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+
+        if item_limit < items.len() {
+            items.truncate(item_limit);
+            truncated = true;
+        }
+    }
+
+    let next_offset = if truncated {
+        Some(addresses_limit)
+    } else {
+        None
+    };
 
     let response = VolatileScanResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         items,
         truncated,
+        next_offset,
     };
     Ok(response)
 }
@@ -3326,6 +3466,8 @@ fn collect_formula_matches(
     query: &str,
     case_sensitive: bool,
     include_context: bool,
+    context_rows: u32,
+    context_cols: u32,
     offset: u32,
     limit: u32,
     seen_so_far: u32,
@@ -3363,10 +3505,26 @@ fn collect_formula_matches(
         let row = *coord.get_row_num();
 
         let context = if include_context {
-            let columns = vec![column];
-            let context_row = build_row_snapshot(sheet, row, &columns, true, false);
-            let header_row = build_row_snapshot(sheet, 1, &columns, false, false);
-            vec![header_row, context_row]
+            let col_start = column.saturating_sub(context_cols / 2).max(1);
+            let col_end = column + context_cols / 2;
+            let columns: Vec<u32> = (col_start..=col_end).collect();
+
+            let mut context_rows_vec = Vec::new();
+
+            if context_rows > 0 {
+                let header_row = build_row_snapshot(sheet, 1, &columns, false, false);
+                context_rows_vec.push(header_row);
+            }
+
+            let row_start = row.saturating_sub(context_rows / 2).max(1);
+            let row_end = (row + context_rows / 2).min(sheet.get_highest_row());
+
+            for ctx_row in row_start..=row_end {
+                let ctx_row_snapshot = build_row_snapshot(sheet, ctx_row, &columns, true, false);
+                context_rows_vec.push(ctx_row_snapshot);
+            }
+
+            context_rows_vec
         } else {
             Vec::new()
         };
