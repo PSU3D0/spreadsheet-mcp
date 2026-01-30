@@ -263,6 +263,7 @@ impl FormulaGraph {
             .map(|(fingerprint, group)| FormulaGroup {
                 fingerprint: fingerprint.clone(),
                 addresses: group.addresses.clone(),
+                count: Some(group.addresses.len() as u32),
                 formula: group.canonical.clone(),
                 is_array: group.is_array,
                 is_shared: group.is_shared,

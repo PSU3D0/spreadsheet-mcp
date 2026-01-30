@@ -307,12 +307,17 @@ pub struct SheetFormulaMapResponse {
     pub sheet_name: String,
     pub groups: Vec<FormulaGroup>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FormulaGroup {
     pub fingerprint: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
     pub formula: String,
     pub is_array: bool,
     pub is_shared: bool,
@@ -474,6 +479,8 @@ pub struct VolatileScanResponse {
     pub workbook_short_id: String,
     pub items: Vec<VolatileScanEntry>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
