@@ -50,6 +50,10 @@ OUTPUT DEFAULTS (token-dense profile):
 - read_table defaults to format=csv (flat string). Use format=values for raw arrays, or format=json for typed cells.
 - range_values defaults to format=values. Use format=csv or format=json as needed.
 - sheet_page defaults to format=compact; set format=full for per-cell objects.
+- table_profile defaults to summary_only=true (no samples). Set summary_only=false to include sample rows.
+- sheet_statistics defaults to summary_only=true (no samples). Set summary_only=false to include samples.
+- sheet_styles defaults to summary_only=true (no descriptors/ranges/examples). Use include_descriptor/include_ranges/include_example_cells.
+- workbook_style_summary defaults to summary_only=true (no theme/conditional formats/descriptors). Use include_theme/include_conditional_formats/include_descriptor/include_example_cells.
 - Pagination fields (has_more/next_offset/next_start_row) only appear when truncated.
 
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.

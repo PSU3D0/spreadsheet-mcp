@@ -53,6 +53,10 @@ Default formats (token-dense profile):
 - `read_table` → `format=csv` (flat string). Use `format=values` for raw arrays or `format=json` for typed cells.
 - `range_values` → `format=values`. Use `format=csv` or `format=json` as needed.
 - `sheet_page` → `format=compact` with `include_formulas=false`/`include_styles=false`. Use `format=full` for per-cell objects.
+- `table_profile` → `summary_only=true` (no samples). Set `summary_only=false` to include sample rows.
+- `sheet_statistics` → `summary_only=true` (no samples). Set `summary_only=false` to include samples.
+- `sheet_styles` → `summary_only=true` (no descriptors/ranges/examples). Use `include_descriptor/include_ranges/include_example_cells`.
+- `workbook_style_summary` → `summary_only=true` (no theme/conditional formats/descriptors). Use `include_theme/include_conditional_formats/include_descriptor/include_example_cells`.
 
 Pagination fields (`has_more`, `next_offset`, `next_start_row`) only appear when a response is truncated by size caps.
 

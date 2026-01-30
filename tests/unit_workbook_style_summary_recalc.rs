@@ -47,6 +47,11 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -97,6 +102,11 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
