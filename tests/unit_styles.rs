@@ -56,7 +56,10 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
         sheet.get_style_mut("B1").get_font_mut().set_italic(true);
     });
 
-    let state = workspace.app_state();
+    let config = workspace.config_with(|config| {
+        config.max_payload_bytes = None;
+    });
+    let state = support::app_state_with_config(config);
     let list = list_workbooks(
         state.clone(),
         ListWorkbooksParams {
@@ -76,6 +79,10 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -126,7 +133,10 @@ async fn sheet_styles_runs_respect_scope() -> Result<()> {
         sheet.get_style_mut("C1").get_font_mut().set_italic(true);
     });
 
-    let state = workspace.app_state();
+    let config = workspace.config_with(|config| {
+        config.max_payload_bytes = None;
+    });
+    let state = support::app_state_with_config(config);
     let list = list_workbooks(
         state.clone(),
         ListWorkbooksParams {
@@ -148,6 +158,10 @@ async fn sheet_styles_runs_respect_scope() -> Result<()> {
             }),
             granularity: Some("runs".to_string()),
             max_items: Some(50),
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -179,7 +193,10 @@ async fn sheet_styles_cells_truncates() -> Result<()> {
         sheet.get_cell_mut("C1").set_value("c");
     });
 
-    let state = workspace.app_state();
+    let config = workspace.config_with(|config| {
+        config.max_payload_bytes = None;
+    });
+    let state = support::app_state_with_config(config);
     let list = list_workbooks(
         state.clone(),
         ListWorkbooksParams {
@@ -201,6 +218,10 @@ async fn sheet_styles_cells_truncates() -> Result<()> {
             }),
             granularity: Some("cells".to_string()),
             max_items: Some(2),
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -231,7 +252,10 @@ async fn sheet_styles_truncates_large_style_counts() -> Result<()> {
         }
     });
 
-    let state = workspace.app_state();
+    let config = workspace.config_with(|config| {
+        config.max_payload_bytes = None;
+    });
+    let state = support::app_state_with_config(config);
     let list = list_workbooks(
         state.clone(),
         ListWorkbooksParams {
@@ -251,6 +275,10 @@ async fn sheet_styles_truncates_large_style_counts() -> Result<()> {
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -297,6 +325,10 @@ async fn sheet_styles_truncates_ranges_for_disjoint_runs() -> Result<()> {
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -372,6 +404,10 @@ async fn sheet_styles_maps_gradient_pattern_underline_borders_rotation() -> Resu
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;
@@ -454,6 +490,10 @@ async fn sheet_styles_dedupes_identical_visible_formats() -> Result<()> {
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;

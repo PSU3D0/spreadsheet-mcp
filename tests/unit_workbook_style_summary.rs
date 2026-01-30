@@ -58,6 +58,11 @@ async fn workbook_style_summary_reports_theme_and_infers_default_style() -> Resu
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -136,6 +141,11 @@ async fn workbook_style_summary_truncates_large_style_counts() -> Result<()> {
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -170,6 +180,11 @@ async fn workbook_style_summary_handles_empty_workbook() -> Result<()> {
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -212,6 +227,11 @@ async fn workbook_style_summary_omits_empty_theme_colors() -> Result<()> {
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -253,6 +273,11 @@ async fn workbook_style_summary_sets_scan_truncated_when_limit_exceeded() -> Res
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: Some(1000),
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -315,6 +340,11 @@ async fn workbook_style_summary_aggregates_multiple_cf_rules_and_sheets() -> Res
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -380,6 +410,11 @@ async fn workbook_style_summary_truncates_conditional_formats() -> Result<()> {
             max_styles: None,
             max_conditional_formats: Some(1),
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;
@@ -422,6 +457,11 @@ async fn workbook_style_summary_aggregates_identical_styles_across_sheets() -> R
             max_styles: None,
             max_conditional_formats: None,
             max_cells_scan: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_example_cells: None,
+            include_theme: None,
+            include_conditional_formats: None,
         },
     )
     .await?;

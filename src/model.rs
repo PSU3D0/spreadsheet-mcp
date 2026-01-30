@@ -279,16 +279,21 @@ pub struct SheetStatisticsResponse {
     pub row_count: u32,
     pub column_count: u32,
     pub density: f32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub numeric_columns: Vec<ColumnSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub text_columns: Vec<ColumnSummary>,
     pub null_counts: BTreeMap<String, u32>,
     pub duplicate_warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ColumnSummary {
     pub header: Option<String>,
     pub column: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<CellValue>,
     pub min: Option<f64>,
     pub max: Option<f64>,
@@ -659,6 +664,7 @@ pub struct SheetStylesResponse {
     pub workbook_short_id: String,
     pub sheet_name: String,
     pub styles: Vec<StyleSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conditional_rules: Vec<String>,
     pub total_styles: u32,
     pub styles_truncated: bool,
@@ -669,8 +675,10 @@ pub struct StyleSummary {
     pub style_id: String,
     pub occurrences: u32,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub example_cells: Vec<String>,
     pub descriptor: Option<StyleDescriptor>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cell_ranges: Vec<String>,
     pub ranges_truncated: bool,
 }
@@ -679,15 +687,20 @@ pub struct StyleSummary {
 pub struct WorkbookStyleSummaryResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inferred_default_style_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inferred_default_font: Option<FontDescriptor>,
     pub styles: Vec<WorkbookStyleUsage>,
     pub total_styles: u32,
     pub styles_truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<ConditionalFormatSummary>,
     pub conditional_formats_truncated: bool,
     pub scan_truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 
@@ -696,6 +709,7 @@ pub struct WorkbookStyleUsage {
     pub style_id: String,
     pub occurrences: u32,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub example_cells: Vec<String>,
     pub descriptor: Option<StyleDescriptor>,
 }
@@ -841,7 +855,11 @@ pub struct TableProfileResponse {
     pub headers: Vec<String>,
     pub column_types: Vec<ColumnTypeSummary>,
     pub row_count: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<TableRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 

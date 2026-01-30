@@ -127,6 +127,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Data".to_string(),
             sample_rows: None,
+            summary_only: Some(false),
         },
     )
     .await?;
@@ -278,6 +279,10 @@ async fn naming_and_styles_suite(state: Arc<AppState>, workbook_id: WorkbookId) 
             scope: None,
             granularity: None,
             max_items: None,
+            summary_only: Some(false),
+            include_descriptor: None,
+            include_ranges: None,
+            include_example_cells: None,
         },
     )
     .await?;

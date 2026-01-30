@@ -488,6 +488,8 @@ pub struct TableProfileParams {
     pub sample_mode: Option<String>,
     #[serde(default)]
     pub sample_size: Option<u32>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1080,6 +1082,16 @@ fn table_rows_to_csv(headers: &[String], rows: &[TableRow], include_headers: boo
     csv
 }
 
+fn filter_table_row(row: &TableRow, headers: &[String]) -> TableRow {
+    let mut filtered = TableRow::new();
+    for header in headers {
+        if let Some(value) = row.get(header) {
+            filtered.insert(header.clone(), value.clone());
+        }
+    }
+    filtered
+}
+
 fn build_read_table_payload(
     format: TableOutputFormat,
     headers: &[String],
@@ -1355,6 +1367,8 @@ pub struct SheetStatisticsParams {
     pub sheet_name: String,
     #[serde(default)]
     pub sample_rows: Option<usize>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
 }
 
 pub async fn sheet_statistics(
@@ -1362,24 +1376,103 @@ pub async fn sheet_statistics(
     params: SheetStatisticsParams,
 ) -> Result<SheetStatisticsResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
     let sheet_metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let sample_rows = params.sample_rows.unwrap_or_else(default_stats_sample);
     let stats = workbook.with_sheet(&params.sheet_name, |sheet| {
         stats::compute_sheet_statistics(sheet, sample_rows)
     })?;
-    let response = SheetStatisticsResponse {
+    let mut numeric_columns = stats.numeric_columns;
+    let mut text_columns = stats.text_columns;
+
+    if summary_only {
+        for column in &mut numeric_columns {
+            column.samples.clear();
+        }
+        for column in &mut text_columns {
+            column.samples.clear();
+        }
+    }
+
+    let max_items = config.max_items();
+    let max_payload_bytes = config.max_payload_bytes();
+    let mut truncated = false;
+
+    if let Some(max_items) = max_items {
+        if numeric_columns.len() > max_items {
+            numeric_columns.truncate(max_items);
+            truncated = true;
+        }
+        if text_columns.len() > max_items {
+            text_columns.truncate(max_items);
+            truncated = true;
+        }
+    }
+
+    if let Some(max_bytes) = max_payload_bytes {
+        let response_size = |numeric: &Vec<ColumnSummary>, text: &Vec<ColumnSummary>| {
+            let response = SheetStatisticsResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                sheet_name: params.sheet_name.clone(),
+                row_count: sheet_metrics.metrics.row_count,
+                column_count: sheet_metrics.metrics.column_count,
+                density: stats.density,
+                numeric_columns: numeric.clone(),
+                text_columns: text.clone(),
+                null_counts: stats.null_counts.clone(),
+                duplicate_warnings: stats.duplicate_warnings.clone(),
+                truncated: None,
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        };
+
+        let mut current_size = response_size(&numeric_columns, &text_columns);
+        if current_size > max_bytes && !summary_only {
+            for column in &mut numeric_columns {
+                column.samples.clear();
+            }
+            for column in &mut text_columns {
+                column.samples.clear();
+            }
+            truncated = true;
+            current_size = response_size(&numeric_columns, &text_columns);
+        }
+
+        while current_size > max_bytes && (!text_columns.is_empty() || !numeric_columns.is_empty())
+        {
+            if !text_columns.is_empty() {
+                text_columns.pop();
+                truncated = true;
+            } else if !numeric_columns.is_empty() {
+                numeric_columns.pop();
+                truncated = true;
+            }
+            current_size = response_size(&numeric_columns, &text_columns);
+        }
+    }
+
+    let truncated = if truncated { Some(true) } else { None };
+
+    Ok(SheetStatisticsResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name,
         row_count: sheet_metrics.metrics.row_count,
         column_count: sheet_metrics.metrics.column_count,
         density: stats.density,
-        numeric_columns: stats.numeric_columns,
-        text_columns: stats.text_columns,
+        numeric_columns,
+        text_columns,
         null_counts: stats.null_counts,
         duplicate_warnings: stats.duplicate_warnings,
-    };
-    Ok(response)
+        truncated,
+    })
 }
 
 fn address_in_range(address: &str, range: &str) -> bool {
@@ -2177,6 +2270,16 @@ pub struct WorkbookStyleSummaryParams {
     pub max_styles: Option<u32>,
     pub max_conditional_formats: Option<u32>,
     pub max_cells_scan: Option<u32>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub include_descriptor: Option<bool>,
+    #[serde(default)]
+    pub include_example_cells: Option<bool>,
+    #[serde(default)]
+    pub include_theme: Option<bool>,
+    #[serde(default)]
+    pub include_conditional_formats: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -2203,6 +2306,16 @@ pub async fn workbook_style_summary(
     params: WorkbookStyleSummaryParams,
 ) -> Result<WorkbookStyleSummaryResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
+    let include_descriptor = params.include_descriptor.unwrap_or(!summary_only);
+    let include_example_cells = params.include_example_cells.unwrap_or(!summary_only);
+    let include_theme = params.include_theme.unwrap_or(!summary_only);
+    let include_conditional_formats = params.include_conditional_formats.unwrap_or(!summary_only);
+    let max_payload_bytes = config.max_payload_bytes();
     let sheet_names = workbook.sheet_names();
 
     const STYLE_EXAMPLE_LIMIT: usize = 5;
@@ -2214,10 +2327,18 @@ pub async fn workbook_style_summary(
         .max_styles
         .map(|v| v as usize)
         .unwrap_or(STYLE_LIMIT_DEFAULT);
+    let style_limit = config
+        .max_items()
+        .map(|limit| style_limit.min(limit))
+        .unwrap_or(style_limit);
     let cf_limit = params
         .max_conditional_formats
         .map(|v| v as usize)
         .unwrap_or(CF_LIMIT_DEFAULT);
+    let cf_limit = config
+        .max_items()
+        .map(|limit| cf_limit.min(limit))
+        .unwrap_or(cf_limit);
     let cell_scan_limit = params
         .max_cells_scan
         .map(|v| v as usize)
@@ -2270,8 +2391,16 @@ pub async fn workbook_style_summary(
                 style_id,
                 occurrences: entry.occurrences,
                 tags,
-                example_cells: entry.example_cells,
-                descriptor: Some(entry.descriptor),
+                example_cells: if include_example_cells {
+                    entry.example_cells
+                } else {
+                    Vec::new()
+                },
+                descriptor: if include_descriptor {
+                    Some(entry.descriptor)
+                } else {
+                    None
+                },
             }
         })
         .collect();
@@ -2287,7 +2416,7 @@ pub async fn workbook_style_summary(
         .first()
         .and_then(|s| s.descriptor.as_ref().and_then(|d| d.font.clone()));
 
-    let styles_truncated = if styles.len() > style_limit {
+    let mut styles_truncated = if styles.len() > style_limit {
         styles.truncate(style_limit);
         true
     } else {
@@ -2362,9 +2491,11 @@ pub async fn workbook_style_summary(
         });
     }
 
+    let theme = if include_theme { Some(theme) } else { None };
+
     let mut conditional_formats: Vec<ConditionalFormatSummary> = Vec::new();
     let mut conditional_formats_truncated = false;
-    {
+    if include_conditional_formats {
         use umya_spreadsheet::structs::EnumTrait;
         for sheet_name in &sheet_names {
             if conditional_formats_truncated {
@@ -2405,10 +2536,65 @@ pub async fn workbook_style_summary(
             .to_string(),
     );
 
+    if let Some(max_bytes) = max_payload_bytes {
+        let style_limit = cap_rows_by_payload_bytes(styles.len(), Some(max_bytes), |count| {
+            let response = WorkbookStyleSummaryResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                theme: theme.clone(),
+                inferred_default_style_id: inferred_default_style_id.clone(),
+                inferred_default_font: inferred_default_font.clone(),
+                styles: styles[..count].to_vec(),
+                total_styles,
+                styles_truncated: false,
+                conditional_formats: conditional_formats.clone(),
+                conditional_formats_truncated,
+                scan_truncated,
+                notes: notes.clone(),
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+
+        if style_limit < styles.len() {
+            styles.truncate(style_limit);
+            styles_truncated = true;
+        }
+
+        if !conditional_formats.is_empty() {
+            let cf_limit =
+                cap_rows_by_payload_bytes(conditional_formats.len(), Some(max_bytes), |count| {
+                    let response = WorkbookStyleSummaryResponse {
+                        workbook_id: workbook.id.clone(),
+                        workbook_short_id: workbook.short_id.clone(),
+                        theme: theme.clone(),
+                        inferred_default_style_id: inferred_default_style_id.clone(),
+                        inferred_default_font: inferred_default_font.clone(),
+                        styles: styles.clone(),
+                        total_styles,
+                        styles_truncated,
+                        conditional_formats: conditional_formats[..count].to_vec(),
+                        conditional_formats_truncated: false,
+                        scan_truncated,
+                        notes: notes.clone(),
+                    };
+                    serde_json::to_vec(&response)
+                        .map(|payload| payload.len())
+                        .unwrap_or(usize::MAX)
+                });
+
+            if cf_limit < conditional_formats.len() {
+                conditional_formats.truncate(cf_limit);
+                conditional_formats_truncated = true;
+            }
+        }
+    }
+
     Ok(WorkbookStyleSummaryResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
-        theme: Some(theme),
+        theme,
         inferred_default_style_id,
         inferred_default_font,
         styles,
@@ -2432,6 +2618,14 @@ pub struct SheetStylesParams {
     pub granularity: Option<String>,
     #[serde(default)]
     pub max_items: Option<usize>,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub include_descriptor: Option<bool>,
+    #[serde(default)]
+    pub include_ranges: Option<bool>,
+    #[serde(default)]
+    pub include_example_cells: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2467,10 +2661,24 @@ pub async fn sheet_styles(
     params: SheetStylesParams,
 ) -> Result<SheetStylesResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
+    let include_descriptor = params.include_descriptor.unwrap_or(!summary_only);
+    let include_ranges = params.include_ranges.unwrap_or(!summary_only);
+    let include_example_cells = params.include_example_cells.unwrap_or(!summary_only);
     const STYLE_EXAMPLE_LIMIT: usize = 5;
     const STYLE_RANGE_LIMIT: usize = 50;
     const STYLE_LIMIT: usize = 200;
     const MAX_MAX_ITEMS: usize = 5000;
+
+    let max_payload_bytes = config.max_payload_bytes();
+    let style_limit = config
+        .max_items()
+        .map(|limit| STYLE_LIMIT.min(limit))
+        .unwrap_or(STYLE_LIMIT);
 
     let metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let full_bounds = (
@@ -2510,7 +2718,7 @@ pub async fn sheet_styles(
         .unwrap_or(STYLE_RANGE_LIMIT)
         .clamp(1, MAX_MAX_ITEMS);
 
-    let (styles, total_styles, styles_truncated) =
+    let (mut styles, total_styles, mut styles_truncated) =
         workbook.with_sheet(&params.sheet_name, |sheet| {
             let mut acc: HashMap<String, StyleAccum> = HashMap::new();
 
@@ -2549,22 +2757,34 @@ pub async fn sheet_styles(
                     entry.positions.sort_unstable();
                     entry.positions.dedup();
 
-                    let (cell_ranges, ranges_truncated) = if granularity == "cells" {
-                        let mut out = Vec::new();
-                        for (row, col) in entry.positions.iter().take(max_items) {
-                            out.push(crate::utils::cell_address(*col, *row));
+                    let (cell_ranges, ranges_truncated) = if include_ranges {
+                        if granularity == "cells" {
+                            let mut out = Vec::new();
+                            for (row, col) in entry.positions.iter().take(max_items) {
+                                out.push(crate::utils::cell_address(*col, *row));
+                            }
+                            (out, entry.positions.len() > max_items)
+                        } else {
+                            crate::styles::compress_positions_to_ranges(&entry.positions, max_items)
                         }
-                        (out, entry.positions.len() > max_items)
                     } else {
-                        crate::styles::compress_positions_to_ranges(&entry.positions, max_items)
+                        (Vec::new(), false)
                     };
 
                     StyleSummary {
                         style_id,
                         occurrences: entry.occurrences,
                         tags: entry.tags.into_iter().collect(),
-                        example_cells: entry.example_cells,
-                        descriptor: Some(entry.descriptor),
+                        example_cells: if include_example_cells {
+                            entry.example_cells
+                        } else {
+                            Vec::new()
+                        },
+                        descriptor: if include_descriptor {
+                            Some(entry.descriptor)
+                        } else {
+                            None
+                        },
                         cell_ranges,
                         ranges_truncated,
                     }
@@ -2578,8 +2798,8 @@ pub async fn sheet_styles(
             });
 
             let total = summaries.len() as u32;
-            let truncated = if summaries.len() > STYLE_LIMIT {
-                summaries.truncate(STYLE_LIMIT);
+            let truncated = if summaries.len() > style_limit {
+                summaries.truncate(style_limit);
                 true
             } else {
                 false
@@ -2587,6 +2807,27 @@ pub async fn sheet_styles(
 
             Ok::<_, anyhow::Error>((summaries, total, truncated))
         })??;
+
+    if let Some(max_bytes) = max_payload_bytes {
+        let row_limit = cap_rows_by_payload_bytes(styles.len(), Some(max_bytes), |count| {
+            let response = SheetStylesResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                sheet_name: params.sheet_name.clone(),
+                styles: styles[..count].to_vec(),
+                conditional_rules: Vec::new(),
+                total_styles,
+                styles_truncated: false,
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+        if row_limit < styles.len() {
+            styles.truncate(row_limit);
+            styles_truncated = true;
+        }
+    }
 
     Ok(SheetStylesResponse {
         workbook_id: workbook.id.clone(),
@@ -2852,6 +3093,11 @@ pub async fn table_profile(
     params: TableProfileParams,
 ) -> Result<TableProfileResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
     let resolved = resolve_table_target(
         &workbook,
         &ReadTableParams {
@@ -2879,21 +3125,129 @@ pub async fn table_profile(
         .clone()
         .unwrap_or_else(|| "distributed".to_string());
 
-    let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
-        extract_table_rows(
-            sheet,
-            &resolved,
-            None,
-            None,
-            None,
-            None,
-            sample_size,
-            0,
-            &sample_mode,
-        )
-    })??;
+    let (mut headers, rows, total_rows) =
+        workbook.with_sheet(&resolved.sheet_name, |sheet| {
+            extract_table_rows(
+                sheet,
+                &resolved,
+                None,
+                None,
+                None,
+                None,
+                sample_size,
+                0,
+                &sample_mode,
+            )
+        })??;
 
-    let column_types = summarize_columns(&headers, &rows);
+    let max_items = config.max_items();
+    let max_payload_bytes = config.max_payload_bytes();
+    let mut truncated = false;
+
+    if let Some(max_items) = max_items {
+        if headers.len() > max_items {
+            headers.truncate(max_items);
+            truncated = true;
+        }
+    }
+
+    let mut column_types = summarize_columns(&headers, &rows);
+
+    let mut samples: Vec<TableRow> = if summary_only {
+        Vec::new()
+    } else {
+        rows.into_iter()
+            .map(|row| filter_table_row(&row, &headers))
+            .collect()
+    };
+
+    if !summary_only {
+        if let Some(max_items) = max_items {
+            if samples.len() > max_items {
+                samples.truncate(max_items);
+                truncated = true;
+            }
+        }
+
+        if let Some(max_bytes) = max_payload_bytes {
+            let sample_limit = cap_rows_by_payload_bytes(samples.len(), Some(max_bytes), |count| {
+                let response = TableProfileResponse {
+                    workbook_id: workbook.id.clone(),
+                    workbook_short_id: workbook.short_id.clone(),
+                    sheet_name: resolved.sheet_name.clone(),
+                    table_name: resolved.table_name.clone(),
+                    headers: headers.clone(),
+                    column_types: column_types.clone(),
+                    row_count: total_rows,
+                    samples: samples[..count].to_vec(),
+                    truncated: None,
+                    notes: Vec::new(),
+                };
+                serde_json::to_vec(&response)
+                    .map(|payload| payload.len())
+                    .unwrap_or(usize::MAX)
+            });
+            if sample_limit < samples.len() {
+                samples.truncate(sample_limit);
+                truncated = true;
+            }
+
+            let response = TableProfileResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                sheet_name: resolved.sheet_name.clone(),
+                table_name: resolved.table_name.clone(),
+                headers: headers.clone(),
+                column_types: column_types.clone(),
+                row_count: total_rows,
+                samples: samples.clone(),
+                truncated: None,
+                notes: Vec::new(),
+            };
+            if serde_json::to_vec(&response)
+                .map(|payload| payload.len() > max_bytes)
+                .unwrap_or(false)
+                && !headers.is_empty()
+            {
+                let header_limit =
+                    cap_rows_by_payload_bytes(headers.len(), Some(max_bytes), |count| {
+                        let headers_slice = headers[..count].to_vec();
+                        let column_slice = column_types[..count.min(column_types.len())].to_vec();
+                        let samples_slice = samples
+                            .iter()
+                            .map(|row| filter_table_row(row, &headers_slice))
+                            .collect::<Vec<_>>();
+                        let response = TableProfileResponse {
+                            workbook_id: workbook.id.clone(),
+                            workbook_short_id: workbook.short_id.clone(),
+                            sheet_name: resolved.sheet_name.clone(),
+                            table_name: resolved.table_name.clone(),
+                            headers: headers_slice,
+                            column_types: column_slice,
+                            row_count: total_rows,
+                            samples: samples_slice,
+                            truncated: None,
+                            notes: Vec::new(),
+                        };
+                        serde_json::to_vec(&response)
+                            .map(|payload| payload.len())
+                            .unwrap_or(usize::MAX)
+                    });
+
+                if header_limit < headers.len() {
+                    headers.truncate(header_limit);
+                    column_types.truncate(header_limit.min(column_types.len()));
+                    samples = samples
+                        .into_iter()
+                        .map(|row| filter_table_row(&row, &headers))
+                        .collect();
+                    truncated = true;
+                }
+            }
+        }
+    }
+
+    let truncated = if truncated { Some(true) } else { None };
 
     Ok(TableProfileResponse {
         workbook_id: workbook.id.clone(),
@@ -2903,7 +3257,8 @@ pub async fn table_profile(
         headers,
         column_types,
         row_count: total_rows,
-        samples: rows,
+        samples,
+        truncated,
         notes: Vec::new(),
     })
 }
