@@ -1,4 +1,5 @@
 use anyhow::Result;
+use spreadsheet_mcp::model::TableOutputFormat;
 use spreadsheet_mcp::tools::{
     FindValueParams, ListWorkbooksParams, ReadTableParams, SheetOverviewParams, find_value,
     list_workbooks, read_table, sheet_overview,
@@ -57,6 +58,7 @@ async fn sheet_overview_reports_regions_and_tools_scope_to_region() -> Result<()
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: Some("Sheet1".to_string()),
             region_id: Some(left.id),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )

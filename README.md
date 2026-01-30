@@ -41,6 +41,21 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 | `get_manifest_stub` | Generate manifest scaffold |
 | `close_workbook` | Evict workbook from cache |
 
+## Output Formats and Defaults
+
+The server defaults to a token-dense output profile. You can switch to legacy verbose output with:
+
+- Env: `SPREADSHEET_MCP_OUTPUT_PROFILE=verbose`
+- CLI: `--output-profile verbose`
+
+Default formats (token-dense profile):
+
+- `read_table` → `format=csv` (flat string). Use `format=values` for raw arrays or `format=json` for typed cells.
+- `range_values` → `format=values`. Use `format=csv` or `format=json` as needed.
+- `sheet_page` → `format=compact` with `include_formulas=false`/`include_styles=false`. Use `format=full` for per-cell objects.
+
+Pagination fields (`has_more`, `next_offset`, `next_start_row`) only appear when a response is truncated by size caps.
+
 ## VBA Support (Read-Only)
 
 VBA tools are **disabled by default**. When enabled, the server can extract and parse the embedded VBA project from `.xlsm` files and return module source code.

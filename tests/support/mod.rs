@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use spreadsheet_mcp::state::AppState;
-use spreadsheet_mcp::{ServerConfig, SpreadsheetServer, TransportKind};
+use spreadsheet_mcp::{OutputProfile, ServerConfig, SpreadsheetServer, TransportKind};
 use tempfile::{TempDir, tempdir};
 use umya_spreadsheet::{self, Spreadsheet};
 
@@ -94,6 +94,10 @@ impl TestWorkspace {
             max_concurrent_recalcs: 2,
             tool_timeout_ms: Some(30_000),
             max_response_bytes: Some(1_000_000),
+            output_profile: OutputProfile::TokenDense,
+            max_payload_bytes: Some(65_536),
+            max_cells: Some(10_000),
+            max_items: Some(500),
             allow_overwrite: false,
         }
     }

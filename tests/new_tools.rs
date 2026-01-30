@@ -1,5 +1,5 @@
 use anyhow::Result;
-use spreadsheet_mcp::model::SheetPageFormat;
+use spreadsheet_mcp::model::{SheetPageFormat, TableOutputFormat};
 use spreadsheet_mcp::tools::{
     FindValueParams, ListSheetsParams, RangeValuesParams, ReadTableParams, SheetOverviewParams,
     SheetPageParams, TableProfileParams, find_value, list_workbooks, range_values, read_table,
@@ -110,6 +110,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             sheet_name: Some("Data".into()),
             header_row: Some(1),
             limit: Some(5),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -139,6 +140,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             sheet_name: "Inputs".into(),
             ranges: vec!["B2".into(), "B3:C3".into()],
             include_headers: Some(true),
+            format: None,
+            page_size: None,
         },
     )
     .await?;

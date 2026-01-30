@@ -4,6 +4,7 @@ pub mod fork;
 pub mod vba;
 
 use crate::analysis::{formula::FormulaGraph, stats};
+use crate::config::OutputProfile;
 use crate::model::*;
 use crate::state::AppState;
 use crate::utils::column_number_to_name;
@@ -458,6 +459,12 @@ pub struct ReadTableParams {
     pub limit: Option<u32>,
     #[serde(default)]
     pub offset: Option<u32>,
+    #[serde(default)]
+    pub format: Option<TableOutputFormat>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
+    #[serde(default)]
+    pub include_types: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
@@ -491,6 +498,10 @@ pub struct RangeValuesParams {
     pub ranges: Vec<String>,
     #[serde(default)]
     pub include_headers: Option<bool>,
+    #[serde(default)]
+    pub format: Option<TableOutputFormat>,
+    #[serde(default)]
+    pub page_size: Option<u32>,
 }
 
 pub async fn sheet_page(
@@ -503,17 +514,32 @@ pub async fn sheet_page(
 
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
-    let format = params.format.unwrap_or_default();
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let format = params.format.unwrap_or_else(|| match output_profile {
+        OutputProfile::TokenDense => SheetPageFormat::Compact,
+        OutputProfile::Verbose => SheetPageFormat::Full,
+    });
 
     let start_row = params.start_row.max(1);
     let page_size = params.page_size.min(500);
-    let include_formulas = params.include_formulas;
-    let include_styles = params.include_styles;
+    let include_formulas =
+        if params.format.is_none() && matches!(output_profile, OutputProfile::TokenDense) {
+            false
+        } else {
+            params.include_formulas
+        };
+    let include_styles =
+        if params.format.is_none() && matches!(output_profile, OutputProfile::TokenDense) {
+            false
+        } else {
+            params.include_styles
+        };
     let columns = params.columns.clone();
     let columns_by_header = params.columns_by_header.clone();
     let include_header = params.include_header;
 
-    let page = workbook.with_sheet(&params.sheet_name, |sheet| {
+    let mut page = workbook.with_sheet(&params.sheet_name, |sheet| {
         build_page(
             sheet,
             start_row,
@@ -526,50 +552,52 @@ pub async fn sheet_page(
         )
     })?;
 
-    let has_more = page.end_row < metrics.metrics.row_count;
-    let next_start_row = if has_more {
-        Some(page.end_row + 1)
-    } else {
-        None
-    };
+    let max_cells = config.max_cells();
+    let max_payload_bytes = config.max_payload_bytes();
+    let cells_per_row = page.rows.first().map(|row| row.cells.len()).unwrap_or(0);
+    let mut row_limit = cap_rows_by_cells(page.rows.len(), cells_per_row, max_cells);
 
-    let compact_payload = if matches!(format, SheetPageFormat::Compact) {
-        Some(build_compact_payload(
-            &page.header,
-            &page.rows,
-            include_header,
-        ))
-    } else {
-        None
-    };
+    if row_limit > 0 {
+        row_limit = cap_rows_by_payload_bytes(row_limit, max_payload_bytes, |count| {
+            let response = build_sheet_page_response(
+                &workbook,
+                &params.sheet_name,
+                format,
+                include_header,
+                &page.header,
+                &page.rows[..count],
+                None,
+                None,
+            );
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+    }
 
-    let values_only_payload = if matches!(format, SheetPageFormat::ValuesOnly) {
-        Some(build_values_only_payload(
-            &page.header,
-            &page.rows,
-            include_header,
-        ))
-    } else {
-        None
-    };
+    if row_limit < page.rows.len() {
+        page.rows.truncate(row_limit);
+    }
 
-    let response = SheetPageResponse {
-        workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
-        sheet_name: params.sheet_name,
-        rows: if matches!(format, SheetPageFormat::Full) {
-            page.rows
-        } else {
-            Vec::new()
-        },
+    let last_row_index = page
+        .rows
+        .last()
+        .map(|row| row.row_index)
+        .unwrap_or(start_row.saturating_sub(1));
+    let has_more = last_row_index < metrics.metrics.row_count;
+    let has_more = if has_more { Some(true) } else { None };
+    let next_start_row = has_more.map(|_| last_row_index + 1);
+
+    Ok(build_sheet_page_response(
+        &workbook,
+        &params.sheet_name,
+        format,
+        include_header,
+        &page.header,
+        &page.rows,
         has_more,
         next_start_row,
-        header_row: if include_header { page.header } else { None },
-        compact: compact_payload,
-        values_only: values_only_payload,
-        format,
-    };
-    Ok(response)
+    ))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -745,7 +773,6 @@ pub async fn named_ranges(
 struct PageBuildResult {
     rows: Vec<RowSnapshot>,
     header: Option<RowSnapshot>,
-    end_row: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -787,11 +814,7 @@ fn build_page(
         ));
     }
 
-    PageBuildResult {
-        rows,
-        header,
-        end_row,
-    }
+    PageBuildResult { rows, header }
 }
 
 fn build_row_snapshot(
@@ -942,6 +965,263 @@ fn cell_value_to_string_lower(value: CellValue) -> String {
     }
 }
 
+fn cell_value_to_plain_string(value: &CellValue) -> String {
+    match value {
+        CellValue::Text(s) => s.clone(),
+        CellValue::Number(n) => n.to_string(),
+        CellValue::Bool(b) => b.to_string(),
+        CellValue::Error(e) => e.clone(),
+        CellValue::Date(d) => d.clone(),
+    }
+}
+
+fn cell_value_to_kind(value: &CellValue) -> CellValueKind {
+    match value {
+        CellValue::Text(_) => CellValueKind::Text,
+        CellValue::Number(_) => CellValueKind::Number,
+        CellValue::Bool(_) => CellValueKind::Bool,
+        CellValue::Error(_) => CellValueKind::Error,
+        CellValue::Date(_) => CellValueKind::Date,
+    }
+}
+
+fn cell_value_to_primitive(value: &CellValue) -> CellValuePrimitive {
+    match value {
+        CellValue::Text(s) => CellValuePrimitive::Text(s.clone()),
+        CellValue::Number(n) => CellValuePrimitive::Number(*n),
+        CellValue::Bool(b) => CellValuePrimitive::Bool(*b),
+        CellValue::Error(e) => CellValuePrimitive::Text(e.clone()),
+        CellValue::Date(d) => CellValuePrimitive::Text(d.clone()),
+    }
+}
+
+fn csv_escape_field(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        let mut escaped = String::with_capacity(field.len() + 2);
+        escaped.push('"');
+        for ch in field.chars() {
+            if ch == '"' {
+                escaped.push('"');
+            }
+            escaped.push(ch);
+        }
+        escaped.push('"');
+        escaped
+    } else {
+        field.to_string()
+    }
+}
+
+fn push_csv_row<I>(buffer: &mut String, fields: I)
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut first = true;
+    for field in fields {
+        if !first {
+            buffer.push(',');
+        }
+        first = false;
+        let escaped = csv_escape_field(&field);
+        buffer.push_str(&escaped);
+    }
+    buffer.push('\n');
+}
+
+fn table_rows_to_values(
+    headers: &[String],
+    rows: &[TableRow],
+) -> Vec<Vec<Option<CellValuePrimitive>>> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut vals = Vec::with_capacity(headers.len());
+        for header in headers {
+            let value = row
+                .get(header)
+                .and_then(|cell| cell.as_ref())
+                .map(cell_value_to_primitive);
+            vals.push(value);
+        }
+        out.push(vals);
+    }
+    out
+}
+
+fn table_rows_to_types(headers: &[String], rows: &[TableRow]) -> Vec<Vec<Option<CellValueKind>>> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut kinds = Vec::with_capacity(headers.len());
+        for header in headers {
+            let kind = row
+                .get(header)
+                .and_then(|cell| cell.as_ref())
+                .map(cell_value_to_kind);
+            kinds.push(kind);
+        }
+        out.push(kinds);
+    }
+    out
+}
+
+fn table_rows_to_csv(headers: &[String], rows: &[TableRow], include_headers: bool) -> String {
+    let mut csv = String::new();
+    if include_headers {
+        push_csv_row(&mut csv, headers.iter().cloned());
+    }
+    for row in rows {
+        let values = headers.iter().map(|header| {
+            row.get(header)
+                .and_then(|cell| cell.as_ref())
+                .map(cell_value_to_plain_string)
+                .unwrap_or_default()
+        });
+        push_csv_row(&mut csv, values);
+    }
+    csv
+}
+
+fn build_read_table_payload(
+    format: TableOutputFormat,
+    headers: &[String],
+    rows: &[TableRow],
+    include_headers: bool,
+    include_types: bool,
+) -> (
+    Vec<String>,
+    Vec<TableRow>,
+    Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    Option<Vec<Vec<Option<CellValueKind>>>>,
+    Option<String>,
+) {
+    let headers_out = if include_headers {
+        headers.to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let types_out = if include_types {
+        Some(table_rows_to_types(headers, rows))
+    } else {
+        None
+    };
+
+    match format {
+        TableOutputFormat::Json => (headers_out, rows.to_vec(), None, types_out, None),
+        TableOutputFormat::Values => (
+            headers_out,
+            Vec::new(),
+            Some(table_rows_to_values(headers, rows)),
+            types_out,
+            None,
+        ),
+        TableOutputFormat::Csv => (
+            Vec::new(),
+            Vec::new(),
+            None,
+            types_out,
+            Some(table_rows_to_csv(headers, rows, include_headers)),
+        ),
+    }
+}
+
+fn cell_matrix_to_values(rows: &[Vec<Option<CellValue>>]) -> Vec<Vec<Option<CellValuePrimitive>>> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut vals = Vec::with_capacity(row.len());
+        for cell in row {
+            vals.push(cell.as_ref().map(cell_value_to_primitive));
+        }
+        out.push(vals);
+    }
+    out
+}
+
+fn cell_matrix_to_csv(rows: &[Vec<Option<CellValue>>]) -> String {
+    let mut csv = String::new();
+    for row in rows {
+        let values = row.iter().map(|cell| {
+            cell.as_ref()
+                .map(cell_value_to_plain_string)
+                .unwrap_or_default()
+        });
+        push_csv_row(&mut csv, values);
+    }
+    csv
+}
+
+fn build_range_values_entry(
+    format: TableOutputFormat,
+    range: &str,
+    rows: &[Vec<Option<CellValue>>],
+    truncated: Option<bool>,
+    next_start_row: Option<u32>,
+) -> RangeValuesEntry {
+    match format {
+        TableOutputFormat::Json => RangeValuesEntry {
+            range: range.to_string(),
+            rows: Some(rows.to_vec()),
+            values: None,
+            csv: None,
+            truncated,
+            next_start_row,
+        },
+        TableOutputFormat::Values => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            values: Some(cell_matrix_to_values(rows)),
+            csv: None,
+            truncated,
+            next_start_row,
+        },
+        TableOutputFormat::Csv => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            values: None,
+            csv: Some(cell_matrix_to_csv(rows)),
+            truncated,
+            next_start_row,
+        },
+    }
+}
+
+fn cap_rows_by_cells(row_count: usize, cells_per_row: usize, max_cells: Option<usize>) -> usize {
+    let Some(max_cells) = max_cells else {
+        return row_count;
+    };
+    if cells_per_row == 0 {
+        return row_count;
+    }
+    let allowed = max_cells / cells_per_row;
+    row_count.min(allowed)
+}
+
+fn cap_rows_by_payload_bytes<F>(
+    row_count: usize,
+    max_bytes: Option<usize>,
+    mut size_for_rows: F,
+) -> usize
+where
+    F: FnMut(usize) -> usize,
+{
+    let Some(max_bytes) = max_bytes else {
+        return row_count;
+    };
+    if row_count == 0 {
+        return 0;
+    }
+    let mut low = 0usize;
+    let mut high = row_count;
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if size_for_rows(mid) <= max_bytes {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
 fn build_compact_payload(
     header: &Option<RowSnapshot>,
     rows: &[RowSnapshot],
@@ -987,6 +1267,54 @@ fn build_values_only_payload(
     }
 
     SheetPageValues { rows: data }
+}
+
+fn build_sheet_page_response(
+    workbook: &WorkbookContext,
+    sheet_name: &str,
+    format: SheetPageFormat,
+    include_header: bool,
+    header: &Option<RowSnapshot>,
+    rows: &[RowSnapshot],
+    has_more: Option<bool>,
+    next_start_row: Option<u32>,
+) -> SheetPageResponse {
+    let compact_payload = if matches!(format, SheetPageFormat::Compact) {
+        Some(build_compact_payload(header, rows, include_header))
+    } else {
+        None
+    };
+
+    let values_only_payload = if matches!(format, SheetPageFormat::ValuesOnly) {
+        Some(build_values_only_payload(header, rows, include_header))
+    } else {
+        None
+    };
+
+    let rows_payload = if matches!(format, SheetPageFormat::Full) {
+        rows.to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let header_row = if include_header && matches!(format, SheetPageFormat::Full) {
+        header.clone()
+    } else {
+        None
+    };
+
+    SheetPageResponse {
+        workbook_id: workbook.id.clone(),
+        workbook_short_id: workbook.short_id.clone(),
+        sheet_name: sheet_name.to_string(),
+        rows: rows_payload,
+        has_more,
+        next_start_row,
+        header_row,
+        compact: compact_payload,
+        values_only: values_only_payload,
+        format,
+    }
 }
 
 fn derive_headers(header: &Option<RowSnapshot>, rows: &[RowSnapshot]) -> Vec<String> {
@@ -2276,15 +2604,38 @@ pub async fn range_values(
     params: RangeValuesParams,
 ) -> Result<RangeValuesResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let format = params.format.unwrap_or_else(|| match output_profile {
+        OutputProfile::TokenDense => TableOutputFormat::Values,
+        OutputProfile::Verbose => TableOutputFormat::Json,
+    });
     let include_headers = params.include_headers.unwrap_or(false);
+    if let Some(page_size) = params.page_size
+        && page_size == 0
+    {
+        return Err(anyhow!("page_size must be greater than zero"));
+    }
+    let max_cells = config.max_cells();
+    let max_payload_bytes = config.max_payload_bytes();
     let values = workbook.with_sheet(&params.sheet_name, |sheet| {
         params
             .ranges
             .iter()
             .filter_map(|range| {
                 parse_range(range).map(|((start_col, start_row), (end_col, end_row))| {
+                    let total_rows = (end_row - start_row + 1) as usize;
+                    let total_cols = (end_col - start_col + 1) as usize;
+                    let mut row_limit = total_rows;
+                    if let Some(page_size) = params.page_size {
+                        row_limit = row_limit.min(page_size as usize);
+                    }
+
                     let mut rows = Vec::new();
                     for r in start_row..=end_row {
+                        if rows.len() >= row_limit {
+                            break;
+                        }
                         let mut row_vals = Vec::new();
                         for c in start_col..=end_col {
                             if include_headers && r == start_row && start_row == 1 {
@@ -2295,10 +2646,37 @@ pub async fn range_values(
                         }
                         rows.push(row_vals);
                     }
-                    RangeValuesEntry {
-                        range: range.clone(),
-                        rows,
+
+                    let mut row_limit = cap_rows_by_cells(rows.len(), total_cols, max_cells);
+                    if row_limit > 0 {
+                        row_limit =
+                            cap_rows_by_payload_bytes(row_limit, max_payload_bytes, |count| {
+                                let entry = build_range_values_entry(
+                                    format,
+                                    range,
+                                    &rows[..count],
+                                    None,
+                                    None,
+                                );
+                                serde_json::to_vec(&entry)
+                                    .map(|payload| payload.len())
+                                    .unwrap_or(usize::MAX)
+                            });
                     }
+
+                    if row_limit < rows.len() {
+                        rows.truncate(row_limit);
+                    }
+
+                    let truncated = rows.len() < total_rows;
+                    let truncated_flag = if truncated { Some(true) } else { None };
+                    let next_start_row = if truncated {
+                        Some(start_row + rows.len() as u32)
+                    } else {
+                        None
+                    };
+
+                    build_range_values_entry(format, range, &rows, truncated_flag, next_start_row)
                 })
             })
             .collect()
@@ -2384,6 +2762,14 @@ pub async fn read_table(
     params: ReadTableParams,
 ) -> Result<ReadTableResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let format = params.format.unwrap_or_else(|| match output_profile {
+        OutputProfile::TokenDense => TableOutputFormat::Csv,
+        OutputProfile::Verbose => TableOutputFormat::Json,
+    });
+    let include_headers = params.include_headers.unwrap_or(true);
+    let include_types = params.include_types.unwrap_or(false);
     let resolved = resolve_table_target(&workbook, &params)?;
     let limit = params.limit.unwrap_or(100) as usize;
     let offset = params.offset.unwrap_or(0) as usize;
@@ -2406,17 +2792,58 @@ pub async fn read_table(
         )
     })??;
 
+    let max_cells = config.max_cells();
+    let max_payload_bytes = config.max_payload_bytes();
+    let mut row_limit = cap_rows_by_cells(rows.len(), headers.len().max(1), max_cells);
+    if row_limit > 0 {
+        row_limit = cap_rows_by_payload_bytes(row_limit, max_payload_bytes, |count| {
+            let (headers_out, rows_out, values_out, types_out, csv_out) = build_read_table_payload(
+                format,
+                &headers,
+                &rows[..count],
+                include_headers,
+                include_types,
+            );
+            let response = ReadTableResponse {
+                workbook_id: workbook.id.clone(),
+                workbook_short_id: workbook.short_id.clone(),
+                sheet_name: resolved.sheet_name.clone(),
+                table_name: resolved.table_name.clone(),
+                headers: headers_out,
+                rows: rows_out,
+                values: values_out,
+                types: types_out,
+                csv: csv_out,
+                total_rows,
+                has_more: None,
+                next_offset: None,
+            };
+            serde_json::to_vec(&response)
+                .map(|payload| payload.len())
+                .unwrap_or(usize::MAX)
+        });
+    }
+
+    let rows = rows.into_iter().take(row_limit).collect::<Vec<_>>();
     let has_more = offset + rows.len() < total_rows as usize;
+    let has_more = if has_more { Some(true) } else { None };
+    let next_offset = has_more.map(|_| (offset + rows.len()) as u32);
+    let (headers_out, rows_out, values_out, types_out, csv_out) =
+        build_read_table_payload(format, &headers, &rows, include_headers, include_types);
 
     Ok(ReadTableResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: resolved.sheet_name,
         table_name: resolved.table_name,
-        headers,
-        rows,
+        headers: headers_out,
+        rows: rows_out,
+        values: values_out,
+        types: types_out,
+        csv: csv_out,
         total_rows,
         has_more,
+        next_offset,
     })
 }
 
@@ -2440,6 +2867,9 @@ pub async fn table_profile(
             sample_mode: params.sample_mode.clone(),
             limit: params.sample_size,
             offset: Some(0),
+            format: Some(TableOutputFormat::Json),
+            include_headers: None,
+            include_types: None,
         },
     )?;
 

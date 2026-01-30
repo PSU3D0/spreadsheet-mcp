@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::json;
-use spreadsheet_mcp::model::CellValue;
+use spreadsheet_mcp::model::{CellValue, TableOutputFormat};
 use spreadsheet_mcp::tools::TableFilter;
 use spreadsheet_mcp::tools::{ListWorkbooksParams, ReadTableParams, list_workbooks, read_table};
 
@@ -54,6 +54,7 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
             sheet_name: Some("Sheet1".into()),
             region_id: Some(region_id),
             limit: Some(10),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -70,6 +71,7 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
             range: Some("A5:B7".into()),
             header_row: Some(5),
             limit: Some(10),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -121,6 +123,7 @@ async fn read_table_handles_multi_row_headers_and_filters() -> Result<()> {
             }]),
             sample_mode: Some("distributed".into()),
             limit: Some(2),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -181,6 +184,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
                 value: json!([1, "3"]),
             }]),
             limit: Some(5),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -200,6 +204,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
                 value: json!("alpha"),
             }]),
             limit: Some(5),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -248,6 +253,7 @@ async fn read_table_large_range_stops_after_limit_and_counts() -> Result<()> {
             limit: Some(5),
             offset: Some(1),
             sample_mode: Some("first".into()),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -299,6 +305,7 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
             limit: Some(10),
             offset: Some(5),
             sample_mode: Some("first".into()),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -307,7 +314,7 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
     assert_eq!(table.headers, vec!["Idx", "Value"]);
     assert_eq!(table.rows.len(), 10);
     assert!(table.total_rows >= 9990);
-    assert!(table.has_more);
+    assert_eq!(table.has_more, Some(true));
 
     Ok(())
 }
@@ -347,6 +354,7 @@ async fn read_table_handles_empty_header_cells_in_multi_row() -> Result<()> {
             sheet_name: Some("Sheet1".into()),
             header_rows: Some(2),
             limit: Some(10),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -395,6 +403,7 @@ async fn read_table_filter_contains_case_insensitive() -> Result<()> {
                 value: json!("BREAD"),
             }]),
             limit: Some(10),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )
@@ -443,6 +452,7 @@ async fn read_table_resolves_excel_table_by_name() -> Result<()> {
             workbook_or_fork_id: workbook_id,
             table_name: Some("SalesData".into()),
             limit: Some(10),
+            format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
     )

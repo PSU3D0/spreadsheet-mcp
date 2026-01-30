@@ -13,6 +13,9 @@ const DEFAULT_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb"];
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8079";
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_RESPONSE_BYTES: u64 = 1_000_000;
+const DEFAULT_MAX_PAYLOAD_BYTES: u64 = 65_536;
+const DEFAULT_MAX_CELLS: u64 = 10_000;
+const DEFAULT_MAX_ITEMS: u64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +35,14 @@ impl std::fmt::Display for TransportKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputProfile {
+    #[default]
+    TokenDense,
+    Verbose,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub workspace_root: PathBuf,
@@ -46,6 +57,10 @@ pub struct ServerConfig {
     pub max_concurrent_recalcs: usize,
     pub tool_timeout_ms: Option<u64>,
     pub max_response_bytes: Option<u64>,
+    pub output_profile: OutputProfile,
+    pub max_payload_bytes: Option<u64>,
+    pub max_cells: Option<u64>,
+    pub max_items: Option<u64>,
     pub allow_overwrite: bool,
 }
 
@@ -65,6 +80,10 @@ impl ServerConfig {
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
             tool_timeout_ms: cli_tool_timeout_ms,
             max_response_bytes: cli_max_response_bytes,
+            output_profile: cli_output_profile,
+            max_payload_bytes: cli_max_payload_bytes,
+            max_cells: cli_max_cells,
+            max_items: cli_max_items,
             allow_overwrite: cli_allow_overwrite,
         } = args;
 
@@ -87,6 +106,10 @@ impl ServerConfig {
             max_concurrent_recalcs: file_max_concurrent_recalcs,
             tool_timeout_ms: file_tool_timeout_ms,
             max_response_bytes: file_max_response_bytes,
+            output_profile: file_output_profile,
+            max_payload_bytes: file_max_payload_bytes,
+            max_cells: file_max_cells,
+            max_items: file_max_items,
             allow_overwrite: file_allow_overwrite,
         } = file_config;
 
@@ -211,6 +234,37 @@ impl ServerConfig {
             Some(max_response_bytes)
         };
 
+        let output_profile = cli_output_profile
+            .or(file_output_profile)
+            .unwrap_or_default();
+
+        let max_payload_bytes = cli_max_payload_bytes
+            .or(file_max_payload_bytes)
+            .unwrap_or(DEFAULT_MAX_PAYLOAD_BYTES);
+        let max_payload_bytes = if max_payload_bytes == 0 {
+            None
+        } else {
+            Some(max_payload_bytes)
+        };
+
+        let max_cells = cli_max_cells
+            .or(file_max_cells)
+            .unwrap_or(DEFAULT_MAX_CELLS);
+        let max_cells = if max_cells == 0 {
+            None
+        } else {
+            Some(max_cells)
+        };
+
+        let max_items = cli_max_items
+            .or(file_max_items)
+            .unwrap_or(DEFAULT_MAX_ITEMS);
+        let max_items = if max_items == 0 {
+            None
+        } else {
+            Some(max_items)
+        };
+
         let allow_overwrite = cli_allow_overwrite || file_allow_overwrite.unwrap_or(false);
 
         Ok(Self {
@@ -226,6 +280,10 @@ impl ServerConfig {
             max_concurrent_recalcs,
             tool_timeout_ms,
             max_response_bytes,
+            output_profile,
+            max_payload_bytes,
+            max_cells,
+            max_items,
             allow_overwrite,
         })
     }
@@ -294,6 +352,22 @@ impl ServerConfig {
                 None
             }
         })
+    }
+
+    pub fn output_profile(&self) -> OutputProfile {
+        self.output_profile
+    }
+
+    pub fn max_payload_bytes(&self) -> Option<usize> {
+        self.max_payload_bytes.map(|bytes| bytes as usize)
+    }
+
+    pub fn max_cells(&self) -> Option<usize> {
+        self.max_cells.map(|cells| cells as usize)
+    }
+
+    pub fn max_items(&self) -> Option<usize> {
+        self.max_items.map(|items| items as usize)
     }
 }
 
@@ -409,6 +483,42 @@ pub struct CliArgs {
 
     #[arg(
         long,
+        env = "SPREADSHEET_MCP_OUTPUT_PROFILE",
+        value_enum,
+        value_name = "PROFILE",
+        help = "Output profile for tool responses (token_dense or verbose)"
+    )]
+    pub output_profile: Option<OutputProfile>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_MAX_PAYLOAD_BYTES",
+        value_name = "BYTES",
+        help = "Max tool payload size in bytes before truncation (default: 65536; 0 disables)",
+        value_parser = clap::value_parser!(u64)
+    )]
+    pub max_payload_bytes: Option<u64>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_MAX_CELLS",
+        value_name = "N",
+        help = "Max cells per tool payload before truncation (default: 10000; 0 disables)",
+        value_parser = clap::value_parser!(u64)
+    )]
+    pub max_cells: Option<u64>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_MAX_ITEMS",
+        value_name = "N",
+        help = "Max items per tool payload before truncation (default: 500; 0 disables)",
+        value_parser = clap::value_parser!(u64)
+    )]
+    pub max_items: Option<u64>,
+
+    #[arg(
+        long,
         env = "SPREADSHEET_MCP_ALLOW_OVERWRITE",
         help = "Allow save_fork to overwrite original workbook files"
     )]
@@ -429,6 +539,10 @@ struct PartialConfig {
     max_concurrent_recalcs: Option<usize>,
     tool_timeout_ms: Option<u64>,
     max_response_bytes: Option<u64>,
+    output_profile: Option<OutputProfile>,
+    max_payload_bytes: Option<u64>,
+    max_cells: Option<u64>,
+    max_items: Option<u64>,
     allow_overwrite: Option<bool>,
 }
 

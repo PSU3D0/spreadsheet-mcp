@@ -4,6 +4,7 @@ use rmcp::model::ErrorCode;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use spreadsheet_mcp::model::SheetPageFormat;
 use spreadsheet_mcp::tools::{ListWorkbooksParams, SheetPageParams};
 use spreadsheet_mcp::{SpreadsheetServer, startup_scan};
 
@@ -81,7 +82,7 @@ async fn server_tool_handlers_return_json() -> Result<()> {
             include_styles: false,
             columns_by_header: None,
             include_header: true,
-            format: None,
+            format: Some(SheetPageFormat::Full),
         }))
         .await
         .expect("page fetch")
