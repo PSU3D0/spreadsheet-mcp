@@ -54,6 +54,9 @@ OUTPUT DEFAULTS (token-dense profile):
 - sheet_statistics defaults to summary_only=true (no samples). Set summary_only=false to include samples.
 - sheet_styles defaults to summary_only=true (no descriptors/ranges/examples). Use include_descriptor/include_ranges/include_example_cells.
 - workbook_style_summary defaults to summary_only=true (no theme/conditional formats/descriptors). Use include_theme/include_conditional_formats/include_descriptor/include_example_cells.
+- sheet_formula_map defaults to summary_only=true (addresses hidden). Set include_addresses=true to show cell addresses.
+- find_value defaults to context=none (no neighbors/row_context). Use context=neighbors, context=row, or context=both.
+- scan_volatiles defaults to summary_only=true (addresses hidden). Set include_addresses=true to list addresses.
 - list_workbooks defaults to include_paths=false (no paths/caps). Set include_paths=true to show them.
 - list_sheets defaults to include_bounds=false (no row/column counts). Set include_bounds=true to show them.
 - workbook_summary defaults to summary_only=true (no entry points/named ranges). Set summary_only=false or include_entry_points/include_named_ranges.
