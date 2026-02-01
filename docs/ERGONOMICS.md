@@ -272,14 +272,70 @@ This trace shows recompression loops even without screenshots.
 
 ---
 
+## Pagination Pattern (Standardized)
+
+All tools that return lists should follow this clean pagination model:
+
+### Params (all optional)
+
+```rust
+#[serde(default)]
+pub limit: Option<u32>,   // max items to return (tool-specific default)
+#[serde(default)]
+pub offset: Option<u32>,  // starting position (0-based)
+```
+
+### Response
+
+```rust
+pub items: Vec<T>,                           // the data
+#[serde(skip_serializing_if = "Option::is_none")]
+pub next_offset: Option<u32>,                // only present if more data exists
+```
+
+### Rules
+
+1. **No `truncated` field** - redundant; client infers from `next_offset` presence
+2. **No `has_more` field** - same as above
+3. **`next_offset` only appears when there's more data** - via `skip_serializing_if`
+4. **Calculation**: `next_offset = offset + returned_count` (only if more exists)
+
+### Client Logic
+
+```
+if response.next_offset is present:
+    call again with offset = next_offset
+else:
+    done, all data received
+```
+
+### Safety Limits
+
+Even with pagination, we apply `max_payload_bytes` / `max_cells` / `max_items` caps:
+
+- If a single page would exceed limits, we return fewer items than `limit`
+- In this case, `next_offset` is set so client can resume
+- This is transparent to the client - same pagination logic applies
+
+### Row-Based Tools
+
+For tools paginating by row (not item count), use `next_start_row` instead:
+
+```rust
+#[serde(skip_serializing_if = "Option::is_none")]
+pub next_start_row: Option<u32>,
+```
+
+---
+
 ## Open questions
 
 - For `get_changeset` default behavior, do we want:
   - default = `baseline=base` (current), or
   - default = `baseline=last_changeset` with `full_diff=true` opt-in?
-- For `clear_range`, what’s the default safety stance?
+- For `clear_range`, what's the default safety stance?
   - clear values but keep formulas, or
   - clear values+formulas unless specified?
-- How should “error-like strings” (e.g., `#N/A`) be handled in `edit_batch`?
+- How should "error-like strings" (e.g., `#N/A`) be handled in `edit_batch`?
   - treat as literal strings, or
   - provide an explicit `CellValue::Error` write path?

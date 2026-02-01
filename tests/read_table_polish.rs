@@ -314,7 +314,7 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
     assert_eq!(table.headers, vec!["Idx", "Value"]);
     assert_eq!(table.rows.len(), 10);
     assert!(table.total_rows >= 9990);
-    assert_eq!(table.has_more, Some(true));
+    assert!(table.next_offset.is_some());
 
     Ok(())
 }

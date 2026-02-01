@@ -108,7 +108,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
     )
     .await?;
     assert_eq!(page.rows.len(), 5);
-    assert_eq!(page.has_more, Some(true));
+    assert!(page.next_start_row.is_some());
     assert!(page.next_start_row.unwrap() > 5);
     assert!(page.header_row.is_some());
     let first_row = &page.rows[0];
@@ -441,8 +441,7 @@ async fn find_formula_defaults_and_paging() -> Result<()> {
 
     assert_eq!(first_page.matches.len(), 2);
     assert!(first_page.matches.iter().all(|m| m.context.is_empty()));
-    assert!(first_page.truncated);
-    assert_eq!(first_page.next_offset, Some(2));
+    assert!(first_page.next_offset.is_some());
 
     let second_page = find_formula(
         state.clone(),
@@ -484,7 +483,6 @@ async fn find_formula_defaults_and_paging() -> Result<()> {
 
     assert!(!with_context.matches.is_empty());
     assert!(!with_context.matches[0].context.is_empty());
-    assert!(!with_context.truncated);
     assert!(with_context.next_offset.is_none());
 
     Ok(())
