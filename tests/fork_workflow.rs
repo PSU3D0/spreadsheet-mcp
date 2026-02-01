@@ -41,6 +41,9 @@ async fn discover_workbook(state: Arc<AppState>) -> Result<WorkbookId> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -97,6 +100,9 @@ async fn test_create_fork_rejects_non_xlsx() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: Some("*.xls".to_string()),
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

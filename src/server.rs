@@ -54,7 +54,10 @@ OUTPUT DEFAULTS (token-dense profile):
 - sheet_statistics defaults to summary_only=true (no samples). Set summary_only=false to include samples.
 - sheet_styles defaults to summary_only=true (no descriptors/ranges/examples). Use include_descriptor/include_ranges/include_example_cells.
 - workbook_style_summary defaults to summary_only=true (no theme/conditional formats/descriptors). Use include_theme/include_conditional_formats/include_descriptor/include_example_cells.
-- Pagination fields (has_more/next_offset/next_start_row) only appear when truncated.
+- list_workbooks defaults to include_paths=false (no paths/caps). Set include_paths=true to show them.
+- list_sheets defaults to include_bounds=false (no row/column counts). Set include_bounds=true to show them.
+- workbook_summary defaults to summary_only=true (no entry points/named ranges). Set summary_only=false or include_entry_points/include_named_ranges.
+- Pagination fields (next_offset/next_start_row) only appear when more data exists.
 
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 

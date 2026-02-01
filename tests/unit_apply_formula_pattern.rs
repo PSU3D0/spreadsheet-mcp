@@ -35,6 +35,9 @@ async fn apply_formula_pattern_preview_stages_and_apply() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -112,6 +115,9 @@ async fn apply_formula_pattern_validates_anchor_and_direction() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

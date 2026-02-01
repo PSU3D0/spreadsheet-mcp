@@ -57,8 +57,11 @@ Default formats (token-dense profile):
 - `sheet_statistics` → `summary_only=true` (no samples). Set `summary_only=false` to include samples.
 - `sheet_styles` → `summary_only=true` (no descriptors/ranges/examples). Use `include_descriptor/include_ranges/include_example_cells`.
 - `workbook_style_summary` → `summary_only=true` (no theme/conditional formats/descriptors). Use `include_theme/include_conditional_formats/include_descriptor/include_example_cells`.
+- `list_workbooks` → `include_paths=false` (no paths/caps). Set `include_paths=true` to include.
+- `list_sheets` → `include_bounds=false` (no row/column counts). Set `include_bounds=true` to include.
+- `workbook_summary` → `summary_only=true` (no entry points/named ranges). Set `summary_only=false` or `include_entry_points/include_named_ranges`.
 
-Pagination fields (`has_more`, `next_offset`, `next_start_row`) only appear when a response is truncated by size caps.
+Pagination fields (`next_offset`, `next_start_row`) only appear when more data exists.
 
 ## VBA Support (Read-Only)
 

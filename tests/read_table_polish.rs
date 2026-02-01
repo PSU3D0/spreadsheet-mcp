@@ -26,6 +26,9 @@ async fn read_table_uses_region_header_hint_and_range_offsets() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -103,6 +106,9 @@ async fn read_table_handles_multi_row_headers_and_filters() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -165,6 +171,9 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -232,6 +241,9 @@ async fn read_table_large_range_stops_after_limit_and_counts() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -289,6 +301,9 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -340,6 +355,9 @@ async fn read_table_handles_empty_header_cells_in_multi_row() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -385,6 +403,9 @@ async fn read_table_filter_contains_case_insensitive() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -439,6 +460,9 @@ async fn read_table_resolves_excel_table_by_name() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?

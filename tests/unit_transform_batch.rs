@@ -37,6 +37,9 @@ async fn transform_batch_clear_range_clears_values_keeps_formulas_by_default() -
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -102,6 +105,9 @@ async fn transform_batch_preview_stages_and_apply() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -188,6 +194,9 @@ async fn transform_batch_region_target_resolves() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -273,6 +282,9 @@ async fn transform_batch_cells_target_skips_missing_and_handles_duplicates() -> 
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -348,6 +360,9 @@ async fn transform_batch_accepts_reversed_range() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -416,6 +431,9 @@ async fn transform_batch_noop_flags_do_not_change_cells() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -490,6 +508,9 @@ async fn transform_batch_counts_mixed_range() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -557,6 +578,9 @@ async fn transform_batch_clear_formulas_only_removes_formula_keeps_literal_value
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -630,6 +654,9 @@ async fn transform_batch_fill_range_creates_cells_and_skips_formulas_by_default(
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -702,6 +729,9 @@ async fn transform_batch_replace_in_range_replaces_values_exact() -> Result<()> 
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -771,6 +801,9 @@ async fn transform_batch_replace_in_range_contains_case_sensitive() -> Result<()
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -837,6 +870,9 @@ async fn transform_batch_replace_in_range_skips_formulas_by_default() -> Result<
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -906,6 +942,9 @@ async fn transform_batch_replace_in_range_can_mutate_formulas_when_enabled() -> 
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -972,6 +1011,9 @@ async fn transform_batch_fill_range_preview_stages_and_apply() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1052,6 +1094,9 @@ async fn transform_batch_replace_in_range_preview_stages_and_apply() -> Result<(
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1132,6 +1177,9 @@ async fn transform_batch_replace_in_range_exact_case_insensitive() -> Result<()>
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1196,6 +1244,9 @@ async fn transform_batch_replace_in_range_contains_replaces_all_occurrences() ->
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1257,6 +1308,9 @@ async fn transform_batch_multiple_ops_last_wins() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1327,6 +1381,9 @@ async fn transform_batch_replace_in_range_rejects_invalid_match_mode() -> Result
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1382,6 +1439,9 @@ async fn transform_batch_replace_in_range_contains_rejects_case_insensitive() ->
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -1437,6 +1497,9 @@ async fn transform_batch_fill_range_overwrite_formulas_removes_formula() -> Resu
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

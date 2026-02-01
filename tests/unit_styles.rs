@@ -66,6 +66,9 @@ async fn sheet_styles_reports_full_descriptors() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -143,6 +146,9 @@ async fn sheet_styles_runs_respect_scope() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -203,6 +209,9 @@ async fn sheet_styles_cells_truncates() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -262,6 +271,9 @@ async fn sheet_styles_truncates_large_style_counts() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -312,6 +324,9 @@ async fn sheet_styles_truncates_ranges_for_disjoint_runs() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -391,6 +406,9 @@ async fn sheet_styles_maps_gradient_pattern_underline_borders_rotation() -> Resu
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -477,6 +495,9 @@ async fn sheet_styles_dedupes_identical_visible_formats() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

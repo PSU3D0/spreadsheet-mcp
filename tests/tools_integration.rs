@@ -5,11 +5,10 @@ use spreadsheet_mcp::model::{SheetPageFormat, TraceDirection, WorkbookId};
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::{
     DescribeWorkbookParams, FindFormulaParams, FormulaTraceParams, ListSheetsParams,
-    ListWorkbooksParams, ManifestStubParams, NamedRangesParams, ScanVolatilesParams,
-    SheetFormulaMapParams, SheetOverviewParams, SheetPageParams, SheetStatisticsParams,
-    SheetStylesParams, describe_workbook, find_formula, formula_trace, get_manifest_stub,
-    list_sheets, list_workbooks, named_ranges, scan_volatiles, sheet_formula_map, sheet_overview,
-    sheet_page, sheet_statistics, sheet_styles,
+    ListWorkbooksParams, ManifestStubParams, NamedRangesParams, SheetFormulaMapParams,
+    SheetOverviewParams, SheetPageParams, SheetStatisticsParams, SheetStylesParams,
+    describe_workbook, find_formula, formula_trace, get_manifest_stub, list_sheets, list_workbooks,
+    named_ranges, sheet_formula_map, sheet_overview, sheet_page, sheet_statistics, sheet_styles,
 };
 use umya_spreadsheet::{NumberingFormat, Spreadsheet};
 
@@ -27,6 +26,9 @@ async fn tool_suite_exercises_feature_rich_workbook() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -60,6 +62,9 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
         state.clone(),
         ListSheetsParams {
             workbook_or_fork_id: workbook_id.clone(),
+            limit: None,
+            offset: None,
+            include_bounds: Some(true),
         },
     )
     .await?;
@@ -69,7 +74,7 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
         .iter()
         .find(|s| s.name == "Data")
         .expect("data sheet present");
-    assert!(data_sheet.formula_cells > 0);
+    assert!(data_sheet.formula_cells.unwrap_or(0) > 0);
 
     let overview = sheet_overview(
         state,
@@ -418,6 +423,9 @@ async fn find_formula_defaults_and_paging() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

@@ -18,6 +18,9 @@ async fn workbook_summary_reports_regions_and_entry_points() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -27,6 +30,9 @@ async fn workbook_summary_reports_regions_and_entry_points() -> Result<()> {
         state.clone(),
         WorkbookSummaryParams {
             workbook_or_fork_id: descriptor.workbook_id.clone(),
+            summary_only: Some(false),
+            include_entry_points: None,
+            include_named_ranges: None,
         },
     )
     .await?;
@@ -42,8 +48,6 @@ async fn workbook_summary_reports_regions_and_entry_points() -> Result<()> {
         + summary.region_counts.other;
     assert!(total_regions >= 1);
     assert!(!summary.suggested_entry_points.is_empty());
-    assert!(summary.region_counts_truncated);
-    assert!(!summary.entry_points_truncated);
     assert!(
         summary
             .notes
