@@ -19,6 +19,9 @@ async fn sheet_overview_truncates_regions_and_sets_counts() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?
@@ -63,6 +66,9 @@ async fn sheet_overview_truncates_headers_and_sets_flags() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?

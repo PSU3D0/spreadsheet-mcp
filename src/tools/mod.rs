@@ -40,8 +40,46 @@ pub async fn list_workbooks(
     state: Arc<AppState>,
     params: ListWorkbooksParams,
 ) -> Result<WorkbookListResponse> {
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let include_paths = params
+        .include_paths
+        .unwrap_or(!matches!(output_profile, OutputProfile::TokenDense));
+
+    let offset = params.offset.unwrap_or(0) as usize;
+    let limit = params.limit.unwrap_or(100) as usize;
     let filter = params.into_filter()?;
-    state.list_workbooks(filter)
+    let mut response = state.list_workbooks(filter)?;
+    let total_count = response.workbooks.len();
+
+    if offset < total_count {
+        let end = (offset + limit).min(total_count);
+        response.workbooks = response
+            .workbooks
+            .into_iter()
+            .skip(offset)
+            .take(end - offset)
+            .collect();
+    } else {
+        response.workbooks.clear();
+    }
+
+    // Apply include_paths toggle
+    if !include_paths {
+        for wb in &mut response.workbooks {
+            wb.path = None;
+            wb.caps = None;
+        }
+    }
+
+    // Set next_offset if more data exists
+    response.next_offset = if offset + response.workbooks.len() < total_count {
+        Some((offset + response.workbooks.len()) as u32)
+    } else {
+        None
+    };
+
+    Ok(response)
 }
 
 pub async fn describe_workbook(
@@ -58,6 +96,12 @@ pub struct ListWorkbooksParams {
     pub slug_prefix: Option<String>,
     pub folder: Option<String>,
     pub path_glob: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    pub include_paths: Option<bool>,
 }
 
 impl ListWorkbooksParams {
@@ -76,6 +120,12 @@ pub struct DescribeWorkbookParams {
 pub struct ListSheetsParams {
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    pub include_bounds: Option<bool>,
 }
 
 pub async fn list_sheets(
@@ -83,11 +133,34 @@ pub async fn list_sheets(
     params: ListSheetsParams,
 ) -> Result<SheetListResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let summaries = workbook.list_summaries()?;
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let include_bounds = params
+        .include_bounds
+        .unwrap_or(!matches!(output_profile, OutputProfile::TokenDense));
+    let mut summaries = workbook.list_summaries(include_bounds)?;
+
+    let total_count = summaries.len();
+    let offset = params.offset.unwrap_or(0) as usize;
+    let limit = params.limit.unwrap_or(100) as usize;
+
+    if offset < total_count {
+        summaries = summaries.into_iter().skip(offset).take(limit).collect();
+    } else {
+        summaries.clear();
+    }
+
+    let next_offset = if offset + summaries.len() < total_count {
+        Some((offset + summaries.len()) as u32)
+    } else {
+        None
+    };
+
     let response = SheetListResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheets: summaries,
+        next_offset,
     };
     Ok(response)
 }
@@ -109,6 +182,12 @@ pub struct SheetOverviewParams {
 pub struct WorkbookSummaryParams {
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    #[serde(default)]
+    pub summary_only: Option<bool>,
+    #[serde(default)]
+    pub include_entry_points: Option<bool>,
+    #[serde(default)]
+    pub include_named_ranges: Option<bool>,
 }
 
 pub async fn workbook_summary(
@@ -116,10 +195,25 @@ pub async fn workbook_summary(
     params: WorkbookSummaryParams,
 ) -> Result<WorkbookSummaryResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    Ok(tokio::task::spawn_blocking(move || build_workbook_summary(workbook)).await??)
+    let config = state.config();
+    let output_profile = config.output_profile();
+    let summary_only = params
+        .summary_only
+        .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
+    let include_entry_points = params.include_entry_points.unwrap_or(!summary_only);
+    let include_named_ranges = params.include_named_ranges.unwrap_or(!summary_only);
+
+    Ok(tokio::task::spawn_blocking(move || {
+        build_workbook_summary(workbook, include_entry_points, include_named_ranges)
+    })
+    .await??)
 }
 
-fn build_workbook_summary(workbook: Arc<WorkbookContext>) -> Result<WorkbookSummaryResponse> {
+fn build_workbook_summary(
+    workbook: Arc<WorkbookContext>,
+    include_entry_points: bool,
+    include_named_ranges: bool,
+) -> Result<WorkbookSummaryResponse> {
     let sheet_names = workbook.sheet_names();
 
     let mut total_cells: u64 = 0;
@@ -153,44 +247,49 @@ fn build_workbook_summary(workbook: Arc<WorkbookContext>) -> Result<WorkbookSumm
             _ => region_counts.data += 1,
         }
 
-        let priority = entry_point_priority(&entry.metrics.classification);
-        entry_points.push(EntryPoint {
-            sheet_name: sheet_name.clone(),
-            region_id: None,
-            bounds: entry_point_bounds(&entry.metrics),
-            rationale: format!(
-                "Fast summary p{}: {:?} sheet",
-                priority, entry.metrics.classification
-            ),
-        });
+        if include_entry_points {
+            let priority = entry_point_priority(&entry.metrics.classification);
+            entry_points.push(EntryPoint {
+                sheet_name: sheet_name.clone(),
+                region_id: None,
+                bounds: entry_point_bounds(&entry.metrics),
+                rationale: format!(
+                    "Fast summary p{}: {:?} sheet",
+                    priority, entry.metrics.classification
+                ),
+            });
+        }
     }
 
-    entry_points.sort_by(|a, b| {
-        let pa = priority_from_rationale(&a.rationale);
-        let pb = priority_from_rationale(&b.rationale);
-        pa.cmp(&pb)
-            .then_with(|| {
-                a.bounds
-                    .as_ref()
-                    .map(|_| 1)
-                    .cmp(&b.bounds.as_ref().map(|_| 1))
-            })
-            .then_with(|| a.sheet_name.cmp(&b.sheet_name))
-    });
-    let entry_points_truncated = entry_points.len() > 5;
-    entry_points.truncate(5);
+    if include_entry_points {
+        entry_points.sort_by(|a, b| {
+            let pa = priority_from_rationale(&a.rationale);
+            let pb = priority_from_rationale(&b.rationale);
+            pa.cmp(&pb)
+                .then_with(|| {
+                    a.bounds
+                        .as_ref()
+                        .map(|_| 1)
+                        .cmp(&b.bounds.as_ref().map(|_| 1))
+                })
+                .then_with(|| a.sheet_name.cmp(&b.sheet_name))
+        });
+        entry_points.truncate(5);
+    }
 
-    let mut seen_ranges = std::collections::HashSet::new();
-    for item in workbook.named_items()? {
-        if item.kind != NamedItemKind::NamedRange && item.kind != NamedItemKind::Table {
-            continue;
-        }
-        if !seen_ranges.insert(item.refers_to.clone()) {
-            continue;
-        }
-        key_named_ranges.push(item);
-        if key_named_ranges.len() >= 10 {
-            break;
+    if include_named_ranges {
+        let mut seen_ranges = std::collections::HashSet::new();
+        for item in workbook.named_items()? {
+            if item.kind != NamedItemKind::NamedRange && item.kind != NamedItemKind::Table {
+                continue;
+            }
+            if !seen_ranges.insert(item.refers_to.clone()) {
+                continue;
+            }
+            key_named_ranges.push(item);
+            if key_named_ranges.len() >= 10 {
+                break;
+            }
         }
     }
 
@@ -205,10 +304,8 @@ fn build_workbook_summary(workbook: Arc<WorkbookContext>) -> Result<WorkbookSumm
         total_formulas,
         breakdown,
         region_counts,
-        region_counts_truncated: true,
         key_named_ranges,
         suggested_entry_points: entry_points,
-        entry_points_truncated,
         notes,
     })
 }
@@ -412,6 +509,8 @@ pub struct FindValueParams {
     #[serde(default = "default_find_limit")]
     pub limit: u32,
     #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default)]
     pub context: Option<String>,
     #[serde(default)]
     pub context_width: Option<u32>,
@@ -433,6 +532,7 @@ impl Default for FindValueParams {
             search_headers_only: false,
             direction: None,
             limit: default_find_limit(),
+            offset: None,
             context: None,
             context_width: None,
         }
@@ -654,7 +754,6 @@ pub async fn sheet_formula_map(
 
     let graph = workbook.formula_graph(&params.sheet_name)?;
     let all_groups = graph.groups();
-    let total_groups = all_groups.len();
     let mut groups = Vec::new();
 
     for mut group in all_groups {
@@ -678,6 +777,8 @@ pub async fn sheet_formula_map(
         groups.push(group);
     }
 
+    let total_groups = groups.len();
+
     let sort_by = params.sort_by.unwrap_or_default();
     match sort_by {
         FormulaSortBy::Address => {
@@ -687,7 +788,11 @@ pub async fn sheet_formula_map(
             groups.sort_by(|a, b| b.formula.len().cmp(&a.formula.len()));
         }
         FormulaSortBy::Count => {
-            groups.sort_by(|a, b| b.addresses.len().cmp(&a.addresses.len()));
+            groups.sort_by(|a, b| {
+                let count_a = a.count.unwrap_or(a.addresses.len() as u32);
+                let count_b = b.count.unwrap_or(b.addresses.len() as u32);
+                count_b.cmp(&count_a)
+            });
         }
     }
 
@@ -1225,7 +1330,6 @@ fn build_range_values_entry(
     format: TableOutputFormat,
     range: &str,
     rows: &[Vec<Option<CellValue>>],
-    truncated: Option<bool>,
     next_start_row: Option<u32>,
 ) -> RangeValuesEntry {
     match format {
@@ -1234,7 +1338,6 @@ fn build_range_values_entry(
             rows: Some(rows.to_vec()),
             values: None,
             csv: None,
-            truncated,
             next_start_row,
         },
         TableOutputFormat::Values => RangeValuesEntry {
@@ -1242,7 +1345,6 @@ fn build_range_values_entry(
             rows: None,
             values: Some(cell_matrix_to_values(rows)),
             csv: None,
-            truncated,
             next_start_row,
         },
         TableOutputFormat::Csv => RangeValuesEntry {
@@ -1250,7 +1352,6 @@ fn build_range_values_entry(
             rows: None,
             values: None,
             csv: Some(cell_matrix_to_csv(rows)),
-            truncated,
             next_start_row,
         },
     }
@@ -1458,16 +1559,13 @@ pub async fn sheet_statistics(
 
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
-    let mut truncated = false;
 
     if let Some(max_items) = max_items {
         if numeric_columns.len() > max_items {
             numeric_columns.truncate(max_items);
-            truncated = true;
         }
         if text_columns.len() > max_items {
             text_columns.truncate(max_items);
-            truncated = true;
         }
     }
 
@@ -1484,7 +1582,6 @@ pub async fn sheet_statistics(
                 text_columns: text.clone(),
                 null_counts: stats.null_counts.clone(),
                 duplicate_warnings: stats.duplicate_warnings.clone(),
-                truncated: None,
             };
             serde_json::to_vec(&response)
                 .map(|payload| payload.len())
@@ -1499,7 +1596,6 @@ pub async fn sheet_statistics(
             for column in &mut text_columns {
                 column.samples.clear();
             }
-            truncated = true;
             current_size = response_size(&numeric_columns, &text_columns);
         }
 
@@ -1507,16 +1603,12 @@ pub async fn sheet_statistics(
         {
             if !text_columns.is_empty() {
                 text_columns.pop();
-                truncated = true;
             } else if !numeric_columns.is_empty() {
                 numeric_columns.pop();
-                truncated = true;
             }
             current_size = response_size(&numeric_columns, &text_columns);
         }
     }
-
-    let truncated = if truncated { Some(true) } else { None };
 
     Ok(SheetStatisticsResponse {
         workbook_id: workbook.id.clone(),
@@ -1529,7 +1621,6 @@ pub async fn sheet_statistics(
         text_columns,
         null_counts: stats.null_counts,
         duplicate_warnings: stats.duplicate_warnings,
-        truncated,
     })
 }
 
@@ -1982,8 +2073,12 @@ fn collect_value_matches(
     params: &FindValueParams,
     region: Option<&DetectedRegion>,
     default_bounds: ((u32, u32), (u32, u32)),
-) -> Result<Vec<FindValueMatch>> {
+    offset: u32,
+    limit: u32,
+    seen_so_far: u32,
+) -> Result<(Vec<FindValueMatch>, u32, bool)> {
     let mut results = Vec::new();
+    let mut seen = seen_so_far;
     let regex = if match_mode == "regex" {
         Regex::new(&params.query).ok()
     } else {
@@ -1995,6 +2090,21 @@ fn collect_value_matches(
         .unwrap_or(default_bounds);
 
     let header_row = region.and_then(|r| r.header_row).unwrap_or(1);
+
+    let context_mode = params
+        .context
+        .as_deref()
+        .unwrap_or("none")
+        .to_ascii_lowercase();
+    let include_neighbors = matches!(context_mode.as_str(), "neighbors" | "both");
+    let include_row_context = matches!(context_mode.as_str(), "row" | "both");
+    if !matches!(context_mode.as_str(), "none" | "neighbors" | "row" | "both") {
+        return Err(anyhow!(
+            "invalid context '{}'; expected none, neighbors, row, or both",
+            context_mode
+        ));
+    }
+    let context_width = params.context_width.unwrap_or(3).max(1);
 
     for cell in sheet.get_cell_collection() {
         let coord = cell.get_coordinate();
@@ -2031,7 +2141,20 @@ fn collect_value_matches(
             continue;
         }
 
-        let neighbors = collect_neighbors(sheet, row, col);
+        if seen < offset {
+            seen += 1;
+            continue;
+        }
+
+        if results.len() as u32 >= limit {
+            return Ok((results, seen, true));
+        }
+
+        let neighbors = if include_neighbors {
+            collect_neighbors(sheet, row, col)
+        } else {
+            None
+        };
         let (label_hit, match_value) = if matches!(mode, FindMode::Label) {
             let target_value = match direction {
                 LabelDirection::Right => sheet.get_cell((col + 1, row)),
@@ -2055,7 +2178,11 @@ fn collect_value_matches(
             (None, value.clone())
         };
 
-        let row_context = build_row_context(sheet, row, col);
+        let row_context = if include_row_context {
+            build_row_context(sheet, row, col, context_width)
+        } else {
+            None
+        };
 
         results.push(FindValueMatch {
             address: coord.get_coordinate(),
@@ -2065,9 +2192,10 @@ fn collect_value_matches(
             neighbors,
             label_hit,
         });
+        seen += 1;
     }
 
-    Ok(results)
+    Ok((results, seen, false))
 }
 
 fn label_from_cell(cell: &umya_spreadsheet::Cell) -> String {
@@ -2174,23 +2302,35 @@ fn build_row_context(
     sheet: &umya_spreadsheet::Worksheet,
     row: u32,
     col: u32,
+    width: u32,
 ) -> Option<RowContext> {
-    let header_value = sheet
-        .get_cell((col, 1u32))
-        .and_then(cell_to_value)
-        .map(|v| match v {
-            CellValue::Text(s) => s,
-            CellValue::Number(n) => n.to_string(),
-            CellValue::Bool(b) => b.to_string(),
-            CellValue::Date(d) => d,
-            CellValue::Error(e) => e,
-        })
-        .unwrap_or_else(|| format!("Col{}", col));
-    let value = sheet.get_cell((col, row)).and_then(cell_to_value);
-    Some(RowContext {
-        headers: vec![header_value],
-        values: vec![value],
-    })
+    let width = width.max(1);
+    let half = width / 2;
+    let max_col = sheet.get_highest_column().max(1);
+    let start_col = col.saturating_sub(half).max(1);
+    let end_col = (col + half).min(max_col);
+
+    let mut headers = Vec::new();
+    let mut values = Vec::new();
+
+    for current_col in start_col..=end_col {
+        let header_value = sheet
+            .get_cell((current_col, 1u32))
+            .and_then(cell_to_value)
+            .map(|v| match v {
+                CellValue::Text(s) => s,
+                CellValue::Number(n) => n.to_string(),
+                CellValue::Bool(b) => b.to_string(),
+                CellValue::Date(d) => d,
+                CellValue::Error(e) => e,
+            })
+            .unwrap_or_else(|| format!("Col{}", current_col));
+        let value = sheet.get_cell((current_col, row)).and_then(cell_to_value);
+        headers.push(header_value);
+        values.push(value);
+    }
+
+    Some(RowContext { headers, values })
 }
 
 fn default_find_formula_limit() -> u32 {
@@ -2319,15 +2459,12 @@ pub async fn scan_volatiles(
     };
 
     let mut items = Vec::new();
-    let mut total_volatile_groups = 0usize;
-
     for sheet_name in target_sheets {
         let graph = workbook.formula_graph(&sheet_name)?;
         for group in graph.groups() {
             if !group.is_volatile {
                 continue;
             }
-            total_volatile_groups += 1;
 
             if summary_only {
                 items.push(VolatileScanEntry {
@@ -3026,13 +3163,8 @@ pub async fn range_values(
                     if row_limit > 0 {
                         row_limit =
                             cap_rows_by_payload_bytes(row_limit, max_payload_bytes, |count| {
-                                let entry = build_range_values_entry(
-                                    format,
-                                    range,
-                                    &rows[..count],
-                                    None,
-                                    None,
-                                );
+                                let entry =
+                                    build_range_values_entry(format, range, &rows[..count], None);
                                 serde_json::to_vec(&entry)
                                     .map(|payload| payload.len())
                                     .unwrap_or(usize::MAX)
@@ -3043,15 +3175,13 @@ pub async fn range_values(
                         rows.truncate(row_limit);
                     }
 
-                    let truncated = rows.len() < total_rows;
-                    let truncated_flag = if truncated { Some(true) } else { None };
-                    let next_start_row = if truncated {
+                    let next_start_row = if rows.len() < total_rows {
                         Some(start_row + rows.len() as u32)
                     } else {
                         None
                     };
 
-                    build_range_values_entry(format, range, &rows, truncated_flag, next_start_row)
+                    build_range_values_entry(format, range, &rows, next_start_row)
                 })
             })
             .collect()
@@ -3072,6 +3202,9 @@ pub async fn find_value(
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let mut matches = Vec::new();
     let mut truncated = false;
+    let mut seen: u32 = 0;
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit;
     let mode = params.mode.clone().unwrap_or_else(|| {
         if params.label.is_some() {
             FindMode::Label
@@ -3104,28 +3237,32 @@ pub async fn find_value(
         let region_bounds = params
             .region_id
             .and_then(|id| workbook.detected_region(&sheet_name, id).ok());
-        let sheet_matches = workbook.with_sheet(&sheet_name, |sheet| {
-            collect_value_matches(
-                sheet,
-                &sheet_name,
-                &mode,
-                &match_mode,
-                &direction,
-                &params,
-                region_bounds.as_ref(),
-                default_bounds,
-            )
-        })??;
+        let (sheet_matches, sheet_seen, sheet_truncated) =
+            workbook.with_sheet(&sheet_name, |sheet| {
+                collect_value_matches(
+                    sheet,
+                    &sheet_name,
+                    &mode,
+                    &match_mode,
+                    &direction,
+                    &params,
+                    region_bounds.as_ref(),
+                    default_bounds,
+                    offset,
+                    limit,
+                    seen,
+                )
+            })??;
+        seen = sheet_seen;
         matches.extend(sheet_matches);
-        if matches.len() as u32 >= params.limit {
+        if sheet_truncated {
             truncated = true;
-            matches.truncate(params.limit as usize);
             break;
         }
     }
 
     let next_offset = if truncated {
-        Some(matches.len() as u32)
+        Some(offset.saturating_add(matches.len() as u32))
     } else {
         None
     };
@@ -3282,12 +3419,10 @@ pub async fn table_profile(
 
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
-    let mut truncated = false;
 
     if let Some(max_items) = max_items {
         if headers.len() > max_items {
             headers.truncate(max_items);
-            truncated = true;
         }
     }
 
@@ -3305,7 +3440,6 @@ pub async fn table_profile(
         if let Some(max_items) = max_items {
             if samples.len() > max_items {
                 samples.truncate(max_items);
-                truncated = true;
             }
         }
 
@@ -3320,7 +3454,6 @@ pub async fn table_profile(
                     column_types: column_types.clone(),
                     row_count: total_rows,
                     samples: samples[..count].to_vec(),
-                    truncated: None,
                     notes: Vec::new(),
                 };
                 serde_json::to_vec(&response)
@@ -3329,7 +3462,6 @@ pub async fn table_profile(
             });
             if sample_limit < samples.len() {
                 samples.truncate(sample_limit);
-                truncated = true;
             }
 
             let response = TableProfileResponse {
@@ -3341,7 +3473,6 @@ pub async fn table_profile(
                 column_types: column_types.clone(),
                 row_count: total_rows,
                 samples: samples.clone(),
-                truncated: None,
                 notes: Vec::new(),
             };
             if serde_json::to_vec(&response)
@@ -3366,7 +3497,6 @@ pub async fn table_profile(
                             column_types: column_slice,
                             row_count: total_rows,
                             samples: samples_slice,
-                            truncated: None,
                             notes: Vec::new(),
                         };
                         serde_json::to_vec(&response)
@@ -3381,13 +3511,10 @@ pub async fn table_profile(
                         .into_iter()
                         .map(|row| filter_table_row(&row, &headers))
                         .collect();
-                    truncated = true;
                 }
             }
         }
     }
-
-    let truncated = if truncated { Some(true) } else { None };
 
     Ok(TableProfileResponse {
         workbook_id: workbook.id.clone(),
@@ -3398,7 +3525,6 @@ pub async fn table_profile(
         column_types,
         row_count: total_rows,
         samples,
-        truncated,
         notes: Vec::new(),
     })
 }
@@ -3415,7 +3541,7 @@ pub async fn get_manifest_stub(
     params: ManifestStubParams,
 ) -> Result<ManifestStubResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let mut summaries = workbook.list_summaries()?;
+    let mut summaries = workbook.list_summaries(true)?;
 
     if let Some(filter) = &params.sheet_filter {
         summaries.retain(|summary| summary.name.eq_ignore_ascii_case(filter));

@@ -30,6 +30,9 @@ async fn vba_tools_parse_xlsm_fixture() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

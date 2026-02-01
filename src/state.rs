@@ -121,8 +121,10 @@ impl AppState {
             let mut index = self.index.write();
             let mut aliases = self.alias_index.write();
             for descriptor in &response.workbooks {
-                let abs_path = self.config.resolve_path(PathBuf::from(&descriptor.path));
-                index.insert(descriptor.workbook_id.clone(), abs_path);
+                if let Some(path) = descriptor.path.as_ref() {
+                    let abs_path = self.config.resolve_path(PathBuf::from(path));
+                    index.insert(descriptor.workbook_id.clone(), abs_path);
+                }
                 aliases.insert(
                     descriptor.short_id.to_ascii_lowercase(),
                     descriptor.workbook_id.clone(),

@@ -35,6 +35,9 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

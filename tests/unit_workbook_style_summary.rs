@@ -46,6 +46,9 @@ async fn workbook_style_summary_reports_theme_and_infers_default_style() -> Resu
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -129,6 +132,9 @@ async fn workbook_style_summary_truncates_large_style_counts() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -168,6 +174,9 @@ async fn workbook_style_summary_handles_empty_workbook() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -215,6 +224,9 @@ async fn workbook_style_summary_omits_empty_theme_colors() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -261,6 +273,9 @@ async fn workbook_style_summary_sets_scan_truncated_when_limit_exceeded() -> Res
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -328,6 +343,9 @@ async fn workbook_style_summary_aggregates_multiple_cf_rules_and_sheets() -> Res
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -398,6 +416,9 @@ async fn workbook_style_summary_truncates_conditional_formats() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -445,6 +466,9 @@ async fn workbook_style_summary_aggregates_identical_styles_across_sheets() -> R
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

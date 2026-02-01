@@ -21,7 +21,7 @@ fn build_workbook_list_respects_filters() {
     let descriptor = &response.workbooks[0];
     assert_eq!(descriptor.slug, "summary");
     assert_eq!(descriptor.folder.as_deref(), Some("reports"));
-    assert_eq!(descriptor.path, "reports/summary.xlsx");
+    assert_eq!(descriptor.path.as_deref(), Some("reports/summary.xlsx"));
     assert!(descriptor.bytes > 0);
     assert!(descriptor.last_modified.is_some());
 }
@@ -76,7 +76,7 @@ fn build_workbook_list_single_mode_filters_properly() {
     let descriptor = &response.workbooks[0];
     assert_eq!(descriptor.slug, "only");
     assert_eq!(descriptor.folder.as_deref(), Some("focus"));
-    assert_eq!(descriptor.path, "focus/only.xlsx");
+    assert_eq!(descriptor.path.as_deref(), Some("focus/only.xlsx"));
 }
 
 #[test]

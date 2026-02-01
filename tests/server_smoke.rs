@@ -44,6 +44,9 @@ async fn server_tool_handlers_return_json() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         }))
         .await
         .expect("list workbooks")
@@ -121,6 +124,9 @@ async fn response_size_guard_rejects_large_payloads() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         }))
         .await
     {
@@ -153,6 +159,9 @@ async fn disabled_tools_return_invalid_request() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         }))
         .await?
         .0;

@@ -18,16 +18,22 @@ pub struct WorkbookDescriptor {
     pub workbook_id: WorkbookId,
     pub short_id: String,
     pub slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
-    pub caps: BackendCaps,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caps: Option<BackendCaps>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkbookListResponse {
     pub workbooks: Vec<WorkbookDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -55,10 +61,11 @@ pub struct WorkbookSummaryResponse {
     pub total_formulas: u64,
     pub breakdown: WorkbookBreakdown,
     pub region_counts: RegionCountSummary,
-    pub region_counts_truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub key_named_ranges: Vec<NamedRangeDescriptor>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suggested_entry_points: Vec<EntryPoint>,
-    pub entry_points_truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 
@@ -92,12 +99,18 @@ pub struct EntryPoint {
 pub struct SheetSummary {
     pub name: String,
     pub visible: bool,
-    pub row_count: u32,
-    pub column_count: u32,
-    pub non_empty_cells: u32,
-    pub formula_cells: u32,
-    pub cached_values: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub non_empty_cells: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_cells: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_values: Option<u32>,
     pub classification: SheetClassification,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_tags: Vec<String>,
 }
 
@@ -116,6 +129,8 @@ pub struct SheetListResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub sheets: Vec<SheetSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -283,8 +298,6 @@ pub struct SheetStatisticsResponse {
     pub text_columns: Vec<ColumnSummary>,
     pub null_counts: BTreeMap<String, u32>,
     pub duplicate_warnings: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -859,8 +872,6 @@ pub struct TableProfileResponse {
     pub row_count: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<TableRow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
@@ -882,8 +893,6 @@ pub struct RangeValuesEntry {
     pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_row: Option<u32>,
 }

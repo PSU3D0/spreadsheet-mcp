@@ -1,10 +1,10 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::{SheetPageFormat, TableOutputFormat};
 use spreadsheet_mcp::tools::{
-    ListWorkbooksParams, RangeValuesParams, ReadTableParams, SheetPageParams,
+    ListSheetsParams, ListWorkbooksParams, RangeValuesParams, ReadTableParams, SheetPageParams,
     SheetStatisticsParams, SheetStylesParams, TableProfileParams, WorkbookStyleSummaryParams,
-    list_workbooks, range_values, read_table, sheet_page, sheet_statistics, sheet_styles,
-    table_profile, workbook_style_summary,
+    WorkbookSummaryParams, list_sheets, list_workbooks, range_values, read_table, sheet_page,
+    sheet_statistics, sheet_styles, table_profile, workbook_style_summary, workbook_summary,
 };
 use umya_spreadsheet::Spreadsheet;
 
@@ -22,6 +22,9 @@ async fn read_table_defaults_to_csv() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -65,6 +68,9 @@ async fn range_values_defaults_to_values() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -103,6 +109,9 @@ async fn sheet_page_defaults_to_compact() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -146,6 +155,9 @@ async fn read_table_truncates_with_max_cells() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -186,6 +198,9 @@ async fn range_values_truncates_with_max_cells() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -227,6 +242,9 @@ async fn sheet_page_truncates_with_max_cells() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -253,6 +271,179 @@ async fn sheet_page_truncates_with_max_cells() -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn list_workbooks_defaults_hide_paths() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("one.xlsx", build_simple_workbook);
+    let _path = workspace.create_workbook("two.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state,
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    assert!(workbooks.next_offset.is_none());
+    assert!(workbooks.workbooks.iter().all(|wb| wb.path.is_none()));
+    assert!(workbooks.workbooks.iter().all(|wb| wb.caps.is_none()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn list_workbooks_paginates() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("one.xlsx", build_simple_workbook);
+    let _path = workspace.create_workbook("two.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let first_page = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: Some(1),
+            offset: Some(0),
+            include_paths: Some(true),
+        },
+    )
+    .await?;
+
+    assert_eq!(first_page.workbooks.len(), 1);
+    assert!(first_page.next_offset.is_some());
+
+    let second_page = list_workbooks(
+        state,
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: Some(1),
+            offset: first_page.next_offset,
+            include_paths: Some(true),
+        },
+    )
+    .await?;
+
+    assert_eq!(second_page.workbooks.len(), 1);
+    assert!(second_page.next_offset.is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn list_sheets_defaults_hide_bounds() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("multi.xlsx", build_two_sheet_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let sheets = list_sheets(
+        state,
+        ListSheetsParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            limit: None,
+            offset: None,
+            include_bounds: None,
+        },
+    )
+    .await?;
+
+    assert!(sheets.next_offset.is_none());
+    assert!(sheets.sheets.iter().all(|sheet| sheet.row_count.is_none()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn list_sheets_paginates_with_bounds() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("multi.xlsx", build_two_sheet_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let first_page = list_sheets(
+        state,
+        ListSheetsParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            limit: Some(1),
+            offset: Some(0),
+            include_bounds: Some(true),
+        },
+    )
+    .await?;
+
+    assert_eq!(first_page.sheets.len(), 1);
+    assert!(first_page.next_offset.is_some());
+    assert!(first_page.sheets[0].row_count.is_some());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn workbook_summary_defaults_to_summary_only() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("summary.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let summary = workbook_summary(
+        state,
+        WorkbookSummaryParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            summary_only: None,
+            include_entry_points: None,
+            include_named_ranges: None,
+        },
+    )
+    .await?;
+
+    assert!(summary.suggested_entry_points.is_empty());
+    assert!(summary.key_named_ranges.is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn table_profile_defaults_to_summary_only() -> Result<()> {
     let workspace = support::TestWorkspace::new();
     let _path = workspace.create_workbook("profile.xlsx", build_simple_workbook);
@@ -264,6 +455,9 @@ async fn table_profile_defaults_to_summary_only() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -282,7 +476,6 @@ async fn table_profile_defaults_to_summary_only() -> Result<()> {
 
     assert!(profile.samples.is_empty());
     assert!(!profile.column_types.is_empty());
-    assert_eq!(profile.truncated, None);
     Ok(())
 }
 
@@ -298,6 +491,9 @@ async fn sheet_statistics_defaults_to_summary_only() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -336,6 +532,9 @@ async fn sheet_styles_defaults_to_summary_only() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -376,6 +575,9 @@ async fn workbook_style_summary_defaults_to_summary_only() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -419,6 +621,9 @@ async fn table_profile_truncates_with_max_items() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -436,7 +641,6 @@ async fn table_profile_truncates_with_max_items() -> Result<()> {
     .await?;
 
     assert_eq!(profile.headers.len(), 1);
-    assert_eq!(profile.truncated, Some(true));
     Ok(())
 }
 
@@ -456,6 +660,9 @@ async fn sheet_statistics_truncates_with_max_items() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -473,7 +680,6 @@ async fn sheet_statistics_truncates_with_max_items() -> Result<()> {
     .await?;
 
     assert_eq!(stats.text_columns.len(), 1);
-    assert_eq!(stats.truncated, Some(true));
     Ok(())
 }
 
@@ -493,6 +699,9 @@ async fn sheet_styles_truncates_with_max_items() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -536,6 +745,9 @@ async fn workbook_style_summary_truncates_with_max_items() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -580,6 +792,11 @@ fn build_simple_workbook(book: &mut Spreadsheet) {
             .get_cell_mut(format!("C{row}").as_str())
             .set_value("Y");
     }
+}
+
+fn build_two_sheet_workbook(book: &mut Spreadsheet) {
+    build_simple_workbook(book);
+    let _ = book.new_sheet("Sheet2");
 }
 
 fn build_styled_workbook(book: &mut Spreadsheet) {

@@ -36,6 +36,9 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -107,6 +110,9 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -170,6 +176,9 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -240,6 +249,9 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -290,6 +302,9 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -369,6 +384,9 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -425,6 +443,9 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -474,6 +495,9 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -521,6 +545,9 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;

@@ -246,7 +246,7 @@ impl WorkbookContext {
         Ok(entry)
     }
 
-    pub fn list_summaries(&self) -> Result<Vec<SheetSummary>> {
+    pub fn list_summaries(&self, include_bounds: bool) -> Result<Vec<SheetSummary>> {
         let book = self.spreadsheet.read();
         let mut summaries = Vec::new();
         for sheet in book.get_sheet_collection() {
@@ -255,13 +255,17 @@ impl WorkbookContext {
             summaries.push(SheetSummary {
                 name: name.clone(),
                 visible: sheet.get_sheet_state() != "hidden",
-                row_count: entry.metrics.row_count,
-                column_count: entry.metrics.column_count,
-                non_empty_cells: entry.metrics.non_empty_cells,
-                formula_cells: entry.metrics.formula_cells,
-                cached_values: entry.metrics.cached_values,
+                row_count: include_bounds.then_some(entry.metrics.row_count),
+                column_count: include_bounds.then_some(entry.metrics.column_count),
+                non_empty_cells: include_bounds.then_some(entry.metrics.non_empty_cells),
+                formula_cells: include_bounds.then_some(entry.metrics.formula_cells),
+                cached_values: include_bounds.then_some(entry.metrics.cached_values),
                 classification: entry.metrics.classification.clone(),
-                style_tags: entry.style_tags.clone(),
+                style_tags: if include_bounds {
+                    entry.style_tags.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
         Ok(summaries)
@@ -1614,20 +1618,21 @@ pub fn build_workbook_list(
                 short_id,
                 slug,
                 folder,
-                path: path_to_forward_slashes(relative),
+                path: Some(path_to_forward_slashes(relative)),
                 bytes: metadata.len(),
                 last_modified: metadata
                     .modified()
                     .ok()
                     .and_then(system_time_to_rfc3339)
                     .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-                caps,
+                caps: Some(caps),
             };
             descriptors.push(descriptor);
         }
 
         return Ok(WorkbookListResponse {
             workbooks: descriptors,
+            next_offset: None,
         });
     }
 
@@ -1662,14 +1667,14 @@ pub fn build_workbook_list(
             short_id,
             slug,
             folder,
-            path: path_to_forward_slashes(relative),
+            path: Some(path_to_forward_slashes(relative)),
             bytes: metadata.len(),
             last_modified: metadata
                 .modified()
                 .ok()
                 .and_then(system_time_to_rfc3339)
                 .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            caps,
+            caps: Some(caps),
         };
         descriptors.push(descriptor);
     }
@@ -1678,6 +1683,7 @@ pub fn build_workbook_list(
 
     Ok(WorkbookListResponse {
         workbooks: descriptors,
+        next_offset: None,
     })
 }
 

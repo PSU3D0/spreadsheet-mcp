@@ -56,7 +56,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
                     .workbooks
                     .iter()
                     .take(3)
-                    .map(|descriptor| descriptor.path.as_str())
+                    .filter_map(|descriptor| descriptor.path.as_deref())
                     .collect::<Vec<_>>()
                     .join(", ");
                 tracing::info!(

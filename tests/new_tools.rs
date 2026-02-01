@@ -21,6 +21,9 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
@@ -31,6 +34,9 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         state.clone(),
         ListSheetsParams {
             workbook_or_fork_id: workbook_id.clone(),
+            limit: None,
+            offset: None,
+            include_bounds: Some(true),
         },
     )
     .await?;
@@ -41,7 +47,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         .expect("inputs sheet exists");
     println!(
         "inputs rows {}, cols {}",
-        target_summary.row_count, target_summary.column_count
+        target_summary.row_count.unwrap_or(0),
+        target_summary.column_count.unwrap_or(0)
     );
     let target = target_summary.name.clone();
 
@@ -189,6 +196,9 @@ async fn find_value_search_headers_only() -> Result<()> {
             slug_prefix: None,
             folder: None,
             path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
         },
     )
     .await?;
