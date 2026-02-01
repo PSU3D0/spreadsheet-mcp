@@ -1,10 +1,11 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::{SheetPageFormat, TableOutputFormat};
 use spreadsheet_mcp::tools::{
-    ListSheetsParams, ListWorkbooksParams, RangeValuesParams, ReadTableParams, SheetPageParams,
-    SheetStatisticsParams, SheetStylesParams, TableProfileParams, WorkbookStyleSummaryParams,
-    WorkbookSummaryParams, list_sheets, list_workbooks, range_values, read_table, sheet_page,
-    sheet_statistics, sheet_styles, table_profile, workbook_style_summary, workbook_summary,
+    FindValueParams, ListSheetsParams, ListWorkbooksParams, RangeValuesParams, ReadTableParams,
+    SheetPageParams, SheetStatisticsParams, SheetStylesParams, TableProfileParams,
+    WorkbookStyleSummaryParams, WorkbookSummaryParams, find_value, list_sheets, list_workbooks,
+    range_values, read_table, sheet_page, sheet_statistics, sheet_styles, table_profile,
+    workbook_style_summary, workbook_summary,
 };
 use umya_spreadsheet::Spreadsheet;
 
@@ -804,4 +805,153 @@ fn build_styled_workbook(book: &mut Spreadsheet) {
     let sheet = book.get_sheet_by_name_mut("Sheet1").expect("Sheet1");
     sheet.get_style_mut("A2").get_font_mut().set_bold(true);
     sheet.get_style_mut("B2").get_font_mut().set_italic(true);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn find_value_context_defaults_to_none() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("find_context.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let result = find_value(
+        state,
+        FindValueParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            query: "Item 1".to_string(),
+            context: None, // default should be "none"
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert!(!result.matches.is_empty());
+    // With context=none (default), neighbors and row_context should be None
+    assert!(result.matches[0].neighbors.is_none());
+    assert!(result.matches[0].row_context.is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn find_value_context_neighbors() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("find_neighbors.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let result = find_value(
+        state,
+        FindValueParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            query: "Item 1".to_string(),
+            context: Some("neighbors".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert!(!result.matches.is_empty());
+    // With context=neighbors, neighbors should be Some
+    assert!(result.matches[0].neighbors.is_some());
+    // row_context should still be None
+    assert!(result.matches[0].row_context.is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn find_value_context_row() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("find_row.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let result = find_value(
+        state,
+        FindValueParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            query: "Item 1".to_string(),
+            context: Some("row".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert!(!result.matches.is_empty());
+    // With context=row, neighbors should be None but row_context populated
+    assert!(result.matches[0].neighbors.is_none());
+    assert!(result.matches[0].row_context.is_some());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn find_value_context_both() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("find_both.xlsx", build_simple_workbook);
+    let state = workspace.app_state();
+
+    let workbooks = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+
+    let result = find_value(
+        state,
+        FindValueParams {
+            workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
+            query: "Item 1".to_string(),
+            context: Some("both".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    assert!(!result.matches.is_empty());
+    // With context=both, both neighbors and row_context should be Some
+    assert!(result.matches[0].neighbors.is_some());
+    assert!(result.matches[0].row_context.is_some());
+    Ok(())
 }
