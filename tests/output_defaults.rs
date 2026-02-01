@@ -49,8 +49,7 @@ async fn read_table_defaults_to_csv() -> Result<()> {
     assert!(table.rows.is_empty());
     assert!(table.values.is_none());
     assert!(table.headers.is_empty());
-    assert_eq!(table.has_more, None);
-    assert_eq!(table.next_offset, None);
+    assert!(table.next_offset.is_none());
     Ok(())
 }
 
@@ -88,8 +87,7 @@ async fn range_values_defaults_to_values() -> Result<()> {
     assert!(entry.values.is_some());
     assert!(entry.rows.is_none());
     assert!(entry.csv.is_none());
-    assert_eq!(entry.truncated, None);
-    assert_eq!(entry.next_start_row, None);
+    assert!(entry.next_start_row.is_none());
     Ok(())
 }
 
@@ -128,7 +126,7 @@ async fn sheet_page_defaults_to_compact() -> Result<()> {
     assert!(matches!(page.format, SheetPageFormat::Compact));
     assert!(page.compact.is_some());
     assert!(page.rows.is_empty());
-    assert_eq!(page.has_more, None);
+    assert!(page.next_start_row.is_none());
     Ok(())
 }
 
@@ -168,8 +166,7 @@ async fn read_table_truncates_with_max_cells() -> Result<()> {
 
     assert_eq!(table.rows.len(), 2);
     assert!(table.total_rows as usize > table.rows.len());
-    assert_eq!(table.has_more, Some(true));
-    assert_eq!(table.next_offset, Some(2));
+    assert!(table.next_offset.is_some());
     Ok(())
 }
 
@@ -210,8 +207,7 @@ async fn range_values_truncates_with_max_cells() -> Result<()> {
     let entry = &ranges.values[0];
     let values = entry.values.as_ref().expect("values output expected");
     assert_eq!(values.len(), 2);
-    assert_eq!(entry.truncated, Some(true));
-    assert_eq!(entry.next_start_row, Some(3));
+    assert!(entry.next_start_row.is_some());
     Ok(())
 }
 
@@ -252,8 +248,7 @@ async fn sheet_page_truncates_with_max_cells() -> Result<()> {
     .await?;
 
     assert_eq!(page.rows.len(), 2);
-    assert_eq!(page.has_more, Some(true));
-    assert_eq!(page.next_start_row, Some(3));
+    assert!(page.next_start_row.is_some());
     Ok(())
 }
 

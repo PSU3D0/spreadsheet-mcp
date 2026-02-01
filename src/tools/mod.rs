@@ -575,7 +575,6 @@ pub async fn sheet_page(
                 &page.header,
                 &page.rows[..count],
                 None,
-                None,
             );
             serde_json::to_vec(&response)
                 .map(|payload| payload.len())
@@ -592,9 +591,11 @@ pub async fn sheet_page(
         .last()
         .map(|row| row.row_index)
         .unwrap_or(start_row.saturating_sub(1));
-    let has_more = last_row_index < metrics.metrics.row_count;
-    let has_more = if has_more { Some(true) } else { None };
-    let next_start_row = has_more.map(|_| last_row_index + 1);
+    let next_start_row = if last_row_index < metrics.metrics.row_count {
+        Some(last_row_index + 1)
+    } else {
+        None
+    };
 
     Ok(build_sheet_page_response(
         &workbook,
@@ -603,7 +604,6 @@ pub async fn sheet_page(
         include_header,
         &page.header,
         &page.rows,
-        has_more,
         next_start_row,
     ))
 }
@@ -653,10 +653,11 @@ pub async fn sheet_formula_map(
     let max_payload_bytes = config.max_payload_bytes();
 
     let graph = workbook.formula_graph(&params.sheet_name)?;
+    let all_groups = graph.groups();
+    let total_groups = all_groups.len();
     let mut groups = Vec::new();
-    let mut truncated = false;
 
-    for mut group in graph.groups() {
+    for mut group in all_groups {
         if let Some(range) = &params.range {
             group.addresses.retain(|addr| address_in_range(addr, range));
             if group.addresses.is_empty() {
@@ -672,7 +673,6 @@ pub async fn sheet_formula_map(
             group.addresses.clear();
         } else if !params.expand && address_count > addresses_limit as usize {
             group.addresses.truncate(addresses_limit as usize);
-            truncated = true;
         }
 
         groups.push(group);
@@ -695,13 +695,11 @@ pub async fn sheet_formula_map(
         && groups.len() > limit as usize
     {
         groups.truncate(limit as usize);
-        truncated = true;
     }
 
     if let Some(max_items) = max_items {
         if groups.len() > max_items {
             groups.truncate(max_items);
-            truncated = true;
         }
     }
 
@@ -712,7 +710,6 @@ pub async fn sheet_formula_map(
                 workbook_short_id: workbook.short_id.clone(),
                 sheet_name: params.sheet_name.clone(),
                 groups: groups[..count].to_vec(),
-                truncated: false,
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -722,12 +719,11 @@ pub async fn sheet_formula_map(
 
         if group_limit < groups.len() {
             groups.truncate(group_limit);
-            truncated = true;
         }
     }
 
-    let next_offset = if truncated {
-        Some(params.limit.unwrap_or(50))
+    let next_offset = if groups.len() < total_groups {
+        Some(groups.len() as u32)
     } else {
         None
     };
@@ -737,7 +733,6 @@ pub async fn sheet_formula_map(
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name.clone(),
         groups,
-        truncated,
         next_offset,
     };
     Ok(response)
@@ -1353,7 +1348,6 @@ fn build_sheet_page_response(
     include_header: bool,
     header: &Option<RowSnapshot>,
     rows: &[RowSnapshot],
-    has_more: Option<bool>,
     next_start_row: Option<u32>,
 ) -> SheetPageResponse {
     let compact_payload = if matches!(format, SheetPageFormat::Compact) {
@@ -1385,7 +1379,6 @@ fn build_sheet_page_response(
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: sheet_name.to_string(),
         rows: rows_payload,
-        has_more,
         next_start_row,
         header_row,
         compact: compact_payload,
@@ -2276,12 +2269,17 @@ pub async fn find_formula(
         }
     }
 
+    let next_offset = if truncated {
+        Some(offset.saturating_add(matches.len() as u32))
+    } else {
+        None
+    };
+
     let response = FindFormulaResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         matches,
-        truncated,
-        next_offset: truncated.then(|| offset.saturating_add(limit)),
+        next_offset,
     };
     Ok(response)
 }
@@ -2321,7 +2319,7 @@ pub async fn scan_volatiles(
     };
 
     let mut items = Vec::new();
-    let mut truncated = false;
+    let mut total_volatile_groups = 0usize;
 
     for sheet_name in target_sheets {
         let graph = workbook.formula_graph(&sheet_name)?;
@@ -2329,6 +2327,7 @@ pub async fn scan_volatiles(
             if !group.is_volatile {
                 continue;
             }
+            total_volatile_groups += 1;
 
             if summary_only {
                 items.push(VolatileScanEntry {
@@ -2346,9 +2345,6 @@ pub async fn scan_volatiles(
                         note: Some(group.formula.clone()),
                     });
                 }
-                if group.addresses.len() > addresses_limit as usize {
-                    truncated = true;
-                }
             } else {
                 items.push(VolatileScanEntry {
                     address: String::new(),
@@ -2360,10 +2356,11 @@ pub async fn scan_volatiles(
         }
     }
 
+    let total_items = items.len();
+
     if let Some(max_items) = max_items {
         if items.len() > max_items {
             items.truncate(max_items);
-            truncated = true;
         }
     }
 
@@ -2373,7 +2370,6 @@ pub async fn scan_volatiles(
                 workbook_id: workbook.id.clone(),
                 workbook_short_id: workbook.short_id.clone(),
                 items: items[..count].to_vec(),
-                truncated: false,
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -2383,12 +2379,11 @@ pub async fn scan_volatiles(
 
         if item_limit < items.len() {
             items.truncate(item_limit);
-            truncated = true;
         }
     }
 
-    let next_offset = if truncated {
-        Some(addresses_limit)
+    let next_offset = if items.len() < total_items {
+        Some(items.len() as u32)
     } else {
         None
     };
@@ -2397,7 +2392,6 @@ pub async fn scan_volatiles(
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         items,
-        truncated,
         next_offset,
     };
     Ok(response)
@@ -3130,11 +3124,17 @@ pub async fn find_value(
         }
     }
 
+    let next_offset = if truncated {
+        Some(matches.len() as u32)
+    } else {
+        None
+    };
+
     Ok(FindValueResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         matches,
-        truncated,
+        next_offset,
     })
 }
 
@@ -3196,7 +3196,6 @@ pub async fn read_table(
                 types: types_out,
                 csv: csv_out,
                 total_rows,
-                has_more: None,
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -3206,9 +3205,11 @@ pub async fn read_table(
     }
 
     let rows = rows.into_iter().take(row_limit).collect::<Vec<_>>();
-    let has_more = offset + rows.len() < total_rows as usize;
-    let has_more = if has_more { Some(true) } else { None };
-    let next_offset = has_more.map(|_| (offset + rows.len()) as u32);
+    let next_offset = if offset + rows.len() < total_rows as usize {
+        Some((offset + rows.len()) as u32)
+    } else {
+        None
+    };
     let (headers_out, rows_out, values_out, types_out, csv_out) =
         build_read_table_payload(format, &headers, &rows, include_headers, include_types);
 
@@ -3223,7 +3224,6 @@ pub async fn read_table(
         types: types_out,
         csv: csv_out,
         total_rows,
-        has_more,
         next_offset,
     })
 }

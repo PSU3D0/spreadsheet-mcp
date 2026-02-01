@@ -4,7 +4,8 @@ This plan translates the proposal in `docs/tool-output-verbosity-proposal.md` in
 
 ## Guiding Principles
 - Preserve current capabilities; make lightweight output the default.
-- Add pagination fields only when truncation occurs.
+- Use clean pagination: `limit`/`offset` params, `next_offset` response field only when more data exists.
+- No `truncated` or `has_more` fields - `next_offset` presence implies more data.
 - Keep changes opt-out via config for legacy behavior.
 
 ## Phase 0: Shared Infrastructure
@@ -168,21 +169,64 @@ This plan translates the proposal in `docs/tool-output-verbosity-proposal.md` in
 - Searches return minimal info by default but support rich context on demand.
 - Pagination fields appear only on truncation.
 
-## Phase 5: Metadata and Listing Tools
+## Phase 5: Pagination Cleanup (Align All Tools)
+
+**Scope**
+- Remove `truncated` and `has_more` fields from all responses.
+- Standardize on `next_offset` (or `next_start_row` for row-based tools) only.
+- Use `skip_serializing_if` so pagination fields disappear when not needed.
+
+**Tools to update:**
+| Tool | Current | Target |
+|------|---------|--------|
+| `read_table` | `has_more` + `next_offset` | `next_offset` only |
+| `sheet_page` | `has_more` + `next_start_row` | `next_start_row` only |
+| `range_values` | `truncated` + `next_start_row` | `next_start_row` only |
+| `table_profile` | `truncated` | remove (no pagination) |
+| `sheet_statistics` | `truncated` | remove (no pagination) |
+| `sheet_formula_map` | `truncated` + `next_offset` | `next_offset` only |
+| `find_formula` | `truncated` + `next_offset` | `next_offset` only |
+| `find_value` | `truncated` | add `next_offset` |
+| `scan_volatiles` | `truncated` + `next_offset` | `next_offset` only |
+| `sheet_styles` | `styles_truncated` | keep (different semantic: style list truncated) |
+| `workbook_style_summary` | `styles_truncated` + `conditional_formats_truncated` | keep (different semantic) |
+
+**Calculation pattern:**
+```rust
+let returned_count = items.len();
+let next_offset = if offset + returned_count < total_count {
+    Some((offset + returned_count) as u32)
+} else {
+    None
+};
+```
+
+**Tests**
+- Verify `next_offset` absent when all data returned.
+- Verify `next_offset` present and correct when more data exists.
+- Verify no `truncated` or `has_more` fields in any response.
+
+**DoD**
+- All list-returning tools use consistent pagination pattern.
+- Response JSON is minimal when data fits in one page.
+
+## Phase 6: Metadata and Listing Tools
 
 ### list_workbooks / list_sheets / workbook_summary
 **Changes**
 - Add `limit/offset` optional pagination.
 - Add `include_paths` (list_workbooks) and `include_bounds` (list_sheets) toggles.
+- Follow clean pagination pattern (no `truncated`, only `next_offset`).
 
 **Tests**
 - `list_workbooks_limit_offset`.
 - `list_sheets_include_bounds`.
+- `list_workbooks_no_pagination_when_small`.
 
-**DoD (Phase 5)**
+**DoD (Phase 6)**
 - Large workspaces can be paged without heavy payloads by default.
 
-## Phase 6: Docs, Migration, and Rollout
+## Phase 7: Docs, Migration, and Rollout
 
 **Changes**
 - Update `BASE_INSTRUCTIONS` to reflect new defaults and recommended usage.

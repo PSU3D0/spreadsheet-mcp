@@ -185,8 +185,6 @@ pub struct SheetPageResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<RowSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_more: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_row: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header_row: Option<RowSnapshot>,
@@ -306,7 +304,6 @@ pub struct SheetFormulaMapResponse {
     pub workbook_short_id: String,
     pub sheet_name: String,
     pub groups: Vec<FormulaGroup>,
-    pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }
@@ -461,7 +458,7 @@ pub struct FindFormulaResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub matches: Vec<FindFormulaMatch>,
-    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }
 
@@ -478,7 +475,6 @@ pub struct VolatileScanResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub items: Vec<VolatileScanEntry>,
-    pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }
@@ -813,7 +809,8 @@ pub struct FindValueResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub matches: Vec<FindValueMatch>,
-    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
 
 pub type TableRow = BTreeMap<String, Option<CellValue>>;
@@ -835,8 +832,6 @@ pub struct ReadTableResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<String>,
     pub total_rows: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_more: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }
