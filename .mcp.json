@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "./scripts/local-docker-mcp.sh"
+    }
+  }
+}
