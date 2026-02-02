@@ -222,10 +222,10 @@ pub async fn workbook_summary(
     let include_entry_points = params.include_entry_points.unwrap_or(!summary_only);
     let include_named_ranges = params.include_named_ranges.unwrap_or(!summary_only);
 
-    Ok(tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         build_workbook_summary(workbook, include_entry_points, include_named_ranges)
     })
-    .await??)
+    .await?
 }
 
 fn build_workbook_summary(
@@ -700,7 +700,7 @@ pub async fn sheet_page(
     let metrics = workbook.get_sheet_metrics_fast(&params.sheet_name)?;
     let config = state.config();
     let output_profile = config.output_profile();
-    let format = params.format.unwrap_or_else(|| match output_profile {
+    let format = params.format.unwrap_or(match output_profile {
         OutputProfile::TokenDense => SheetPageFormat::Compact,
         OutputProfile::Verbose => SheetPageFormat::Full,
     });
@@ -943,9 +943,7 @@ pub async fn sheet_formula_map(
 
         let address_count = group.addresses.len();
 
-        if summary_only {
-            group.addresses.clear();
-        } else if !include_addresses {
+        if summary_only || !include_addresses {
             group.addresses.clear();
         } else if !params.expand && address_count > addresses_limit as usize {
             group.addresses.truncate(addresses_limit as usize);
@@ -979,11 +977,10 @@ pub async fn sheet_formula_map(
         groups.truncate(limit as usize);
     }
 
-    if let Some(max_items) = max_items {
-        if groups.len() > max_items {
+    if let Some(max_items) = max_items
+        && groups.len() > max_items {
             groups.truncate(max_items);
         }
-    }
 
     if let Some(max_bytes) = max_payload_bytes {
         let group_limit = cap_rows_by_payload_bytes(groups.len(), Some(max_bytes), |count| {
@@ -1434,19 +1431,21 @@ fn filter_table_row(row: &TableRow, headers: &[String]) -> TableRow {
     filtered
 }
 
+type ReadTablePayload = (
+    Vec<String>,
+    Vec<TableRow>,
+    Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    Option<Vec<Vec<Option<CellValueKind>>>>,
+    Option<String>,
+);
+
 fn build_read_table_payload(
     format: TableOutputFormat,
     headers: &[String],
     rows: &[TableRow],
     include_headers: bool,
     include_types: bool,
-) -> (
-    Vec<String>,
-    Vec<TableRow>,
-    Option<Vec<Vec<Option<CellValuePrimitive>>>>,
-    Option<Vec<Vec<Option<CellValueKind>>>>,
-    Option<String>,
-) {
+) -> ReadTablePayload {
     let headers_out = if include_headers {
         headers.to_vec()
     } else {
@@ -1562,7 +1561,7 @@ where
     let mut low = 0usize;
     let mut high = row_count;
     while low < high {
-        let mid = (low + high + 1) / 2;
+        let mid = (low + high).div_ceil(2);
         if size_for_rows(mid) <= max_bytes {
             low = mid;
         } else {
@@ -2738,11 +2737,10 @@ pub async fn scan_volatiles(
 
     let total_items = items.len();
 
-    if let Some(max_items) = max_items {
-        if items.len() > max_items {
+    if let Some(max_items) = max_items
+        && items.len() > max_items {
             items.truncate(max_items);
         }
-    }
 
     if let Some(max_bytes) = max_payload_bytes {
         let item_limit = cap_rows_by_payload_bytes(items.len(), Some(max_bytes), |count| {
@@ -3369,7 +3367,7 @@ pub async fn range_values(
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let config = state.config();
     let output_profile = config.output_profile();
-    let format = params.format.unwrap_or_else(|| match output_profile {
+    let format = params.format.unwrap_or(match output_profile {
         OutputProfile::TokenDense => TableOutputFormat::Values,
         OutputProfile::Verbose => TableOutputFormat::Json,
     });
@@ -3529,7 +3527,7 @@ pub async fn read_table(
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let config = state.config();
     let output_profile = config.output_profile();
-    let format = params.format.unwrap_or_else(|| match output_profile {
+    let format = params.format.unwrap_or(match output_profile {
         OutputProfile::TokenDense => TableOutputFormat::Csv,
         OutputProfile::Verbose => TableOutputFormat::Json,
     });
@@ -3631,7 +3629,7 @@ pub async fn table_profile(
             header_rows: None,
             columns: None,
             filters: None,
-            sample_mode: params.sample_mode.clone(),
+            sample_mode: params.sample_mode,
             limit: params.sample_size,
             offset: Some(0),
             format: Some(TableOutputFormat::Json),
@@ -3661,11 +3659,10 @@ pub async fn table_profile(
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
 
-    if let Some(max_items) = max_items {
-        if headers.len() > max_items {
+    if let Some(max_items) = max_items
+        && headers.len() > max_items {
             headers.truncate(max_items);
         }
-    }
 
     let mut column_types = summarize_columns(&headers, &rows);
 
@@ -3678,11 +3675,10 @@ pub async fn table_profile(
     };
 
     if !summary_only {
-        if let Some(max_items) = max_items {
-            if samples.len() > max_items {
+        if let Some(max_items) = max_items
+            && samples.len() > max_items {
                 samples.truncate(max_items);
             }
-        }
 
         if let Some(max_bytes) = max_payload_bytes {
             let sample_limit = cap_rows_by_payload_bytes(samples.len(), Some(max_bytes), |count| {

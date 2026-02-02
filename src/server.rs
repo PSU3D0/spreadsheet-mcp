@@ -1112,9 +1112,7 @@ impl ServerHandler for SpreadsheetServer {
 }
 
 fn to_mcp_error(error: anyhow::Error) -> McpError {
-    if error.downcast_ref::<ToolDisabledError>().is_some() {
-        McpError::invalid_request(error.to_string(), None)
-    } else if error.downcast_ref::<ResponseTooLargeError>().is_some() {
+    if error.is::<ToolDisabledError>() || error.is::<ResponseTooLargeError>() {
         McpError::invalid_request(error.to_string(), None)
     } else {
         McpError::internal_error(error.to_string(), None)
