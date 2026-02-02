@@ -93,13 +93,19 @@ pub async fn describe_workbook(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListWorkbooksParams {
+    /// Filter by workbook slug prefix
     pub slug_prefix: Option<String>,
+    /// Filter by folder path
     pub folder: Option<String>,
+    /// Filter by glob pattern (e.g., "**/*.xlsx")
     pub path_glob: Option<String>,
+    /// Maximum number of workbooks to return (default: 100)
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Offset for pagination; use next_offset from previous response
     #[serde(default)]
     pub offset: Option<u32>,
+    /// Include file paths and capabilities (default: false in token_dense profile)
     #[serde(default)]
     pub include_paths: Option<bool>,
 }
@@ -118,12 +124,16 @@ pub struct DescribeWorkbookParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListSheetsParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Maximum number of sheets to return (default: 100)
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Offset for pagination; use next_offset from previous response
     #[serde(default)]
     pub offset: Option<u32>,
+    /// Include row/column counts and metrics (default: false in token_dense profile)
     #[serde(default)]
     pub include_bounds: Option<bool>,
 }
@@ -167,25 +177,34 @@ pub async fn list_sheets(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetOverviewParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// Maximum detected regions to return (default: 25)
     #[serde(default)]
     pub max_regions: Option<u32>,
+    /// Maximum headers per region (default: 50)
     #[serde(default)]
     pub max_headers: Option<u32>,
+    /// Include headers in region info (default: true)
     #[serde(default)]
     pub include_headers: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkbookSummaryParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Return minimal summary without entry points or named ranges (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
+    /// Include suggested entry points for exploration (default: !summary_only)
     #[serde(default)]
     pub include_entry_points: Option<bool>,
+    /// Include key named ranges and tables (default: !summary_only)
     #[serde(default)]
     pub include_named_ranges: Option<bool>,
 }
@@ -439,23 +458,33 @@ fn default_include_header() -> bool {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetPageParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// 1-based starting row (default: 1)
     #[serde(default = "default_start_row")]
     pub start_row: u32,
+    /// Number of rows per page (default: 50, max: 500)
     #[serde(default = "default_page_size")]
     pub page_size: u32,
+    /// Limit to specific columns by letter (e.g., ["A", "C", "D"])
     #[serde(default)]
     pub columns: Option<Vec<String>>,
+    /// Limit to columns by header text (matched case-insensitively)
     #[serde(default)]
     pub columns_by_header: Option<Vec<String>>,
+    /// Include formulas (default: false in token_dense profile)
     #[serde(default = "default_include_formulas")]
     pub include_formulas: bool,
+    /// Include style information (default: false)
     #[serde(default)]
     pub include_styles: bool,
+    /// Include header row in response (default: true)
     #[serde(default = "default_include_header")]
     pub include_header: bool,
+    /// Output format: "compact" (default in token_dense) or "full" (per-cell objects)
     #[serde(default)]
     pub format: Option<SheetPageFormat>,
 }
@@ -483,35 +512,51 @@ fn default_find_limit() -> u32 {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FindValueParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Value or pattern to search for
     pub query: String,
+    /// For label mode: find cells near this label text
     #[serde(default)]
     pub label: Option<String>,
+    /// Search mode: "value" (default) or "label" for key-value lookups
     #[serde(default)]
     pub mode: Option<FindMode>,
+    /// Match mode for text comparison
     #[serde(default)]
-    pub match_mode: Option<String>,
+    pub match_mode: Option<MatchMode>,
+    /// Case-sensitive matching (default: false)
     #[serde(default)]
     pub case_sensitive: bool,
+    /// Limit search to specific sheet
     #[serde(default)]
     pub sheet_name: Option<String>,
+    /// Limit search to specific detected region
     #[serde(default)]
     pub region_id: Option<u32>,
+    /// Limit search to specific named table
     #[serde(default)]
     pub table_name: Option<String>,
+    /// Filter by value types
     #[serde(default)]
-    pub value_types: Option<Vec<String>>,
+    pub value_types: Option<Vec<ValueTypeFilter>>,
+    /// Only search in header rows (default: false)
     #[serde(default)]
     pub search_headers_only: bool,
+    /// For label mode: direction to look for value
     #[serde(default)]
     pub direction: Option<LabelDirection>,
+    /// Maximum matches to return (default: 50)
     #[serde(default = "default_find_limit")]
     pub limit: u32,
+    /// Offset for pagination
     #[serde(default)]
     pub offset: Option<u32>,
+    /// Context to include with matches
     #[serde(default)]
-    pub context: Option<String>,
+    pub context: Option<FindContext>,
+    /// Number of cells in each direction for context (default: 3)
     #[serde(default)]
     pub context_width: Option<u32>,
 }
@@ -541,73 +586,104 @@ impl Default for FindValueParams {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ReadTableParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name (uses first sheet if omitted)
     #[serde(default)]
     pub sheet_name: Option<String>,
+    /// Read from a named Excel table
     #[serde(default)]
     pub table_name: Option<String>,
+    /// Read from a detected region by ID (from sheet_overview)
     #[serde(default)]
     pub region_id: Option<u32>,
+    /// A1-style range (e.g., "A1:D100")
     #[serde(default)]
     pub range: Option<String>,
+    /// 1-based row number for headers (auto-detected if omitted)
     #[serde(default)]
     pub header_row: Option<u32>,
+    /// Number of header rows for multi-row headers (default: 1)
     #[serde(default)]
     pub header_rows: Option<u32>,
+    /// Limit to specific columns by letter (e.g., ["A", "C", "D"])
     #[serde(default)]
     pub columns: Option<Vec<String>>,
+    /// Row filters to apply
     #[serde(default)]
     pub filters: Option<Vec<TableFilter>>,
+    /// Sampling mode for selecting rows
     #[serde(default)]
-    pub sample_mode: Option<String>,
+    pub sample_mode: Option<SampleMode>,
+    /// Maximum rows to return
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Offset for pagination; use next_offset from previous response
     #[serde(default)]
     pub offset: Option<u32>,
+    /// Output format: "csv" (default), "values" (arrays), or "json" (typed CellValue)
     #[serde(default)]
     pub format: Option<TableOutputFormat>,
+    /// Include header row in output (default: true for csv)
     #[serde(default)]
     pub include_headers: Option<bool>,
+    /// Include column type information (default: false)
     #[serde(default)]
     pub include_types: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
 pub struct TableFilter {
+    /// Column letter or header name
     pub column: String,
-    pub op: String,
+    /// Comparison operator
+    pub op: FilterOp,
+    /// Value to compare against
     pub value: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct TableProfileParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name (uses first sheet if omitted)
     #[serde(default)]
     pub sheet_name: Option<String>,
+    /// Profile a detected region by ID
     #[serde(default)]
     pub region_id: Option<u32>,
+    /// Profile a named Excel table
     #[serde(default)]
     pub table_name: Option<String>,
+    /// Sampling mode for selecting sample rows
     #[serde(default)]
-    pub sample_mode: Option<String>,
+    pub sample_mode: Option<SampleMode>,
+    /// Number of sample rows to include (default: 5)
     #[serde(default)]
     pub sample_size: Option<u32>,
+    /// Return only column types without samples (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RangeValuesParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// A1-style ranges to read (e.g., ["A1:C10", "E1:E10"])
     pub ranges: Vec<String>,
+    /// Include detected header row (default: true)
     #[serde(default)]
     pub include_headers: Option<bool>,
+    /// Output format: "values" (default), "csv", or "json"
     #[serde(default)]
     pub format: Option<TableOutputFormat>,
+    /// Maximum rows per range before pagination
     #[serde(default)]
     pub page_size: Option<u32>,
 }
@@ -710,20 +786,29 @@ pub async fn sheet_page(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetFormulaMapParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// Limit to A1-style range (e.g., "D2:D100")
     pub range: Option<String>,
+    /// Expand range references in formulas (default: false)
     #[serde(default)]
     pub expand: bool,
+    /// Maximum formula groups to return
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Sort by: "address" (default), "complexity" (longest formulas first), "count" (most repeated first)
     #[serde(default)]
     pub sort_by: Option<FormulaSortBy>,
+    /// Return only formula text and count without addresses (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
+    /// Include cell addresses for each formula group (default: !summary_only)
     #[serde(default)]
     pub include_addresses: Option<bool>,
+    /// Maximum addresses to include per formula group (default: 15)
     #[serde(default)]
     pub addresses_limit: Option<u32>,
 }
@@ -735,6 +820,98 @@ pub enum FormulaSortBy {
     Address,
     Complexity,
     Count,
+}
+
+/// Match mode for text searches
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    /// Substring match (default)
+    #[default]
+    Contains,
+    /// Exact match
+    Exact,
+    /// Prefix match
+    Prefix,
+    /// Regular expression match
+    Regex,
+}
+
+/// Context to include with find_value matches
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindContext {
+    /// No context (default)
+    #[default]
+    None,
+    /// Include neighboring cells
+    Neighbors,
+    /// Include full row context
+    Row,
+    /// Include both neighbors and row context
+    Both,
+}
+
+/// Sampling mode for table reads
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleMode {
+    /// First N rows (default)
+    #[default]
+    First,
+    /// Last N rows
+    Last,
+    /// Evenly distributed sample
+    Distributed,
+}
+
+/// Granularity for style analysis
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleGranularity {
+    /// Group contiguous cells with same style (default)
+    #[default]
+    Runs,
+    /// Report each cell individually
+    Cells,
+}
+
+/// Filter operators for table queries
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterOp {
+    /// Equal
+    Eq,
+    /// Not equal
+    #[serde(alias = "ne")]
+    Neq,
+    /// Greater than
+    Gt,
+    /// Less than
+    Lt,
+    /// Greater than or equal
+    Gte,
+    /// Less than or equal
+    Lte,
+    /// Contains substring (text only)
+    Contains,
+    /// Starts with prefix (text only)
+    StartsWith,
+    /// Ends with suffix (text only)
+    EndsWith,
+    /// Value is in list
+    In,
+}
+
+/// Cell value types for filtering
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueTypeFilter {
+    Text,
+    Number,
+    Bool,
+    Date,
+    Null,
 }
 
 pub async fn sheet_formula_map(
@@ -1521,11 +1698,15 @@ fn default_stats_sample() -> usize {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetStatisticsParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// Number of rows to sample for statistics (default: 500)
     #[serde(default)]
     pub sample_rows: Option<usize>,
+    /// Return stats without sample values (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
 }
@@ -1752,7 +1933,7 @@ fn extract_table_rows(
     filters: Option<Vec<TableFilter>>,
     limit: usize,
     offset: usize,
-    sample_mode: &str,
+    sample_mode: SampleMode,
 ) -> Result<(Vec<String>, Vec<TableRow>, u32)> {
     let ((start_col, start_row), (end_col, end_row)) = target.range;
     let mut header_start = header_row.or(target.header_hint).unwrap_or(start_row);
@@ -1788,7 +1969,7 @@ fn extract_table_rows(
             continue;
         }
         total_rows += 1;
-        if matches!(sample_mode, "first" | "all") && total_rows as usize > offset + limit {
+        if matches!(sample_mode, SampleMode::First) && total_rows as usize > offset + limit {
             continue;
         }
         all_rows.push(row);
@@ -1861,33 +2042,53 @@ fn row_passes_filters(row: &TableRow, filters: Option<&Vec<TableFilter>>) -> boo
     if let Some(filters) = filters {
         for filter in filters {
             if let Some(value) = row.get(&filter.column) {
-                match filter.op.as_str() {
-                    "eq" => {
+                match filter.op {
+                    FilterOp::Eq => {
                         if !value_eq(value, &filter.value) {
                             return false;
                         }
                     }
-                    "neq" => {
+                    FilterOp::Neq => {
                         if value_eq(value, &filter.value) {
                             return false;
                         }
                     }
-                    "contains" => {
+                    FilterOp::Contains => {
                         if !value_contains(value, &filter.value) {
                             return false;
                         }
                     }
-                    "gt" => {
+                    FilterOp::Gt => {
                         if !value_gt(value, &filter.value) {
                             return false;
                         }
                     }
-                    "lt" => {
+                    FilterOp::Lt => {
                         if !value_lt(value, &filter.value) {
                             return false;
                         }
                     }
-                    "in" => {
+                    FilterOp::Gte => {
+                        if !value_gte(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    FilterOp::Lte => {
+                        if !value_lte(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    FilterOp::StartsWith => {
+                        if !value_starts_with(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    FilterOp::EndsWith => {
+                        if !value_ends_with(value, &filter.value) {
+                            return false;
+                        }
+                    }
+                    FilterOp::In => {
                         let list = filter
                             .value
                             .as_array()
@@ -1897,7 +2098,6 @@ fn row_passes_filters(row: &TableRow, filters: Option<&Vec<TableFilter>>) -> boo
                             return false;
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -1950,13 +2150,45 @@ fn value_lt(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
     }
 }
 
-fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: &str) -> Vec<TableRow> {
+fn value_gte(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    match (cell, cmp) {
+        (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
+            v.as_f64().is_some_and(|f| *n >= f)
+        }
+        _ => false,
+    }
+}
+
+fn value_lte(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    match (cell, cmp) {
+        (Some(CellValue::Number(n)), serde_json::Value::Number(v)) => {
+            v.as_f64().is_some_and(|f| *n <= f)
+        }
+        _ => false,
+    }
+}
+
+fn value_starts_with(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    if let (Some(CellValue::Text(s)), serde_json::Value::String(t)) = (cell, cmp) {
+        return s.to_ascii_lowercase().starts_with(&t.to_ascii_lowercase());
+    }
+    false
+}
+
+fn value_ends_with(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
+    if let (Some(CellValue::Text(s)), serde_json::Value::String(t)) = (cell, cmp) {
+        return s.to_ascii_lowercase().ends_with(&t.to_ascii_lowercase());
+    }
+    false
+}
+
+fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: SampleMode) -> Vec<TableRow> {
     if rows.is_empty() {
         return rows;
     }
 
     match mode {
-        "distributed" => {
+        SampleMode::Distributed => {
             if limit == 0 {
                 return Vec::new();
             }
@@ -1982,11 +2214,11 @@ fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: &str) -> 
                 .filter_map(|i| rows.get(i).cloned())
                 .collect()
         }
-        "last" => {
+        SampleMode::Last => {
             let start = rows.len().saturating_sub(limit + offset);
             rows.into_iter().skip(start + offset).take(limit).collect()
         }
-        _ => rows.into_iter().skip(offset).take(limit).collect(),
+        SampleMode::First => rows.into_iter().skip(offset).take(limit).collect(),
     }
 }
 
@@ -2068,7 +2300,7 @@ fn collect_value_matches(
     sheet: &umya_spreadsheet::Worksheet,
     sheet_name: &str,
     mode: &FindMode,
-    match_mode: &str,
+    match_mode: MatchMode,
     direction: &LabelDirection,
     params: &FindValueParams,
     region: Option<&DetectedRegion>,
@@ -2079,7 +2311,7 @@ fn collect_value_matches(
 ) -> Result<(Vec<FindValueMatch>, u32, bool)> {
     let mut results = Vec::new();
     let mut seen = seen_so_far;
-    let regex = if match_mode == "regex" {
+    let regex = if match_mode == MatchMode::Regex {
         Regex::new(&params.query).ok()
     } else {
         None
@@ -2091,19 +2323,9 @@ fn collect_value_matches(
 
     let header_row = region.and_then(|r| r.header_row).unwrap_or(1);
 
-    let context_mode = params
-        .context
-        .as_deref()
-        .unwrap_or("none")
-        .to_ascii_lowercase();
-    let include_neighbors = matches!(context_mode.as_str(), "neighbors" | "both");
-    let include_row_context = matches!(context_mode.as_str(), "row" | "both");
-    if !matches!(context_mode.as_str(), "none" | "neighbors" | "row" | "both") {
-        return Err(anyhow!(
-            "invalid context '{}'; expected none, neighbors, row, or both",
-            context_mode
-        ));
-    }
+    let context_mode = params.context.unwrap_or_default();
+    let include_neighbors = matches!(context_mode, FindContext::Neighbors | FindContext::Both);
+    let include_row_context = matches!(context_mode, FindContext::Row | FindContext::Both);
     let context_width = params.context_width.unwrap_or(3).max(1);
 
     for cell in sheet.get_cell_collection() {
@@ -2213,7 +2435,7 @@ fn label_from_cell(cell: &umya_spreadsheet::Cell) -> String {
 fn value_matches(
     value: &Option<CellValue>,
     query: &str,
-    mode: &str,
+    mode: MatchMode,
     case_sensitive: bool,
     regex: &Option<Regex>,
 ) -> bool {
@@ -2228,19 +2450,20 @@ fn value_matches(
     };
 
     match mode {
-        "exact" => haystack == needle,
-        "regex" => regex
+        MatchMode::Exact => haystack == needle,
+        MatchMode::Prefix => haystack.starts_with(&needle),
+        MatchMode::Regex => regex
             .as_ref()
             .map(|re| re.is_match(&haystack))
             .unwrap_or(false),
-        _ => haystack.contains(&needle),
+        MatchMode::Contains => haystack.contains(&needle),
     }
 }
 
 fn label_matches(
     cell: &umya_spreadsheet::Cell,
     label: &str,
-    mode: &str,
+    mode: MatchMode,
     case_sensitive: bool,
     regex: &Option<Regex>,
 ) -> bool {
@@ -2255,24 +2478,25 @@ fn label_matches(
         label.to_ascii_lowercase()
     };
     match mode {
-        "exact" => haystack == needle,
-        "regex" => regex
+        MatchMode::Exact => haystack == needle,
+        MatchMode::Prefix => haystack.starts_with(&needle),
+        MatchMode::Regex => regex
             .as_ref()
             .map(|re| re.is_match(&haystack))
             .unwrap_or(false),
-        _ => haystack.contains(&needle),
+        MatchMode::Contains => haystack.contains(&needle),
     }
 }
 
-fn value_type_matches(value: &Option<CellValue>, allowed: &[String]) -> bool {
+fn value_type_matches(value: &Option<CellValue>, allowed: &[ValueTypeFilter]) -> bool {
     if value.is_none() {
-        return allowed.iter().any(|v| v == "null");
+        return allowed.contains(&ValueTypeFilter::Null);
     }
     match value.as_ref().unwrap() {
-        CellValue::Text(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("text")),
-        CellValue::Number(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("number")),
-        CellValue::Bool(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("bool")),
-        CellValue::Date(_) => allowed.iter().any(|v| v.eq_ignore_ascii_case("date")),
+        CellValue::Text(_) => allowed.contains(&ValueTypeFilter::Text),
+        CellValue::Number(_) => allowed.contains(&ValueTypeFilter::Number),
+        CellValue::Bool(_) => allowed.contains(&ValueTypeFilter::Bool),
+        CellValue::Date(_) => allowed.contains(&ValueTypeFilter::Date),
         CellValue::Error(_) => true,
     }
 }
@@ -2339,20 +2563,29 @@ fn default_find_formula_limit() -> u32 {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct FindFormulaParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Text to search for in formulas (e.g., "SUM(", "VLOOKUP")
     pub query: String,
+    /// Limit to specific sheet (searches all if omitted)
     pub sheet_name: Option<String>,
+    /// Case-sensitive matching (default: false)
     #[serde(default)]
     pub case_sensitive: bool,
+    /// Include header row and cell context (default: false)
     #[serde(default)]
     pub include_context: bool,
+    /// Maximum matches to return (default: 50)
     #[serde(default = "default_find_formula_limit")]
     pub limit: u32,
+    /// Offset for pagination; use next_offset from previous response
     #[serde(default)]
     pub offset: u32,
+    /// Rows of context to include above/below (requires include_context=true)
     #[serde(default)]
     pub context_rows: Option<u32>,
+    /// Columns of context to include left/right (requires include_context=true)
     #[serde(default)]
     pub context_cols: Option<u32>,
 }
@@ -2426,13 +2659,18 @@ pub async fn find_formula(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScanVolatilesParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Limit to specific sheet (scans all if omitted)
     pub sheet_name: Option<String>,
+    /// Return counts only without addresses (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
+    /// Include cell addresses for each volatile (default: !summary_only)
     #[serde(default)]
     pub include_addresses: Option<bool>,
+    /// Maximum addresses to include per volatile function (default: 15)
     #[serde(default)]
     pub addresses_limit: Option<u32>,
 }
@@ -2536,19 +2774,28 @@ pub async fn scan_volatiles(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkbookStyleSummaryParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Maximum distinct styles to return (default: 50)
     pub max_styles: Option<u32>,
+    /// Maximum conditional format rules to return (default: 20)
     pub max_conditional_formats: Option<u32>,
+    /// Maximum cells to scan per sheet (default: 10000)
     pub max_cells_scan: Option<u32>,
+    /// Return counts and tags only, no descriptors (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
+    /// Include full style descriptors (fonts, fills, borders)
     #[serde(default)]
     pub include_descriptor: Option<bool>,
+    /// Include example cell addresses for each style
     #[serde(default)]
     pub include_example_cells: Option<bool>,
+    /// Include workbook theme colors
     #[serde(default)]
     pub include_theme: Option<bool>,
+    /// Include conditional formatting rules
     #[serde(default)]
     pub include_conditional_formats: Option<bool>,
 }
@@ -2880,21 +3127,30 @@ pub async fn workbook_style_summary(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SheetStylesParams {
+    /// Workbook ID or fork ID
     #[serde(alias = "workbook_id")]
     pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
     pub sheet_name: String,
+    /// Limit scope: use range (e.g., "A1:D100") or region_id
     #[serde(default)]
     pub scope: Option<SheetStylesScope>,
+    /// Granularity for style grouping
     #[serde(default)]
-    pub granularity: Option<String>,
+    pub granularity: Option<StyleGranularity>,
+    /// Maximum style entries to return (default: 100)
     #[serde(default)]
     pub max_items: Option<usize>,
+    /// Return counts and tags only (default: true in token_dense profile)
     #[serde(default)]
     pub summary_only: Option<bool>,
+    /// Include full style descriptors (fonts, fills, borders)
     #[serde(default)]
     pub include_descriptor: Option<bool>,
+    /// Include cell ranges for each style
     #[serde(default)]
     pub include_ranges: Option<bool>,
+    /// Include example cell addresses
     #[serde(default)]
     pub include_example_cells: Option<bool>,
 }
@@ -2972,17 +3228,7 @@ pub async fn sheet_styles(
         None => full_bounds,
     };
 
-    let granularity = params
-        .granularity
-        .as_deref()
-        .unwrap_or("runs")
-        .to_ascii_lowercase();
-    if granularity != "runs" && granularity != "cells" {
-        return Err(anyhow!(
-            "invalid granularity: {} (expected runs|cells)",
-            granularity
-        ));
-    }
+    let granularity = params.granularity.unwrap_or_default();
 
     let max_items = params
         .max_items
@@ -3029,7 +3275,7 @@ pub async fn sheet_styles(
                     entry.positions.dedup();
 
                     let (cell_ranges, ranges_truncated) = if include_ranges {
-                        if granularity == "cells" {
+                        if granularity == StyleGranularity::Cells {
                             let mut out = Vec::new();
                             for (row, col) in entry.positions.iter().take(max_items) {
                                 out.push(crate::utils::cell_address(*col, *row));
@@ -3212,11 +3458,7 @@ pub async fn find_value(
             FindMode::Value
         }
     });
-    let match_mode = params
-        .match_mode
-        .as_deref()
-        .unwrap_or("contains")
-        .to_ascii_lowercase();
+    let match_mode = params.match_mode.unwrap_or_default();
     let direction = params.direction.clone().unwrap_or(LabelDirection::Any);
 
     let target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
@@ -3243,7 +3485,7 @@ pub async fn find_value(
                     sheet,
                     &sheet_name,
                     &mode,
-                    &match_mode,
+                    match_mode,
                     &direction,
                     &params,
                     region_bounds.as_ref(),
@@ -3291,10 +3533,7 @@ pub async fn read_table(
     let resolved = resolve_table_target(&workbook, &params)?;
     let limit = params.limit.unwrap_or(100) as usize;
     let offset = params.offset.unwrap_or(0) as usize;
-    let sample_mode = params
-        .sample_mode
-        .clone()
-        .unwrap_or_else(|| "first".to_string());
+    let sample_mode = params.sample_mode.unwrap_or_default();
 
     let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
         extract_table_rows(
@@ -3306,7 +3545,7 @@ pub async fn read_table(
             params.filters.clone(),
             limit,
             offset,
-            &sample_mode,
+            sample_mode,
         )
     })??;
 
@@ -3397,10 +3636,7 @@ pub async fn table_profile(
     )?;
 
     let sample_size = params.sample_size.unwrap_or(10) as usize;
-    let sample_mode = params
-        .sample_mode
-        .clone()
-        .unwrap_or_else(|| "distributed".to_string());
+    let sample_mode = params.sample_mode.unwrap_or(SampleMode::Distributed);
 
     let (mut headers, rows, total_rows) =
         workbook.with_sheet(&resolved.sheet_name, |sheet| {
@@ -3413,7 +3649,7 @@ pub async fn table_profile(
                 None,
                 sample_size,
                 0,
-                &sample_mode,
+                sample_mode,
             )
         })??;
 

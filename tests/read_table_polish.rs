@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 use spreadsheet_mcp::model::{CellValue, TableOutputFormat};
-use spreadsheet_mcp::tools::TableFilter;
+use spreadsheet_mcp::tools::{FilterOp, SampleMode, TableFilter};
 use spreadsheet_mcp::tools::{ListWorkbooksParams, ReadTableParams, list_workbooks, read_table};
 
 mod support;
@@ -124,10 +124,10 @@ async fn read_table_handles_multi_row_headers_and_filters() -> Result<()> {
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
                 column: "Group / Y".into(),
-                op: "gt".into(),
+                op: FilterOp::Gt,
                 value: json!(15),
             }]),
-            sample_mode: Some("distributed".into()),
+            sample_mode: Some(SampleMode::Distributed),
             limit: Some(2),
             format: Some(TableOutputFormat::Json),
             ..Default::default()
@@ -189,7 +189,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
                 column: "Q1 / Value".into(),
-                op: "in".into(),
+                op: FilterOp::In,
                 value: json!([1, "3"]),
             }]),
             limit: Some(5),
@@ -209,7 +209,7 @@ async fn read_table_expands_merged_headers_and_in_filters() -> Result<()> {
             header_rows: Some(2),
             filters: Some(vec![TableFilter {
                 column: "Q1 / Name".into(),
-                op: "neq".into(),
+                op: FilterOp::Neq,
                 value: json!("alpha"),
             }]),
             limit: Some(5),
@@ -259,12 +259,12 @@ async fn read_table_large_range_stops_after_limit_and_counts() -> Result<()> {
             header_row: Some(1),
             filters: Some(vec![TableFilter {
                 column: "Y".into(),
-                op: "gt".into(),
+                op: FilterOp::Gt,
                 value: json!(50),
             }]),
             limit: Some(5),
             offset: Some(1),
-            sample_mode: Some("first".into()),
+            sample_mode: Some(SampleMode::First),
             format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
@@ -319,7 +319,7 @@ async fn read_table_handles_huge_sheet_sampling() -> Result<()> {
             header_row: Some(1),
             limit: Some(10),
             offset: Some(5),
-            sample_mode: Some("first".into()),
+            sample_mode: Some(SampleMode::First),
             format: Some(TableOutputFormat::Json),
             ..Default::default()
         },
@@ -420,7 +420,7 @@ async fn read_table_filter_contains_case_insensitive() -> Result<()> {
             sheet_name: Some("Sheet1".into()),
             filters: Some(vec![TableFilter {
                 column: "Name".into(),
-                op: "contains".into(),
+                op: FilterOp::Contains,
                 value: json!("BREAD"),
             }]),
             limit: Some(10),

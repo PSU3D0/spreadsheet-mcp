@@ -1,7 +1,8 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::FillDescriptor;
 use spreadsheet_mcp::tools::{
-    ListWorkbooksParams, SheetStylesParams, SheetStylesScope, list_workbooks, sheet_styles,
+    ListWorkbooksParams, SheetStylesParams, SheetStylesScope, StyleGranularity, list_workbooks,
+    sheet_styles,
 };
 use umya_spreadsheet::{
     GradientStop, HorizontalAlignmentValues, NumberingFormat, PatternValues,
@@ -162,7 +163,7 @@ async fn sheet_styles_runs_respect_scope() -> Result<()> {
             scope: Some(SheetStylesScope::Range {
                 range: "A1:C1".to_string(),
             }),
-            granularity: Some("runs".to_string()),
+            granularity: Some(StyleGranularity::Runs),
             max_items: Some(50),
             summary_only: Some(false),
             include_descriptor: None,
@@ -225,7 +226,7 @@ async fn sheet_styles_cells_truncates() -> Result<()> {
             scope: Some(SheetStylesScope::Range {
                 range: "A1:C1".to_string(),
             }),
-            granularity: Some("cells".to_string()),
+            granularity: Some(StyleGranularity::Cells),
             max_items: Some(2),
             summary_only: Some(false),
             include_descriptor: None,
