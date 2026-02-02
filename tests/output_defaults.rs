@@ -1,8 +1,8 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::{SheetPageFormat, TableOutputFormat};
 use spreadsheet_mcp::tools::{
-    FindValueParams, ListSheetsParams, ListWorkbooksParams, RangeValuesParams, ReadTableParams,
-    SheetPageParams, SheetStatisticsParams, SheetStylesParams, TableProfileParams,
+    FindContext, FindValueParams, ListSheetsParams, ListWorkbooksParams, RangeValuesParams,
+    ReadTableParams, SheetPageParams, SheetStatisticsParams, SheetStylesParams, TableProfileParams,
     WorkbookStyleSummaryParams, WorkbookSummaryParams, find_value, list_sheets, list_workbooks,
     range_values, read_table, sheet_page, sheet_statistics, sheet_styles, table_profile,
     workbook_style_summary, workbook_summary,
@@ -868,7 +868,7 @@ async fn find_value_context_neighbors() -> Result<()> {
         FindValueParams {
             workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
             query: "Item 1".to_string(),
-            context: Some("neighbors".to_string()),
+            context: Some(FindContext::Neighbors),
             ..Default::default()
         },
     )
@@ -906,7 +906,7 @@ async fn find_value_context_row() -> Result<()> {
         FindValueParams {
             workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
             query: "Item 1".to_string(),
-            context: Some("row".to_string()),
+            context: Some(FindContext::Row),
             ..Default::default()
         },
     )
@@ -943,7 +943,7 @@ async fn find_value_context_both() -> Result<()> {
         FindValueParams {
             workbook_or_fork_id: workbooks.workbooks[0].workbook_id.clone(),
             query: "Item 1".to_string(),
-            context: Some("both".to_string()),
+            context: Some(FindContext::Both),
             ..Default::default()
         },
     )
