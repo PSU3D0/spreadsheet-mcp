@@ -978,9 +978,10 @@ pub async fn sheet_formula_map(
     }
 
     if let Some(max_items) = max_items
-        && groups.len() > max_items {
-            groups.truncate(max_items);
-        }
+        && groups.len() > max_items
+    {
+        groups.truncate(max_items);
+    }
 
     if let Some(max_bytes) = max_payload_bytes {
         let group_limit = cap_rows_by_payload_bytes(groups.len(), Some(max_bytes), |count| {
@@ -2738,9 +2739,10 @@ pub async fn scan_volatiles(
     let total_items = items.len();
 
     if let Some(max_items) = max_items
-        && items.len() > max_items {
-            items.truncate(max_items);
-        }
+        && items.len() > max_items
+    {
+        items.truncate(max_items);
+    }
 
     if let Some(max_bytes) = max_payload_bytes {
         let item_limit = cap_rows_by_payload_bytes(items.len(), Some(max_bytes), |count| {
@@ -3660,9 +3662,10 @@ pub async fn table_profile(
     let max_payload_bytes = config.max_payload_bytes();
 
     if let Some(max_items) = max_items
-        && headers.len() > max_items {
-            headers.truncate(max_items);
-        }
+        && headers.len() > max_items
+    {
+        headers.truncate(max_items);
+    }
 
     let mut column_types = summarize_columns(&headers, &rows);
 
@@ -3676,9 +3679,10 @@ pub async fn table_profile(
 
     if !summary_only {
         if let Some(max_items) = max_items
-            && samples.len() > max_items {
-                samples.truncate(max_items);
-            }
+            && samples.len() > max_items
+        {
+            samples.truncate(max_items);
+        }
 
         if let Some(max_bytes) = max_payload_bytes {
             let sample_limit = cap_rows_by_payload_bytes(samples.len(), Some(max_bytes), |count| {

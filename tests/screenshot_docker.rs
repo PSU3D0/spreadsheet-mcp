@@ -14,13 +14,15 @@ use base64::Engine;
 use image::ImageFormat;
 
 fn workbook_id_by_name(workbooks: &Value, name: &str) -> String {
+    // Use slug instead of path since token-dense defaults hide paths
+    let name_without_ext = name.strip_suffix(".xlsx").unwrap_or(name);
     workbooks["workbooks"]
         .as_array()
         .and_then(|arr| {
             arr.iter().find(|w| {
-                w["path"]
+                w["slug"]
                     .as_str()
-                    .map(|p| p.ends_with(name))
+                    .map(|s| s == name_without_ext)
                     .unwrap_or(false)
             })
         })
@@ -609,7 +611,7 @@ async fn test_screenshot_visual_scenarios_original_and_forked() -> Result<()> {
                     "workbook_or_fork_id": forked_workbook_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 3
+                    "page_size": 3, "format": "full"
                 }),
             ))
             .await?,
@@ -622,7 +624,7 @@ async fn test_screenshot_visual_scenarios_original_and_forked() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 3
+                    "page_size": 3, "format": "full"
                 }),
             ))
             .await?,
