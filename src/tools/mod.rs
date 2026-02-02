@@ -2182,7 +2182,12 @@ fn value_ends_with(cell: &Option<CellValue>, cmp: &serde_json::Value) -> bool {
     false
 }
 
-fn sample_rows(rows: Vec<TableRow>, limit: usize, offset: usize, mode: SampleMode) -> Vec<TableRow> {
+fn sample_rows(
+    rows: Vec<TableRow>,
+    limit: usize,
+    offset: usize,
+    mode: SampleMode,
+) -> Vec<TableRow> {
     if rows.is_empty() {
         return rows;
     }
