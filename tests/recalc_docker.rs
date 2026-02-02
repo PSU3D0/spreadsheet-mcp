@@ -100,7 +100,7 @@ async fn test_recalc_sum_formula() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -164,7 +164,7 @@ async fn test_recalc_cross_sheet_reference() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Output",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -241,7 +241,7 @@ async fn test_recalc_complex_formulas() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Sheet1",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -327,7 +327,7 @@ async fn test_recalc_chain_dependencies() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Chain",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -437,7 +437,7 @@ async fn test_edit_and_recalc_workflow() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -514,7 +514,7 @@ async fn test_edit_formula_and_recalc() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -733,7 +733,8 @@ async fn test_vlookup_recalc_with_real_workbook() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Calculations",
                     "start_row": 1,
-                    "page_size": 15
+                    "page_size": 15,
+                    "format": "full"
                 }),
             ))
             .await?,
@@ -816,7 +817,7 @@ async fn test_recalc_division_by_zero_error() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -892,7 +893,7 @@ async fn test_recalc_error_propagation() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -975,7 +976,7 @@ async fn test_recalc_date_arithmetic() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1087,7 +1088,7 @@ async fn test_recalc_large_dataset_sumif() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1189,7 +1190,7 @@ async fn test_recalc_multiple_batch_edits() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1319,7 +1320,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
                     "workbook_or_fork_id": fork1_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1333,7 +1334,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
                     "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1369,7 +1370,7 @@ async fn test_concurrent_forks_isolation() -> Result<()> {
                     "workbook_or_fork_id": workbook_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1450,7 +1451,7 @@ async fn test_recalc_empty_cells_in_range() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -1552,7 +1553,7 @@ async fn test_recalc_text_and_boolean_handling() -> Result<()> {
                     "workbook_or_fork_id": fork_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -2077,7 +2078,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
                     "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,
@@ -2116,7 +2117,7 @@ async fn test_save_then_load_as_new_original() -> Result<()> {
                     "workbook_or_fork_id": fork2_id,
                     "sheet_name": "Data",
                     "start_row": 1,
-                    "page_size": 10
+                    "page_size": 10, "format": "full"
                 }),
             ))
             .await?,

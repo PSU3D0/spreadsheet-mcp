@@ -919,10 +919,11 @@ fn detect_regions(sheet: &Worksheet, metrics: &SheetMetrics) -> DetectRegionsRes
         notes.push("Region detection truncated due to time/complexity caps.".to_string());
     }
     if regions.is_empty()
-        && let Some(bounds) = occupancy.dense_bounds() {
-            regions.push(build_fallback_region(&bounds, metrics));
-            notes.push("Region detection returned no regions; fallback bounds used.".to_string());
-        }
+        && let Some(bounds) = occupancy.dense_bounds()
+    {
+        regions.push(build_fallback_region(&bounds, metrics));
+        notes.push("Region detection returned no regions; fallback bounds used.".to_string());
+    }
 
     DetectRegionsResult { regions, notes }
 }
