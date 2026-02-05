@@ -14,6 +14,12 @@ impl WorkbookId {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Warning {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkbookDescriptor {
     pub workbook_id: WorkbookId,
     pub short_id: String,

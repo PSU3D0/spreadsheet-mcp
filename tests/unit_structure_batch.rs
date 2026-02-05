@@ -1,11 +1,12 @@
 #![cfg(feature = "recalc")]
 
 use anyhow::Result;
+use serde_json::json;
 use spreadsheet_mcp::model::WorkbookId;
 use spreadsheet_mcp::styles::descriptor_from_style;
 use spreadsheet_mcp::tools::fork::{
-    ApplyStagedChangeParams, CreateForkParams, StructureBatchParams, StructureOp,
-    apply_staged_change, create_fork, structure_batch,
+    ApplyStagedChangeParams, CreateForkParams, StructureBatchParamsInput, StructureOp,
+    apply_staged_change, create_fork, normalize_structure_batch, structure_batch,
 };
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
@@ -53,13 +54,16 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
 
     structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::InsertRows {
-                sheet_name: "Sheet1".to_string(),
-                at_row: 2,
-                count: 1,
-            }],
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 2,
+                    count: 1,
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -127,16 +131,19 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
 
     structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::CopyRange {
-                sheet_name: "Sheet1".to_string(),
-                dest_sheet_name: None,
-                src_range: "C1:C1".to_string(),
-                dest_anchor: "D1".to_string(),
-                include_styles: true,
-                include_formulas: true,
-            }],
+            ops: vec![
+                StructureOp::CopyRange {
+                    sheet_name: "Sheet1".to_string(),
+                    dest_sheet_name: None,
+                    src_range: "C1:C1".to_string(),
+                    dest_anchor: "D1".to_string(),
+                    include_styles: true,
+                    include_formulas: true,
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -193,16 +200,19 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
 
     structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::MoveRange {
-                sheet_name: "Sheet1".to_string(),
-                dest_sheet_name: None,
-                src_range: "A1:A1".to_string(),
-                dest_anchor: "C3".to_string(),
-                include_styles: true,
-                include_formulas: false,
-            }],
+            ops: vec![
+                StructureOp::MoveRange {
+                    sheet_name: "Sheet1".to_string(),
+                    dest_sheet_name: None,
+                    src_range: "A1:A1".to_string(),
+                    dest_anchor: "C3".to_string(),
+                    include_styles: true,
+                    include_formulas: false,
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -266,16 +276,19 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
 
     let err = structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::CopyRange {
-                sheet_name: "Sheet1".to_string(),
-                dest_sheet_name: None,
-                src_range: "A1:B2".to_string(),
-                dest_anchor: "B2".to_string(),
-                include_styles: false,
-                include_formulas: false,
-            }],
+            ops: vec![
+                StructureOp::CopyRange {
+                    sheet_name: "Sheet1".to_string(),
+                    dest_sheet_name: None,
+                    src_range: "A1:B2".to_string(),
+                    dest_anchor: "B2".to_string(),
+                    include_styles: false,
+                    include_formulas: false,
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -319,13 +332,16 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
 
     let preview = structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::InsertCols {
-                sheet_name: "Sheet1".to_string(),
-                at_col: "B".to_string(),
-                count: 1,
-            }],
+            ops: vec![
+                StructureOp::InsertCols {
+                    sheet_name: "Sheet1".to_string(),
+                    at_col: "B".to_string(),
+                    count: 1,
+                }
+                .into(),
+            ],
             mode: Some("preview".to_string()),
             label: Some("insert col".to_string()),
         },
@@ -401,13 +417,16 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
 
     let preview = structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::InsertCols {
-                sheet_name: "Sheet1".to_string(),
-                at_col: "A".to_string(),
-                count: 1,
-            }],
+            ops: vec![
+                StructureOp::InsertCols {
+                    sheet_name: "Sheet1".to_string(),
+                    at_col: "A".to_string(),
+                    count: 1,
+                }
+                .into(),
+            ],
             mode: Some("preview".to_string()),
             label: None,
         },
@@ -460,12 +479,15 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
 
     structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::RenameSheet {
-                old_name: "My Sheet".to_string(),
-                new_name: "Data".to_string(),
-            }],
+            ops: vec![
+                StructureOp::RenameSheet {
+                    old_name: "My Sheet".to_string(),
+                    new_name: "Data".to_string(),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -512,12 +534,15 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
 
     structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::CreateSheet {
-                name: "First".to_string(),
-                position: Some(0),
-            }],
+            ops: vec![
+                StructureOp::CreateSheet {
+                    name: "First".to_string(),
+                    position: Some(0),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -562,11 +587,14 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
 
     let err = structure_batch(
         state.clone(),
-        StructureBatchParams {
+        StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StructureOp::DeleteSheet {
-                name: "Sheet1".to_string(),
-            }],
+            ops: vec![
+                StructureOp::DeleteSheet {
+                    name: "Sheet1".to_string(),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -575,6 +603,107 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
     .unwrap_err();
 
     assert!(err.to_string().contains("last remaining sheet"));
+
+    Ok(())
+}
+
+#[test]
+fn structure_batch_accepts_op_and_add_sheet_alias() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            { "op": "add_sheet", "name": "Inputs" },
+            { "kind": "create_sheet", "name": "Accounts" }
+        ]
+    });
+
+    let params: StructureBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_structure_batch(params).unwrap();
+
+    assert!(matches!(normalized.ops[0], StructureOp::CreateSheet { .. }));
+    assert!(warnings.iter().any(|w| w.code == "WARN_ALIAS_KIND"));
+}
+
+#[test]
+fn structure_batch_does_not_warn_when_no_alias() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            { "kind": "create_sheet", "name": "Inputs" }
+        ]
+    });
+
+    let params: StructureBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (_normalized, warnings) = normalize_structure_batch(params).unwrap();
+
+    assert!(warnings.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn structure_batch_surfaces_alias_warnings_in_summary() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("structure_alias_warning.xlsx", |_| {});
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+
+    let preview_fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id.clone(),
+        },
+    )
+    .await?;
+    let preview_params: StructureBatchParamsInput = serde_json::from_value(json!({
+        "fork_id": preview_fork.fork_id,
+        "ops": [{ "op": "add_sheet", "name": "Inputs" }],
+        "mode": "preview"
+    }))
+    .unwrap();
+    let preview = structure_batch(state.clone(), preview_params).await?;
+
+    assert!(
+        preview
+            .summary
+            .warnings
+            .iter()
+            .any(|w| w == "WARN_ALIAS_KIND: Normalized structure op alias to canonical kind")
+    );
+
+    let apply_fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+    let apply_params: StructureBatchParamsInput = serde_json::from_value(json!({
+        "fork_id": apply_fork.fork_id,
+        "ops": [{ "op": "add_sheet", "name": "Inputs" }],
+        "mode": "apply"
+    }))
+    .unwrap();
+    let apply = structure_batch(state.clone(), apply_params).await?;
+
+    assert!(
+        apply
+            .summary
+            .warnings
+            .iter()
+            .any(|w| w == "WARN_ALIAS_KIND: Normalized structure op alias to canonical kind")
+    );
 
     Ok(())
 }

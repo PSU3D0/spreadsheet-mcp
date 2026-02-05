@@ -108,8 +108,9 @@ SAFETY:
 
 TOOL DETAILS:
 - create_fork: Only .xlsx supported. Returns fork_id for subsequent operations.
-- edit_batch: {fork_id, sheet_name, edits:[{address, value, is_formula}]}. \
-Formulas should NOT include leading '='.
+- edit_batch: {fork_id, sheet_name, edits:[{address, value, is_formula} | `A1=100`]}. \
+Shorthand edits like `A1=100` or `B2==SUM(A1:A2)` are accepted. \
+Leading '=' in value/formula is accepted and stripped; prefer formula or is_formula=true for clarity.
 - transform_batch: Range-first clear/fill/replace. Prefer for bulk edits (blank/fill/rename) to avoid per-cell edit_batch bloat.
 - recalculate: Required after edit_batch to update formula results. \
 May take several seconds for complex workbooks.
@@ -688,7 +689,7 @@ impl SpreadsheetServer {
     )]
     pub async fn edit_batch(
         &self,
-        Parameters(params): Parameters<tools::fork::EditBatchParams>,
+        Parameters(params): Parameters<tools::write_normalize::EditBatchParamsInput>,
     ) -> Result<Json<tools::fork::EditBatchResponse>, McpError> {
         self.ensure_recalc_enabled("edit_batch")
             .map_err(to_mcp_error)?;
@@ -728,13 +729,34 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
     )]
     pub async fn style_batch(
         &self,
-        Parameters(params): Parameters<tools::fork::StyleBatchParams>,
+        Parameters(params): Parameters<tools::fork::StyleBatchParamsInput>,
     ) -> Result<Json<tools::fork::StyleBatchResponse>, McpError> {
         self.ensure_recalc_enabled("style_batch")
             .map_err(to_mcp_error)?;
         self.run_tool_with_timeout(
             "style_batch",
             tools::fork::style_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(to_mcp_error)
+    }
+
+    #[tool(
+        name = "column_size_batch",
+        description = "Set column widths or compute auto-widths in a fork. Targets column ranges like 'A:A' or 'A:C'. \
+Mode: preview or apply (default apply). Auto computes and sets widths immediately (persisted). \
+Note: autosize uses cached/formatted cell values; if a column is mostly formulas with no cached results, widths may be too narrow unless you recalculate first."
+    )]
+    pub async fn column_size_batch(
+        &self,
+        Parameters(params): Parameters<tools::fork::ColumnSizeBatchParamsInput>,
+    ) -> Result<Json<tools::fork::ColumnSizeBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("column_size_batch")
+            .map_err(to_mcp_error)?;
+        self.run_tool_with_timeout(
+            "column_size_batch",
+            tools::fork::column_size_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
@@ -766,12 +788,12 @@ fill_direction: down, right, both (default both)."
     #[tool(
         name = "structure_batch",
         description = "Apply structural edits to a fork (rows/cols/sheets). \
-Mode: preview or apply (default apply). Note: structural edits may not fully rewrite formulas/named ranges like Excel; \
-run recalculate and review get_changeset after applying."
+Mode: preview or apply (default apply). Aliases: op for kind, add_sheet for create_sheet. \
+Note: structural edits may not fully rewrite formulas/named ranges like Excel; run recalculate and review get_changeset after applying."
     )]
     pub async fn structure_batch(
         &self,
-        Parameters(params): Parameters<tools::fork::StructureBatchParams>,
+        Parameters(params): Parameters<tools::fork::StructureBatchParamsInput>,
     ) -> Result<Json<tools::fork::StructureBatchResponse>, McpError> {
         self.ensure_recalc_enabled("structure_batch")
             .map_err(to_mcp_error)?;
@@ -1053,7 +1075,7 @@ run recalculate and review get_changeset after applying."
                 .map_err(|e| anyhow!("failed to read screenshot: {}", e))?;
 
             if let Some(limit) = self.state.config().max_response_bytes() {
-                let encoded_len = ((bytes.len() + 2) / 3) * 4;
+                let encoded_len = bytes.len().div_ceil(3) * 4;
                 let meta = serde_json::to_vec(&response)
                     .map_err(|e| anyhow!("failed to serialize response: {}", e))?;
                 let estimated = encoded_len + meta.len() + response.output_path.len();

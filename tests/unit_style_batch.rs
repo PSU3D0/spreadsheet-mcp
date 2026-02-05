@@ -1,10 +1,11 @@
 #![cfg(feature = "recalc")]
 
 use anyhow::Result;
+use serde_json::json;
 use spreadsheet_mcp::model::{FillPatch, FontPatch, PatternFillPatch, StylePatch};
 use spreadsheet_mcp::tools::fork::{
-    ApplyStagedChangeParams, CreateForkParams, StyleBatchParams, StyleOp, StyleTarget,
-    apply_staged_change, create_fork, style_batch,
+    ApplyStagedChangeParams, CreateForkParams, StyleBatchParamsInput, StyleOp, StyleTarget,
+    apply_staged_change, create_fork, normalize_style_batch, style_batch,
 };
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 use umya_spreadsheet::{
@@ -74,16 +75,19 @@ async fn style_batch_merge_set_clear_semantics() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Range {
-                    range: "A1:A1".to_string(),
-                },
-                patch: patch_merge,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Range {
+                        range: "A1:A1".to_string(),
+                    },
+                    patch: patch_merge,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -115,16 +119,19 @@ async fn style_batch_merge_set_clear_semantics() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Cells {
-                    cells: vec!["A1".to_string()],
-                },
-                patch: patch_set,
-                op_mode: Some("set".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Cells {
+                        cells: vec!["A1".to_string()],
+                    },
+                    patch: patch_set,
+                    op_mode: Some("set".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -192,16 +199,19 @@ async fn style_batch_preview_stages_and_apply() -> Result<()> {
 
     let preview = style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Cells {
-                    cells: vec!["A1".to_string()],
-                },
-                patch,
-                op_mode: None,
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Cells {
+                        cells: vec!["A1".to_string()],
+                    },
+                    patch,
+                    op_mode: None,
+                }
+                .into(),
+            ],
             mode: Some("preview".to_string()),
             label: Some("bold headers".to_string()),
         },
@@ -292,7 +302,7 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             ops: vec![
                 StyleOp {
@@ -302,7 +312,8 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
                     },
                     patch: base_fill,
                     op_mode: Some("set".to_string()),
-                },
+                }
+                .into(),
                 StyleOp {
                     sheet_name: "Sheet1".to_string(),
                     target: StyleTarget::Range {
@@ -310,7 +321,8 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
                     },
                     patch: header_bold,
                     op_mode: Some("merge".to_string()),
-                },
+                }
+                .into(),
             ],
             mode: Some("apply".to_string()),
             label: None,
@@ -383,16 +395,19 @@ async fn style_batch_nested_null_clear_only_subfield() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Cells {
-                    cells: vec!["A1".to_string()],
-                },
-                patch,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Cells {
+                        cells: vec!["A1".to_string()],
+                    },
+                    patch,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -479,14 +494,17 @@ async fn style_batch_region_target_resolves() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Region { region_id },
-                patch,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Region { region_id },
+                    patch,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -551,16 +569,19 @@ async fn style_batch_idempotent_noop_counts_and_no_diff() -> Result<()> {
 
     let resp = style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Cells {
-                    cells: vec!["A1".to_string()],
-                },
-                patch,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Cells {
+                        cells: vec!["A1".to_string()],
+                    },
+                    patch,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -657,16 +678,19 @@ async fn style_batch_preserves_conditional_formats() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Range {
-                    range: "A1:A3".to_string(),
-                },
-                patch,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Range {
+                        range: "A1:A3".to_string(),
+                    },
+                    patch,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },
@@ -682,4 +706,352 @@ async fn style_batch_preserves_conditional_formats() -> Result<()> {
     assert_eq!(cf_count, 1);
 
     Ok(())
+}
+
+#[test]
+fn style_batch_accepts_range_and_style_shorthand() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "A2:F2",
+                "style": {
+                    "font": { "bold": true }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    assert_eq!(normalized.ops.len(), 1);
+    let op = &normalized.ops[0];
+    assert_eq!(op.sheet_name, "Accounts");
+    match &op.target {
+        StyleTarget::Range { range } => assert_eq!(range, "A2:F2"),
+        _ => panic!("expected range target"),
+    }
+    let bold = op
+        .patch
+        .font
+        .as_ref()
+        .and_then(|font| font.as_ref())
+        .and_then(|font| font.bold.as_ref())
+        .and_then(|bold| *bold);
+    assert_eq!(bold, Some(true));
+    assert!(warnings.iter().any(|w| w.code == "WARN_STYLE_SHORTHAND"));
+}
+
+#[test]
+fn style_batch_normalizes_fill_color_shorthand() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "A2:F2",
+                "style": {
+                    "fill": { "color": "#F2F2F2" }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    let fill = op
+        .patch
+        .fill
+        .as_ref()
+        .and_then(|fill| fill.as_ref())
+        .expect("fill");
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            assert_eq!(
+                pattern
+                    .pattern_type
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("solid")
+            );
+            assert_eq!(
+                pattern
+                    .foreground_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("FFF2F2F2")
+            );
+        }
+        _ => panic!("expected pattern fill"),
+    }
+
+    assert!(warnings.iter().any(|w| w.code == "WARN_FILL_COLOR"));
+}
+
+#[test]
+fn style_batch_expands_rgb_hex_to_argb() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "A2:F2",
+                "style": {
+                    "fill": { "color": "#F2F2F2" }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    let fill = op
+        .patch
+        .fill
+        .as_ref()
+        .and_then(|fill| fill.as_ref())
+        .expect("fill");
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            assert_eq!(
+                pattern
+                    .foreground_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("FFF2F2F2")
+            );
+        }
+        _ => panic!("expected pattern fill"),
+    }
+
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.code == "WARN_COLOR_ALPHA_DEFAULT")
+    );
+}
+
+#[test]
+fn style_batch_expands_short_rgb_hex_to_argb() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "A2:F2",
+                "style": {
+                    "fill": { "color": "#F2F" }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    let fill = op
+        .patch
+        .fill
+        .as_ref()
+        .and_then(|fill| fill.as_ref())
+        .expect("fill");
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            assert_eq!(
+                pattern
+                    .foreground_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("FFFF22FF")
+            );
+        }
+        _ => panic!("expected pattern fill"),
+    }
+
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.code == "WARN_COLOR_ALPHA_DEFAULT")
+    );
+}
+
+#[test]
+fn style_batch_preserves_argb() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "target": { "kind": "range", "range": "A2:F2" },
+                "patch": {
+                    "fill": {
+                        "kind": "pattern",
+                        "pattern_type": "solid",
+                        "foreground_color": "80FF0000"
+                    }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    let fill = op
+        .patch
+        .fill
+        .as_ref()
+        .and_then(|fill| fill.as_ref())
+        .expect("fill");
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            assert_eq!(
+                pattern
+                    .foreground_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("80FF0000")
+            );
+        }
+        _ => panic!("expected pattern fill"),
+    }
+
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.code == "WARN_COLOR_ALPHA_DEFAULT")
+    );
+}
+
+#[test]
+fn style_batch_warns_once_for_multiple_rgb_colors() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "target": { "kind": "range", "range": "A2:F2" },
+                "patch": {
+                    "font": { "color": "#112233" },
+                    "fill": {
+                        "kind": "pattern",
+                        "pattern_type": "solid",
+                        "foreground_color": "#445566",
+                        "background_color": "#778899"
+                    }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    let font_color = op
+        .patch
+        .font
+        .as_ref()
+        .and_then(|font| font.as_ref())
+        .and_then(|font| font.color.as_ref())
+        .and_then(|color| color.as_ref().map(String::as_str));
+    assert_eq!(font_color, Some("FF112233"));
+
+    let fill = op
+        .patch
+        .fill
+        .as_ref()
+        .and_then(|fill| fill.as_ref())
+        .expect("fill");
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            assert_eq!(
+                pattern
+                    .foreground_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("FF445566")
+            );
+            assert_eq!(
+                pattern
+                    .background_color
+                    .as_ref()
+                    .and_then(|v| v.as_ref().map(String::as_str)),
+                Some("FF778899")
+            );
+        }
+        _ => panic!("expected pattern fill"),
+    }
+
+    let color_warnings = warnings
+        .iter()
+        .filter(|w| w.code == "WARN_COLOR_ALPHA_DEFAULT")
+        .count();
+    assert_eq!(color_warnings, 1);
+}
+
+#[test]
+fn style_batch_handles_mixed_shorthand_and_canonical_ops() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "target": { "kind": "range", "range": "A1:A1" },
+                "patch": { "font": { "bold": true } }
+            },
+            {
+                "sheet_name": "Accounts",
+                "range": "B1:B1",
+                "style": { "font": { "bold": false } }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, warnings) = normalize_style_batch(params).unwrap();
+
+    assert_eq!(normalized.ops.len(), 2);
+    let first = &normalized.ops[0];
+    let second = &normalized.ops[1];
+
+    match &first.target {
+        StyleTarget::Range { range } => assert_eq!(range, "A1:A1"),
+        _ => panic!("expected range target"),
+    }
+    let first_bold = first
+        .patch
+        .font
+        .as_ref()
+        .and_then(|font| font.as_ref())
+        .and_then(|font| font.bold.as_ref())
+        .and_then(|bold| *bold);
+    assert_eq!(first_bold, Some(true));
+
+    match &second.target {
+        StyleTarget::Range { range } => assert_eq!(range, "B1:B1"),
+        _ => panic!("expected range target"),
+    }
+    let second_bold = second
+        .patch
+        .font
+        .as_ref()
+        .and_then(|font| font.as_ref())
+        .and_then(|font| font.bold.as_ref())
+        .and_then(|bold| *bold);
+    assert_eq!(second_bold, Some(false));
+
+    let shorthand_warnings = warnings
+        .iter()
+        .filter(|w| w.code == "WARN_STYLE_SHORTHAND")
+        .count();
+    assert_eq!(shorthand_warnings, 1);
 }

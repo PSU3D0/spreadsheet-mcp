@@ -10,6 +10,34 @@ use std::str::FromStr;
 use umya_spreadsheet::structs::{EnumTrait, HorizontalAlignmentValues, VerticalAlignmentValues};
 use umya_spreadsheet::{Border, Fill, Font, PatternValues, Style};
 
+pub fn normalize_color_hex(input: &str) -> Option<(String, bool)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if hex.is_empty() {
+        return None;
+    }
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    match hex.len() {
+        3 => {
+            let mut expanded = String::with_capacity(6);
+            for ch in hex.chars() {
+                expanded.push(ch);
+                expanded.push(ch);
+            }
+            Some((format!("FF{}", expanded.to_ascii_uppercase()), true))
+        }
+        6 => Some((format!("FF{}", hex.to_ascii_uppercase()), true)),
+        8 => Some((hex.to_ascii_uppercase(), false)),
+        _ => None,
+    }
+}
+
 pub fn descriptor_from_style(style: &Style) -> StyleDescriptor {
     let font = style.get_font().and_then(descriptor_from_font);
     let fill = style.get_fill().and_then(descriptor_from_fill);
