@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::{fs, task, time};
 
+use super::macro_uri::export_screenshot_uri;
+
 pub struct ScreenshotResult {
     pub output_path: PathBuf,
     pub size_bytes: u64,
@@ -111,13 +113,12 @@ impl ScreenshotExecutor {
         };
 
         let pdf_output_path = output_path.with_extension("pdf");
-        let macro_uri_pdf = format!(
-            "macro:///Standard.Module1.ExportScreenshot(\"{}\",\"{}\",\"{}\",\"{}\")",
-            file_url,
-            pdf_output_path.display(),
+        let macro_uri_pdf = export_screenshot_uri(
+            &file_url,
+            &pdf_output_path.display().to_string(),
             sheet_name,
-            range_arg
-        );
+            range_arg,
+        )?;
 
         let macro_logs = run_macro(macro_uri_pdf).await?;
 

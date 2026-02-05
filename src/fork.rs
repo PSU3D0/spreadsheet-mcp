@@ -1,3 +1,4 @@
+use crate::security::canonicalize_and_enforce_within_workspace;
 use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -225,15 +226,19 @@ impl ForkRegistry {
             ));
         }
 
-        if !base_path.starts_with(workspace_root) {
-            return Err(anyhow!("base path must be within workspace root"));
-        }
-
         if !base_path.exists() {
             return Err(anyhow!("base file does not exist: {:?}", base_path));
         }
 
-        let metadata = fs::metadata(base_path)?;
+        // Enforce workspace boundary using canonicalized, symlink-aware paths.
+        let base_path_canon = canonicalize_and_enforce_within_workspace(
+            workspace_root,
+            base_path,
+            "create_fork",
+            "base_path",
+        )?;
+
+        let metadata = fs::metadata(&base_path_canon)?;
         if metadata.len() > MAX_FILE_SIZE {
             return Err(anyhow!(
                 "base file too large: {} bytes (max {} MB)",
@@ -259,9 +264,9 @@ impl ForkRegistry {
         };
         let work_path = self.config.fork_dir.join(format!("{}.xlsx", fork_id));
 
-        fs::copy(base_path, &work_path)?;
+        fs::copy(&base_path_canon, &work_path)?;
 
-        let context = ForkContext::new(fork_id.clone(), base_path.to_path_buf(), work_path)?;
+        let context = ForkContext::new(fork_id.clone(), base_path_canon, work_path)?;
 
         self.forks.lock().insert(fork_id.clone(), context);
 
@@ -315,9 +320,13 @@ impl ForkRegistry {
         workspace_root: &Path,
         drop_fork: bool,
     ) -> Result<()> {
-        if !target_path.starts_with(workspace_root) {
-            return Err(anyhow!("target path must be within workspace root"));
-        }
+        // Enforce workspace boundary using canonicalized, symlink-aware paths.
+        let _target_canon = canonicalize_and_enforce_within_workspace(
+            workspace_root,
+            target_path,
+            "save_fork",
+            "target_path",
+        )?;
 
         let ext = target_path
             .extension()

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time;
 
+use super::macro_uri::recalc_and_save_uri;
+
 pub struct FireAndForgetExecutor {
     soffice_path: PathBuf,
     timeout: Duration,
@@ -35,10 +37,7 @@ impl RecalcExecutor for FireAndForgetExecutor {
             .map_err(|e| anyhow!("failed to canonicalize path: {}", e))?;
 
         let file_url = format!("file://{}", abs_path.to_str().unwrap());
-        let macro_uri = format!(
-            "macro:///Standard.Module1.RecalculateAndSave(\"{}\")",
-            file_url
-        );
+        let macro_uri = recalc_and_save_uri(&file_url)?;
 
         let output_result = time::timeout(
             self.timeout,
