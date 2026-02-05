@@ -3,6 +3,7 @@ pub mod caps;
 pub mod config;
 #[cfg(feature = "recalc")]
 pub mod diff;
+pub mod errors;
 #[cfg(feature = "recalc")]
 pub mod fork;
 pub mod formula;

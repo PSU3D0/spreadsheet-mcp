@@ -1,6 +1,7 @@
+use crate::errors::InvalidParamsError;
 use crate::model::Warning;
 use crate::tools::fork::{CellEdit, EditBatchParams};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -35,16 +36,30 @@ pub fn normalize_edit_batch(
     let mut warnings = Vec::new();
     let mut edits = Vec::with_capacity(params.edits.len());
 
-    for edit in params.edits {
+    for (idx, edit) in params.edits.into_iter().enumerate() {
         match edit {
             CellEditInput::Shorthand(entry) => {
                 let Some((address_raw, rhs_raw)) = entry.split_once('=') else {
-                    bail!("invalid shorthand edit: '{}'", entry);
+                    return Err(InvalidParamsError::new(
+                        "edit_batch",
+                        format!(
+                            "invalid shorthand edit: '{entry}' (expected like 'A1=100' or 'B2==SUM(A1:A2)')"
+                        ),
+                    )
+                    .with_path(format!("edits[{idx}]"))
+                    .into());
                 };
 
                 let address = address_raw.trim();
                 if address.is_empty() {
-                    bail!("invalid shorthand edit: '{}'", entry);
+                    return Err(InvalidParamsError::new(
+                        "edit_batch",
+                        format!(
+                            "invalid shorthand edit: '{entry}' (missing cell address before '=')"
+                        ),
+                    )
+                    .with_path(format!("edits[{idx}]"))
+                    .into());
                 }
 
                 let mut value = rhs_raw.to_string();
@@ -74,7 +89,11 @@ pub fn normalize_edit_batch(
             CellEditInput::Object(obj) => {
                 let address = obj.address.trim();
                 if address.is_empty() {
-                    bail!("edit address is required");
+                    return Err(
+                        InvalidParamsError::new("edit_batch", "edit address is required")
+                            .with_path(format!("edits[{idx}].address"))
+                            .into(),
+                    );
                 }
 
                 let (value, is_formula) = if let Some(formula) = obj.formula {
@@ -98,7 +117,12 @@ pub fn normalize_edit_batch(
                         (value, obj.is_formula.unwrap_or(false))
                     }
                 } else {
-                    bail!("edit value or formula is required for {}", address);
+                    return Err(InvalidParamsError::new(
+                        "edit_batch",
+                        format!("edit value or formula is required for {address}"),
+                    )
+                    .with_path(format!("edits[{idx}]"))
+                    .into());
                 };
 
                 edits.push(CellEdit {
