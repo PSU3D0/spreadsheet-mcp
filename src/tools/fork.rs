@@ -1,13 +1,17 @@
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
-use crate::model::{StylePatch, WorkbookId};
+use crate::model::{
+    AlignmentPatch, BordersPatch, FillPatch, FontPatch, PatternFillPatch, StylePatch, Warning,
+    WorkbookId,
+};
 use crate::state::AppState;
+use crate::tools::write_normalize::{EditBatchParamsInput, normalize_edit_batch};
 use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use formualizer_parse::tokenizer::Tokenizer;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -67,12 +71,15 @@ pub struct EditBatchResponse {
     pub fork_id: String,
     pub edits_applied: usize,
     pub total_edits: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Warning>,
 }
 
 pub async fn edit_batch(
     state: Arc<AppState>,
-    params: EditBatchParams,
+    params: EditBatchParamsInput,
 ) -> Result<EditBatchResponse> {
+    let (params, warnings) = normalize_edit_batch(params)?;
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
@@ -113,6 +120,7 @@ pub async fn edit_batch(
         fork_id: params.fork_id,
         edits_applied: edit_count,
         total_edits: total,
+        warnings,
     })
 }
 
@@ -127,6 +135,8 @@ fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEd
         let cell = sheet.get_cell_mut(edit.address.as_str());
         if edit.is_formula {
             cell.set_formula(edit.value.clone());
+            cell.get_cell_value_mut()
+                .set_formula_result_default(String::new());
         } else {
             cell.set_value(edit.value.clone());
         }
@@ -393,6 +403,128 @@ pub struct StyleBatchParams {
     pub label: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StyleBatchParamsInput {
+    pub fork_id: String,
+    pub ops: Vec<StyleOpInput>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StyleOpInput {
+    op: StyleOp,
+    shorthand_used: bool,
+    fill_color_used: bool,
+    color_alpha_defaulted: bool,
+}
+
+impl From<StyleOp> for StyleOpInput {
+    fn from(op: StyleOp) -> Self {
+        Self {
+            op,
+            shorthand_used: false,
+            fill_color_used: false,
+            color_alpha_defaulted: false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StyleOpInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let Some(obj) = value.as_object_mut() else {
+            return Err(de::Error::custom("style op must be an object"));
+        };
+
+        let mut shorthand_used = false;
+        let mut fill_color_used = false;
+        let mut color_alpha_defaulted = false;
+
+        if obj.get("target").is_none()
+            && let Some(range) = obj.remove("range")
+        {
+            shorthand_used = true;
+            obj.insert(
+                "target".to_string(),
+                serde_json::json!({ "kind": "range", "range": range }),
+            );
+        }
+
+        if obj.get("patch").is_none()
+            && let Some(style) = obj.remove("style")
+        {
+            shorthand_used = true;
+            obj.insert("patch".to_string(), style);
+        }
+
+        if let Some(patch_value) = obj.remove("patch") {
+            let patch_input: StylePatchInput =
+                serde_json::from_value(patch_value).map_err(de::Error::custom)?;
+            let (patch, used_fill_color, alpha_defaulted) =
+                normalize_style_patch_input(patch_input);
+            if used_fill_color {
+                fill_color_used = true;
+            }
+            if alpha_defaulted {
+                color_alpha_defaulted = true;
+            }
+            obj.insert(
+                "patch".to_string(),
+                serde_json::to_value(patch).map_err(de::Error::custom)?,
+            );
+        }
+
+        let op = serde_json::from_value(value).map_err(de::Error::custom)?;
+        Ok(StyleOpInput {
+            op,
+            shorthand_used,
+            fill_color_used,
+            color_alpha_defaulted,
+        })
+    }
+}
+
+impl schemars::JsonSchema for StyleOpInput {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "StyleOp".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        StyleOp::json_schema(generator)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StylePatchInput {
+    #[serde(default)]
+    pub font: Option<Option<FontPatch>>,
+    #[serde(default)]
+    pub fill: Option<Option<FillPatchInput>>,
+    #[serde(default)]
+    pub borders: Option<Option<BordersPatch>>,
+    #[serde(default)]
+    pub alignment: Option<Option<AlignmentPatch>>,
+    #[serde(default)]
+    pub number_format: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum FillPatchInput {
+    Canonical(FillPatch),
+    Color(FillColorPatch),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FillColorPatch {
+    color: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StyleOp {
     pub sheet_name: String,
@@ -419,15 +551,362 @@ pub struct StyleBatchResponse {
     pub summary: ChangeSummary,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ColumnSizeBatchParamsInput {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub ops: Vec<ColumnSizeOpInput>,
+    pub mode: Option<String>, // preview|apply (default apply)
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ColumnTarget {
+    Columns { range: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ColumnSizeSpec {
+    Auto {
+        #[serde(default)]
+        min_width_chars: Option<f64>,
+        #[serde(default)]
+        max_width_chars: Option<f64>,
+    },
+    Width {
+        width_chars: f64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ColumnSizeOp {
+    pub target: ColumnTarget,
+    pub size: ColumnSizeSpec,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ColumnSizeOpInput {
+    Canonical(ColumnSizeOp),
+    Shorthand { range: String, size: ColumnSizeSpec },
+}
+
+impl From<ColumnSizeOp> for ColumnSizeOpInput {
+    fn from(value: ColumnSizeOp) -> Self {
+        Self::Canonical(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ColumnSizeBatchParams {
+    fork_id: String,
+    sheet_name: String,
+    ops: Vec<ColumnSizeOp>,
+    mode: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ColumnSizeBatchResponse {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub ops_applied: usize,
+    pub summary: ChangeSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ColumnSizeBatchStagedPayload {
+    sheet_name: String,
+    ops: Vec<ColumnSizeOp>,
+}
+
+fn normalize_column_size_batch(
+    params: ColumnSizeBatchParamsInput,
+) -> Result<(ColumnSizeBatchParams, Vec<crate::model::Warning>)> {
+    let mut warnings = Vec::new();
+    let mut ops = Vec::with_capacity(params.ops.len());
+
+    for entry in params.ops {
+        match entry {
+            ColumnSizeOpInput::Canonical(op) => ops.push(op),
+            ColumnSizeOpInput::Shorthand { range, size } => {
+                warnings.push(crate::model::Warning {
+                    code: "WARN_COLUMN_SHORTHAND_TARGET".to_string(),
+                    message: "Used range shorthand; prefer target:{kind:'columns',range:'A:C'}"
+                        .to_string(),
+                });
+                ops.push(ColumnSizeOp {
+                    target: ColumnTarget::Columns { range },
+                    size,
+                });
+            }
+        }
+    }
+
+    Ok((
+        ColumnSizeBatchParams {
+            fork_id: params.fork_id,
+            sheet_name: params.sheet_name,
+            ops,
+            mode: params.mode,
+            label: params.label,
+        },
+        warnings,
+    ))
+}
+
+pub async fn column_size_batch(
+    state: Arc<AppState>,
+    params: ColumnSizeBatchParamsInput,
+) -> Result<ColumnSizeBatchResponse> {
+    let (params, warnings) = normalize_column_size_batch(params)?;
+    let warning_messages: Vec<String> = warnings
+        .into_iter()
+        .map(|warning| format!("{}: {}", warning.code, warning.message))
+        .collect();
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
+
+    let mode = params
+        .mode
+        .as_deref()
+        .unwrap_or("apply")
+        .to_ascii_lowercase();
+
+    if mode == "preview" {
+        let change_id = make_short_random_id("chg", 12);
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_path_for_apply = snapshot_path.clone();
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = params.ops.clone();
+            let sheet_name = params.sheet_name.clone();
+            move || apply_column_size_ops_to_file(&snapshot_path_for_apply, &sheet_name, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["column_size_batch".to_string()];
+        summary.warnings.extend(warning_messages.clone());
+
+        let staged_op = StagedOp {
+            kind: "column_size_batch".to_string(),
+            payload: serde_json::to_value(ColumnSizeBatchStagedPayload {
+                sheet_name: params.sheet_name.clone(),
+                ops: params.ops.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(ColumnSizeBatchResponse {
+            fork_id: params.fork_id,
+            sheet_name: params.sheet_name,
+            mode,
+            change_id: Some(change_id),
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    } else {
+        let apply_result = tokio::task::spawn_blocking({
+            let ops = params.ops.clone();
+            let sheet_name = params.sheet_name.clone();
+            let work_path = work_path.clone();
+            move || apply_column_size_ops_to_file(&work_path, &sheet_name, &ops)
+        })
+        .await??;
+
+        let mut summary = apply_result.summary;
+        summary.op_kinds = vec!["column_size_batch".to_string()];
+        summary.warnings.extend(warning_messages);
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(ColumnSizeBatchResponse {
+            fork_id: params.fork_id,
+            sheet_name: params.sheet_name,
+            mode,
+            change_id: None,
+            ops_applied: apply_result.ops_applied,
+            summary,
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct StyleBatchStagedPayload {
     ops: Vec<StyleOp>,
 }
 
+pub fn normalize_style_batch(
+    input: StyleBatchParamsInput,
+) -> Result<(StyleBatchParams, Vec<Warning>)> {
+    let mut warnings = Vec::new();
+    let mut ops = Vec::with_capacity(input.ops.len());
+
+    for op_input in input.ops {
+        if op_input.shorthand_used {
+            warnings.push(Warning {
+                code: "WARN_STYLE_SHORTHAND".to_string(),
+                message: "Normalized style op shorthand to canonical form".to_string(),
+            });
+        }
+        if op_input.fill_color_used {
+            warnings.push(Warning {
+                code: "WARN_FILL_COLOR".to_string(),
+                message: "Normalized fill color shorthand to pattern fill".to_string(),
+            });
+        }
+        if op_input.color_alpha_defaulted {
+            warnings.push(Warning {
+                code: "WARN_COLOR_ALPHA_DEFAULT".to_string(),
+                message: "Normalized RGB hex to ARGB with default alpha".to_string(),
+            });
+        }
+        ops.push(op_input.op);
+    }
+
+    Ok((
+        StyleBatchParams {
+            fork_id: input.fork_id,
+            ops,
+            mode: input.mode,
+            label: input.label,
+        },
+        warnings,
+    ))
+}
+
+fn normalize_style_patch_input(input: StylePatchInput) -> (StylePatch, bool, bool) {
+    let mut fill_color_used = false;
+    let mut color_alpha_defaulted = false;
+    let fill = match input.fill {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(fill_input)) => {
+            let normalized = match fill_input {
+                FillPatchInput::Canonical(fill) => fill,
+                FillPatchInput::Color(color) => {
+                    fill_color_used = true;
+                    FillPatch::Pattern(PatternFillPatch {
+                        pattern_type: Some(Some("solid".to_string())),
+                        foreground_color: Some(Some(color.color)),
+                        background_color: None,
+                    })
+                }
+            };
+            Some(Some(normalized))
+        }
+    };
+
+    let mut patch = StylePatch {
+        font: input.font,
+        fill,
+        borders: input.borders,
+        alignment: input.alignment,
+        number_format: input.number_format,
+    };
+    normalize_style_patch_colors(&mut patch, &mut color_alpha_defaulted);
+
+    (patch, fill_color_used, color_alpha_defaulted)
+}
+
+fn normalize_style_patch_colors(patch: &mut StylePatch, alpha_defaulted: &mut bool) {
+    if let Some(Some(font)) = patch.font.as_mut() {
+        normalize_color_option(&mut font.color, alpha_defaulted);
+    }
+
+    if let Some(Some(fill)) = patch.fill.as_mut() {
+        normalize_fill_colors(fill, alpha_defaulted);
+    }
+
+    if let Some(Some(borders)) = patch.borders.as_mut() {
+        normalize_border_side_color(&mut borders.left, alpha_defaulted);
+        normalize_border_side_color(&mut borders.right, alpha_defaulted);
+        normalize_border_side_color(&mut borders.top, alpha_defaulted);
+        normalize_border_side_color(&mut borders.bottom, alpha_defaulted);
+        normalize_border_side_color(&mut borders.diagonal, alpha_defaulted);
+        normalize_border_side_color(&mut borders.vertical, alpha_defaulted);
+        normalize_border_side_color(&mut borders.horizontal, alpha_defaulted);
+    }
+}
+
+fn normalize_fill_colors(fill: &mut FillPatch, alpha_defaulted: &mut bool) {
+    match fill {
+        FillPatch::Pattern(pattern) => {
+            normalize_color_option(&mut pattern.foreground_color, alpha_defaulted);
+            normalize_color_option(&mut pattern.background_color, alpha_defaulted);
+        }
+        FillPatch::Gradient(gradient) => {
+            if let Some(stops) = gradient.stops.as_mut() {
+                for stop in stops {
+                    if let Some((normalized, defaulted)) =
+                        crate::styles::normalize_color_hex(&stop.color)
+                    {
+                        stop.color = normalized;
+                        if defaulted {
+                            *alpha_defaulted = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn normalize_border_side_color(
+    side: &mut Option<Option<crate::model::BorderSidePatch>>,
+    alpha_defaulted: &mut bool,
+) {
+    if let Some(Some(side_patch)) = side.as_mut() {
+        normalize_color_option(&mut side_patch.color, alpha_defaulted);
+    }
+}
+
+fn normalize_color_option(value: &mut Option<Option<String>>, alpha_defaulted: &mut bool) {
+    let Some(Some(color)) = value.as_mut() else {
+        return;
+    };
+    if let Some((normalized, defaulted)) = crate::styles::normalize_color_hex(color) {
+        *color = normalized;
+        if defaulted {
+            *alpha_defaulted = true;
+        }
+    }
+}
+
 pub async fn style_batch(
     state: Arc<AppState>,
-    params: StyleBatchParams,
+    params: StyleBatchParamsInput,
 ) -> Result<StyleBatchResponse> {
+    let (params, warnings) = normalize_style_batch(params)?;
+    let warning_messages: Vec<String> = warnings
+        .into_iter()
+        .map(|warning| format!("{}: {}", warning.code, warning.message))
+        .collect();
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
@@ -479,6 +958,7 @@ pub async fn style_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["style_batch".to_string()];
+        summary.warnings.extend(warning_messages.clone());
 
         let staged_op = StagedOp {
             kind: "style_batch".to_string(),
@@ -515,6 +995,7 @@ pub async fn style_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["style_batch".to_string()];
+        summary.warnings.extend(warning_messages);
 
         let _ = state.close_workbook(&fork_workbook_id);
 
@@ -808,6 +1289,108 @@ pub struct StructureBatchParams {
     pub label: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StructureBatchParamsInput {
+    pub fork_id: String,
+    pub ops: Vec<StructureOpInput>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureOpInput {
+    op: StructureOp,
+    alias_used: bool,
+}
+
+impl From<StructureOp> for StructureOpInput {
+    fn from(op: StructureOp) -> Self {
+        Self {
+            op,
+            alias_used: false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StructureOpInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let Some(obj) = value.as_object_mut() else {
+            return Err(de::Error::custom("structure op must be an object"));
+        };
+
+        let mut alias_used = false;
+        let kind_value = if let Some(kind) = obj.get("kind") {
+            kind.clone()
+        } else if let Some(op) = obj.remove("op") {
+            alias_used = true;
+            op
+        } else {
+            return Err(de::Error::custom("structure op requires 'kind' or 'op'"));
+        };
+
+        let Some(kind_str) = kind_value.as_str() else {
+            return Err(de::Error::custom("structure op kind must be a string"));
+        };
+
+        let normalized_kind = if kind_str == "add_sheet" {
+            alias_used = true;
+            "create_sheet"
+        } else {
+            kind_str
+        };
+
+        obj.insert(
+            "kind".to_string(),
+            serde_json::Value::String(normalized_kind.to_string()),
+        );
+
+        let op = serde_json::from_value(value).map_err(de::Error::custom)?;
+        Ok(StructureOpInput { op, alias_used })
+    }
+}
+
+impl schemars::JsonSchema for StructureOpInput {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "StructureOp".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        StructureOp::json_schema(generator)
+    }
+}
+
+pub fn normalize_structure_batch(
+    input: StructureBatchParamsInput,
+) -> Result<(StructureBatchParams, Vec<Warning>)> {
+    let mut warnings = Vec::new();
+    let mut ops = Vec::with_capacity(input.ops.len());
+
+    for op_input in input.ops {
+        if op_input.alias_used {
+            warnings.push(Warning {
+                code: "WARN_ALIAS_KIND".to_string(),
+                message: "Normalized structure op alias to canonical kind".to_string(),
+            });
+        }
+        ops.push(op_input.op);
+    }
+
+    Ok((
+        StructureBatchParams {
+            fork_id: input.fork_id,
+            ops,
+            mode: input.mode,
+            label: input.label,
+        },
+        warnings,
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StructureOp {
@@ -879,8 +1462,13 @@ struct StructureBatchStagedPayload {
 
 pub async fn structure_batch(
     state: Arc<AppState>,
-    params: StructureBatchParams,
+    params: StructureBatchParamsInput,
 ) -> Result<StructureBatchResponse> {
+    let (params, warnings) = normalize_structure_batch(params)?;
+    let alias_warnings: Vec<String> = warnings
+        .into_iter()
+        .map(|warning| format!("{}: {}", warning.code, warning.message))
+        .collect();
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
@@ -910,6 +1498,7 @@ pub async fn structure_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["structure_batch".to_string()];
+        summary.warnings.extend(alias_warnings);
         // Best-effort preview diff size: compare current fork to preview snapshot.
         // This is intentionally summarized as a count to avoid large payloads.
         if let Ok(change_count) = tokio::task::spawn_blocking({
@@ -966,6 +1555,7 @@ pub async fn structure_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["structure_batch".to_string()];
+        summary.warnings.extend(alias_warnings);
 
         let fork_workbook_id = WorkbookId(params.fork_id.clone());
         let _ = state.close_workbook(&fork_workbook_id);
@@ -2047,6 +2637,145 @@ struct StyleApplyResult {
 
 fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
     PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
+}
+
+struct ColumnSizeApplyResult {
+    ops_applied: usize,
+    summary: ChangeSummary,
+}
+
+fn parse_column_span(spec: &str) -> Result<(u32, u32)> {
+    let raw = spec.trim();
+    if raw.is_empty() {
+        return Err(anyhow!("column range is empty"));
+    }
+
+    let raw = raw.replace(' ', "");
+    let (start, end) = if let Some((a, b)) = raw.split_once(':') {
+        (a, b)
+    } else if let Some((a, b)) = raw.split_once('-') {
+        (a, b)
+    } else {
+        (raw.as_str(), raw.as_str())
+    };
+
+    let start_idx = umya_spreadsheet::helper::coordinate::column_index_from_string(start);
+    let end_idx = umya_spreadsheet::helper::coordinate::column_index_from_string(end);
+    if start_idx == 0 || end_idx == 0 {
+        return Err(anyhow!("invalid column span '{spec}'"));
+    }
+    let (min, max) = if start_idx <= end_idx {
+        (start_idx, end_idx)
+    } else {
+        (end_idx, start_idx)
+    };
+    Ok((min, max))
+}
+
+fn apply_column_size_ops_to_file(
+    path: &Path,
+    sheet_name: &str,
+    ops: &[ColumnSizeOp],
+) -> Result<ColumnSizeApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let mut affected_bounds: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let mut columns_sized: u64 = 0;
+    let mut auto_ops: u64 = 0;
+    let mut width_ops: u64 = 0;
+
+    for op in ops {
+        let ColumnTarget::Columns { range } = &op.target;
+        let (start_col, end_col) = parse_column_span(range)?;
+        affected_bounds.push(range.clone());
+
+        match &op.size {
+            ColumnSizeSpec::Width { width_chars } => {
+                width_ops += 1;
+                for col in start_col..=end_col {
+                    let col_dim = sheet.get_column_dimension_by_number_mut(&col);
+                    col_dim.set_width(*width_chars);
+                    col_dim.set_best_fit(false);
+                    col_dim.set_auto_width(false);
+                    columns_sized += 1;
+                }
+            }
+            ColumnSizeSpec::Auto {
+                min_width_chars,
+                max_width_chars,
+            } => {
+                auto_ops += 1;
+
+                let mut saw_formula_without_cached = false;
+                for cell in sheet.get_cell_collection() {
+                    let col_num = *cell.get_coordinate().get_col_num();
+                    if col_num < start_col || col_num > end_col {
+                        continue;
+                    }
+                    if cell.is_formula() && cell.get_value().is_empty() {
+                        saw_formula_without_cached = true;
+                        break;
+                    }
+                }
+                if saw_formula_without_cached {
+                    warnings.push(
+                        "WARN_AUTOWIDTH_FORMULA_NO_CACHED: Autosize measured empty values for some formula cells; results may be too narrow. Recalc the sheet before autosize for best results."
+                            .to_string(),
+                    );
+                }
+
+                for col in start_col..=end_col {
+                    sheet
+                        .get_column_dimension_by_number_mut(&col)
+                        .set_auto_width(true);
+                }
+                sheet.calculation_auto_width();
+
+                for col in start_col..=end_col {
+                    let col_dim = sheet.get_column_dimension_by_number_mut(&col);
+                    col_dim.set_auto_width(false);
+                    col_dim.set_best_fit(true);
+
+                    let mut width = *col_dim.get_width();
+                    if let Some(min_width) = min_width_chars
+                        && width < *min_width
+                    {
+                        width = *min_width;
+                    }
+                    if let Some(max_width) = max_width_chars
+                        && width > *max_width
+                    {
+                        width = *max_width;
+                    }
+                    col_dim.set_width(width);
+                    columns_sized += 1;
+                }
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let mut counts = BTreeMap::new();
+    counts.insert("columns_sized".to_string(), columns_sized);
+    counts.insert("auto_ops".to_string(), auto_ops);
+    counts.insert("width_ops".to_string(), width_ops);
+
+    Ok(ColumnSizeApplyResult {
+        ops_applied: ops.len(),
+        summary: ChangeSummary {
+            op_kinds: vec!["column_size_batch".to_string()],
+            affected_sheets: vec![sheet_name.to_string()],
+            affected_bounds,
+            counts,
+            warnings,
+        },
+    })
 }
 
 struct TransformApplyResult {
@@ -3225,6 +3954,21 @@ pub async fn apply_staged_change(
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
                     move || apply_style_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "column_size_batch" => {
+                let payload: ColumnSizeBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid column_size_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let sheet_name = payload.sheet_name.clone();
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || apply_column_size_ops_to_file(&work_path, &sheet_name, &ops)
                 })
                 .await??;
 

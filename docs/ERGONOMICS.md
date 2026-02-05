@@ -8,6 +8,12 @@ This doc captures ergonomic frictions observed in recent agent traces (fork/reca
 - Reduce token blowups / recompress loops.
 - Reduce accidental destructive workflows ("save early just to inspect", cell-by-cell clearing, manual rebuilds).
 
+## Write tool v2 shapes (in progress)
+
+- Canonical request shapes with small shorthands to reduce model guesswork.
+- Shorthands normalize into v2 and emit warnings for visibility.
+- Deprecation window: one release with warnings before strict v2-only.
+
 ## Observed frictions and root causes
 
 ### 1) `workbook_id` vs `fork_id` mental model keeps breaking
@@ -116,6 +122,41 @@ This doc captures ergonomic frictions observed in recent agent traces (fork/reca
 
 **Impact**
 - Less trial-and-error; fewer screenshots; fewer recompressions.
+
+### 4b) Hex color alpha confusion (RGB vs ARGB)
+
+**Observed**
+- Agents applied 6-digit RGB hex colors (e.g., `#F5F7FA`) which were interpreted as ARGB with alpha `00` in some paths, producing black/transparent fills.
+
+**Root cause**
+- Style patch colors expect ARGB, but RGB is a common default in LLM outputs.
+
+**Fix pathways**
+- Normalize `#RGB` / `#RRGGBB` to `FFRRGGBB` and emit a warning.
+- Document ARGB (`AARRGGBB`) as the preferred explicit form when opacity matters.
+
+**Impact**
+- Eliminates black/transparent fills from missing alpha defaults.
+
+### 4c) Column sizing (auto-width vs explicit width units)
+
+**Observed**
+- Agents often try to "autosize columns" after writing headers/labels, but there was no write primitive for column dimensions.
+- Even when a style/format looks right, narrow default widths hide content and trigger screenshot loops.
+
+**Reality (xlsx + umya-spreadsheet)**
+- Column width is stored in Excel "character width" units (a floating point value).
+- umya-spreadsheet can compute an auto-width heuristic from formatted cell values, but it relies on cached display values.
+
+**Fix pathways**
+- Add `column_size_batch`:
+  - `size: {kind:"width", width_chars: f64}` sets an explicit width.
+  - `size: {kind:"auto"}` computes and sets widths immediately (persisted).
+- Warn when autosize encounters formula-only cells with no cached results (widths may be too narrow unless recalculated).
+
+**Impact**
+- Makes "make it readable" a one-call operation.
+- Reduces retries and screenshot churn.
 
 ---
 

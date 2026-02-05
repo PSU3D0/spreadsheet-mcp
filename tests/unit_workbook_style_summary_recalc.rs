@@ -4,7 +4,7 @@ use anyhow::Result;
 use spreadsheet_mcp::model::{FontPatch, StylePatch};
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::fork::{
-    CreateForkParams, StyleBatchParams, StyleOp, StyleTarget, create_fork, style_batch,
+    CreateForkParams, StyleBatchParamsInput, StyleOp, StyleTarget, create_fork, style_batch,
 };
 use spreadsheet_mcp::tools::{
     ListWorkbooksParams, WorkbookStyleSummaryParams, list_workbooks, workbook_style_summary,
@@ -82,16 +82,19 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
 
     style_batch(
         state.clone(),
-        StyleBatchParams {
+        StyleBatchParamsInput {
             fork_id: fork.fork_id.clone(),
-            ops: vec![StyleOp {
-                sheet_name: "Sheet1".to_string(),
-                target: StyleTarget::Cells {
-                    cells: vec!["A2".to_string()],
-                },
-                patch,
-                op_mode: Some("merge".to_string()),
-            }],
+            ops: vec![
+                StyleOp {
+                    sheet_name: "Sheet1".to_string(),
+                    target: StyleTarget::Cells {
+                        cells: vec!["A2".to_string()],
+                    },
+                    patch,
+                    op_mode: Some("merge".to_string()),
+                }
+                .into(),
+            ],
             mode: Some("apply".to_string()),
             label: None,
         },

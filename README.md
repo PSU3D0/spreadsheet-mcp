@@ -103,12 +103,105 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `style_batch` | Batch style edits (range/region/cells) |
 | `apply_formula_pattern` | Autofill-like formula fill over a target range |
 | `structure_batch` | Batch structural edits (rows/cols/sheets + copy/move ranges) |
+| `column_size_batch` | Set column widths or compute auto-width for columns |
 | `recalculate` | Trigger LibreOffice to update formula results |
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
 | `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
 | `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
 | `list_staged_changes`, `apply_staged_change`, `discard_staged_change` | Manage previewed/staged changes |
 | `get_edits`, `list_forks`, `discard_fork` | Inspect / list / discard forks |
+
+### Write Tool v2 Shapes (Canonical) + Shorthands
+
+All write tools accept a canonical v2 shape and a small set of shorthands for ergonomics. Shorthands are normalized into v2 and emit warnings for visibility. These shorthands are supported for one release and will be removed after deprecation.
+
+**edit_batch (canonical + shorthand)**
+```json
+{
+  "tool": "edit_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "sheet_name": "Inputs",
+    "edits": [
+      { "address": "A1", "value": "Financial Model Inputs" },
+      { "address": "B2", "formula": "SUM(B3:B10)" },
+      "C1=100",
+      "D1==SUM(A1:A2)"
+    ]
+  }
+}
+```
+Notes:
+- `formula` is preferred for formulas. `is_formula` is still accepted.
+- Leading `=` is accepted and stripped with a warning (`=SUM(...)` and `==SUM(...)` are equivalent).
+
+**structure_batch (canonical + alias)**
+```json
+{
+  "tool": "structure_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "ops": [
+      { "kind": "create_sheet", "name": "Inputs" },
+      { "op": "add_sheet", "name": "Legacy" }
+    ]
+  }
+}
+```
+Notes:
+- `op` is accepted as an alias for `kind`.
+- `add_sheet` is accepted as an alias for `create_sheet`.
+
+**style_batch (canonical + shorthand)**
+```json
+{
+  "tool": "style_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "ops": [
+      {
+        "sheet_name": "Accounts",
+        "target": { "kind": "range", "range": "A2:F2" },
+        "patch": {
+          "font": { "bold": true },
+          "fill": { "kind": "pattern", "pattern_type": "solid", "foreground_color": "FFF5F7FA" }
+        }
+      },
+      {
+        "sheet_name": "Accounts",
+        "range": "A3:F3",
+        "style": { "fill": { "color": "#F5F7FA" } }
+      }
+    ]
+  }
+}
+```
+Notes:
+- Canonical form uses `target` + `patch`.
+- Shorthand `range` + `style` is accepted and normalized.
+- Colors prefer 8-digit ARGB (`AARRGGBB`). 6-digit RGB is accepted, expanded to opaque (`FFRRGGBB`) with a warning.
+
+**column_size_batch (canonical + shorthand)**
+```json
+{
+  "tool": "column_size_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "sheet_name": "Accounts",
+    "mode": "apply",
+    "ops": [
+      {
+        "target": { "kind": "columns", "range": "A:C" },
+        "size": { "kind": "auto", "max_width_chars": 40.0 }
+      },
+      { "range": "D:D", "size": { "kind": "width", "width_chars": 24.0 } }
+    ]
+  }
+}
+```
+Notes:
+- `auto` computes and sets widths immediately (persisted in the file).
+- Autosize uses cached/formatted cell values; formula-only columns with no cached results may size too narrow unless recalculated.
 
 ### Token-Efficient Write Workflows
 

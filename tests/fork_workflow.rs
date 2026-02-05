@@ -13,11 +13,11 @@ use spreadsheet_mcp::diff::merge::{CellDiff, ModificationType};
 use spreadsheet_mcp::model::WorkbookId;
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::fork::{
-    CellEdit, CreateForkParams, DiscardForkParams, EditBatchParams, GetChangesetParams,
-    GetEditsParams, ListForksParams, SaveForkParams, TransformBatchParams, TransformOp,
-    TransformTarget, create_fork, discard_fork, edit_batch, get_changeset, get_edits, list_forks,
-    save_fork, transform_batch,
+    CreateForkParams, DiscardForkParams, GetChangesetParams, GetEditsParams, ListForksParams,
+    SaveForkParams, TransformBatchParams, TransformOp, TransformTarget, create_fork, discard_fork,
+    edit_batch, get_changeset, get_edits, list_forks, save_fork, transform_batch,
 };
+use spreadsheet_mcp::tools::write_normalize::{CellEditInput, CellEditV2, EditBatchParamsInput};
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
 #[path = "./support/mod.rs"]
@@ -32,6 +32,15 @@ fn recalc_enabled_config(workspace: &support::TestWorkspace) -> ServerConfig {
 fn app_state_with_recalc(workspace: &support::TestWorkspace) -> Arc<AppState> {
     let config = Arc::new(recalc_enabled_config(workspace));
     Arc::new(AppState::new(config))
+}
+
+fn input_edit(address: &str, value: &str, is_formula: bool) -> CellEditInput {
+    CellEditInput::Object(CellEditV2 {
+        address: address.to_string(),
+        value: Some(value.to_string()),
+        formula: None,
+        is_formula: Some(is_formula),
+    })
 }
 
 async fn discover_workbook(state: Arc<AppState>) -> Result<WorkbookId> {
@@ -77,7 +86,7 @@ async fn test_create_fork_basic() -> Result<()> {
 
     assert!(!response.fork_id.is_empty());
     assert!(response.base_workbook.contains("source.xlsx"));
-    assert_eq!(response.ttl_seconds, 3600);
+    assert_eq!(response.ttl_seconds, 0);
 
     Ok(())
 }
@@ -147,27 +156,82 @@ async fn test_edit_batch_applies_values() -> Result<()> {
 
     let edit_response = edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork_response.fork_id.clone(),
             sheet_name: "Data".to_string(),
             edits: vec![
-                CellEdit {
-                    address: "A1".to_string(),
-                    value: "100".to_string(),
-                    is_formula: false,
-                },
-                CellEdit {
-                    address: "A3".to_string(),
-                    value: "SUM(A1:A2)".to_string(),
-                    is_formula: true,
-                },
+                CellEditInput::Shorthand("A1=100".to_string()),
+                CellEditInput::Shorthand("B2==SUM(A1:A2)".to_string()),
+                input_edit("A3", "SUM(A1:A2)", true),
             ],
         },
     )
     .await?;
 
-    assert_eq!(edit_response.edits_applied, 2);
-    assert_eq!(edit_response.total_edits, 2);
+    assert_eq!(edit_response.edits_applied, 3);
+    assert_eq!(edit_response.total_edits, 3);
+    assert!(
+        edit_response
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "WARN_SHORTHAND_EDIT")
+    );
+    assert!(
+        edit_response
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "WARN_FORMULA_PREFIX")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_edit_batch_clears_cached_value_on_formula() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("formula_cache.xlsx", |book| {
+        let sheet = book.get_sheet_mut(&0).unwrap();
+        sheet.set_name("Data");
+        sheet.get_cell_mut("A1").set_value("stale");
+    });
+
+    let state = app_state_with_recalc(&workspace);
+    let workbook_id = discover_workbook(state.clone()).await?;
+
+    let fork_response = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    edit_batch(
+        state.clone(),
+        EditBatchParamsInput {
+            fork_id: fork_response.fork_id.clone(),
+            sheet_name: "Data".to_string(),
+            edits: vec![input_edit("A1", "A1*2", true)],
+        },
+    )
+    .await?;
+
+    let registry = state
+        .fork_registry()
+        .expect("fork registry should be available");
+    let fork_path = registry
+        .get_fork_path(&fork_response.fork_id)
+        .expect("fork path");
+    let book = umya_spreadsheet::reader::xlsx::read(&fork_path)?;
+    let sheet = book
+        .get_sheet_by_name("Data")
+        .expect("Data sheet should exist");
+    let cell = sheet.get_cell("A1").expect("A1 should exist");
+
+    assert!(cell.is_formula());
+    assert_eq!(cell.get_formula(), "A1*2");
+    assert!(cell.get_cell_value().get_raw_value().is_empty());
+    assert_eq!(cell.get_value(), "");
 
     Ok(())
 }
@@ -195,28 +259,20 @@ async fn test_get_edits_returns_history() -> Result<()> {
     // Apply multiple batches
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "10".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "10", false)],
         },
     )
     .await?;
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
-            edits: vec![CellEdit {
-                address: "B1".to_string(),
-                value: "A1*2".to_string(),
-                is_formula: true,
-            }],
+            edits: vec![input_edit("B1", "A1*2", true)],
         },
     )
     .await?;
@@ -267,20 +323,12 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![
-                CellEdit {
-                    address: "A1".to_string(),
-                    value: "200".to_string(),
-                    is_formula: false,
-                },
-                CellEdit {
-                    address: "A2".to_string(),
-                    value: "modified".to_string(),
-                    is_formula: false,
-                },
+                input_edit("A1", "200", false),
+                input_edit("A2", "modified", false),
             ],
         },
     )
@@ -354,28 +402,20 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
     // Edit both sheets
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "10".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "10", false)],
         },
     )
     .await?;
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet2".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "20".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "20", false)],
         },
     )
     .await?;
@@ -510,14 +550,10 @@ async fn test_save_fork_overwrites_original() -> Result<()> {
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Data".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "999".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "999", false)],
         },
     )
     .await?;
@@ -569,14 +605,10 @@ async fn test_save_fork_to_new_path() -> Result<()> {
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Data".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "modified".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "modified", false)],
         },
     )
     .await?;
@@ -649,14 +681,10 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
     // Step 2: Apply edits (update rent amount)
     let edit_result = edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Budget".to_string(),
-            edits: vec![CellEdit {
-                address: "B2".to_string(),
-                value: "1200".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("B2", "1200", false)],
         },
     )
     .await?;
@@ -762,14 +790,10 @@ async fn test_edit_nonexistent_sheet_error() -> Result<()> {
 
     let result = edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "FakeSheet".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "test".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "test", false)],
         },
     )
     .await;
@@ -921,14 +945,10 @@ async fn test_get_changeset_exclude_recalc_result() -> Result<()> {
 
     edit_batch(
         state.clone(),
-        EditBatchParams {
+        EditBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
-            edits: vec![CellEdit {
-                address: "A1".to_string(),
-                value: "2".to_string(),
-                is_formula: false,
-            }],
+            edits: vec![input_edit("A1", "2", false)],
         },
     )
     .await?;
