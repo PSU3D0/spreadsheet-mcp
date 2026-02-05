@@ -1,6 +1,5 @@
 use crate::errors::InvalidParamsError;
-use crate::errors::InvalidParamsError;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
 
 /// Canonicalize `candidate` and ensure it remains within `workspace_root`.
