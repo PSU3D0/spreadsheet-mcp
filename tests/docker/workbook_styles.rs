@@ -50,7 +50,7 @@ async fn test_workbook_style_summary_reports_theme_and_conditional_formats_in_do
         &client
             .call_tool(call_tool(
                 "workbook_style_summary",
-                json!({ "workbook_or_fork_id": workbook_id }),
+                json!({ "workbook_or_fork_id": workbook_id, "summary_only": false }),
             ))
             .await?,
     )?;

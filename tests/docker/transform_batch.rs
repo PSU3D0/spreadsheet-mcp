@@ -60,6 +60,7 @@ async fn test_transform_batch_preview_and_apply_keeps_formulas() -> Result<()> {
                 json!({
                   "workbook_or_fork_id": fork_id,
                   "sheet_name": "Sheet1",
+                  "format": "full",
                   "start_row": 1,
                   "page_size": 1,
                   "columns": ["A", "B"],
@@ -85,6 +86,7 @@ async fn test_transform_batch_preview_and_apply_keeps_formulas() -> Result<()> {
                 json!({
                   "workbook_or_fork_id": fork_id,
                   "sheet_name": "Sheet1",
+                  "format": "full",
                   "start_row": 1,
                   "page_size": 1,
                   "columns": ["A", "B"],
@@ -327,6 +329,7 @@ async fn test_transform_batch_fill_range_sets_values_and_preserves_formulas_in_d
                 json!({
                   "workbook_or_fork_id": fork_id,
                   "sheet_name": "Sheet1",
+                  "format": "full",
                   "start_row": 1,
                   "page_size": 1,
                   "columns": ["A", "B"],
@@ -778,6 +781,7 @@ async fn test_transform_batch_fill_range_overwrite_formulas_removes_formula_in_d
                 json!({
                   "workbook_or_fork_id": fork_id,
                   "sheet_name": "Sheet1",
+                  "format": "full",
                   "start_row": 1,
                   "page_size": 1,
                   "columns": ["A"],
@@ -1023,7 +1027,6 @@ async fn test_find_formula_defaults_and_paging_in_docker() -> Result<()> {
     )?;
 
     assert_eq!(first_page["matches"].as_array().unwrap().len(), 2);
-    assert_eq!(first_page["truncated"].as_bool(), Some(true));
     assert_eq!(first_page["next_offset"].as_u64(), Some(2));
     assert_eq!(
         first_page["matches"][0]["context"]

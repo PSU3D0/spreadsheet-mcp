@@ -147,49 +147,94 @@ pub fn extract_json(result: &rmcp::model::CallToolResult) -> Result<Value> {
 }
 
 pub fn cell_value(page: &Value, row: usize, col: usize) -> Option<String> {
-    let cell = &page["rows"][row]["cells"][col];
-    let value = &cell["value"];
+    let value = sheet_page_value_node(page, row, col)?;
+    cell_value_from_node(value)
+}
 
-    match value["kind"].as_str()? {
-        "Number" => value["value"].as_f64().map(|n| {
+pub fn cell_value_f64(page: &Value, row: usize, col: usize) -> Option<f64> {
+    let value = sheet_page_value_node(page, row, col)?;
+    value.get("value").and_then(|v| v.as_f64())
+}
+
+pub fn cell_is_error(page: &Value, row: usize, col: usize) -> bool {
+    let Some(value) = sheet_page_value_node(page, row, col) else {
+        return false;
+    };
+    let kind = value.get("kind").and_then(|v| v.as_str());
+    if kind == Some("Error") {
+        return true;
+    }
+    if let Some(val) = value.get("value").and_then(|v| v.as_str()) {
+        return val.starts_with('#');
+    }
+    false
+}
+
+pub fn cell_error_type(page: &Value, row: usize, col: usize) -> Option<String> {
+    let value = sheet_page_value_node(page, row, col)?;
+    if value.get("kind").and_then(|v| v.as_str()) == Some("Error") {
+        return value.get("value").and_then(|v| v.as_str()).map(|s| s.to_string());
+    }
+    if let Some(val) = value.get("value").and_then(|v| v.as_str())
+        && val.starts_with('#')
+    {
+        return Some(val.to_string());
+    }
+    None
+}
+
+fn sheet_page_value_node<'a>(page: &'a Value, row: usize, col: usize) -> Option<&'a Value> {
+    // Full format: rows[].cells[].value
+    if page.get("rows").and_then(|v| v.as_array()).is_some() {
+        let cell = &page["rows"][row]["cells"][col];
+        return Some(&cell["value"]);
+    }
+
+    // Compact format: compact.rows[][]
+    if page
+        .get("compact")
+        .and_then(|c| c.get("rows"))
+        .and_then(|v| v.as_array())
+        .is_some()
+    {
+        // Compact payload prepends a synthetic "Row" column containing row_index.
+        return Some(&page["compact"]["rows"][row][col + 1]);
+    }
+
+    // Values-only format: values_only.rows[][]
+    if page
+        .get("values_only")
+        .and_then(|c| c.get("rows"))
+        .and_then(|v| v.as_array())
+        .is_some()
+    {
+        return Some(&page["values_only"]["rows"][row][col]);
+    }
+
+    None
+}
+
+fn cell_value_from_node(value: &Value) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+
+    // Expected shape: {"kind":"Text"|"Number"|..., "value": ...}
+    match value.get("kind").and_then(|v| v.as_str())? {
+        "Number" => value.get("value").and_then(|v| v.as_f64()).map(|n| {
             if n.fract() == 0.0 {
                 format!("{}", n as i64)
             } else {
                 format!("{}", n)
             }
         }),
-        "String" | "Text" => value["value"].as_str().map(|s| s.to_string()),
-        "Bool" => value["value"].as_bool().map(|b| b.to_string()),
+        "Text" | "String" | "Date" | "Error" => {
+            value.get("value").and_then(|v| v.as_str()).map(|s| s.to_string())
+        }
+        "Bool" => value
+            .get("value")
+            .and_then(|v| v.as_bool())
+            .map(|b| b.to_string()),
         _ => None,
     }
-}
-
-pub fn cell_value_f64(page: &Value, row: usize, col: usize) -> Option<f64> {
-    let cell = &page["rows"][row]["cells"][col];
-    cell["value"]["value"].as_f64()
-}
-
-pub fn cell_is_error(page: &Value, row: usize, col: usize) -> bool {
-    let cell = &page["rows"][row]["cells"][col];
-    let kind = cell["value"]["kind"].as_str();
-    if kind == Some("Error") {
-        return true;
-    }
-    if let Some(val) = cell["value"]["value"].as_str() {
-        return val.starts_with("#");
-    }
-    false
-}
-
-pub fn cell_error_type(page: &Value, row: usize, col: usize) -> Option<String> {
-    let cell = &page["rows"][row]["cells"][col];
-    if cell["value"]["kind"].as_str() == Some("Error") {
-        return cell["value"]["value"].as_str().map(|s| s.to_string());
-    }
-    if let Some(val) = cell["value"]["value"].as_str()
-        && val.starts_with("#")
-    {
-        return Some(val.to_string());
-    }
-    None
 }
