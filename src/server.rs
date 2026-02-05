@@ -1,4 +1,5 @@
 use crate::config::ServerConfig;
+use crate::errors::InvalidParamsError;
 use crate::model::{
     CloseWorkbookResponse, FindFormulaResponse, FindValueResponse, FormulaTraceResponse,
     ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
@@ -21,6 +22,7 @@ use serde::Serialize;
 use std::future::Future;
 use std::sync::Arc;
 use thiserror::Error;
+use {once_cell::sync::Lazy, regex::Regex};
 
 const BASE_INSTRUCTIONS: &str = "\
 Spreadsheet MCP: optimized for spreadsheet analysis.
@@ -281,14 +283,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::ListWorkbooksParams>,
     ) -> Result<Json<WorkbookListResponse>, McpError> {
         self.ensure_tool_enabled("list_workbooks")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("list_workbooks", e))?;
         self.run_tool_with_timeout(
             "list_workbooks",
             tools::list_workbooks(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("list_workbooks", e))
     }
 
     #[tool(name = "describe_workbook", description = "Describe workbook metadata")]
@@ -297,14 +299,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::DescribeWorkbookParams>,
     ) -> Result<Json<WorkbookDescription>, McpError> {
         self.ensure_tool_enabled("describe_workbook")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("describe_workbook", e))?;
         self.run_tool_with_timeout(
             "describe_workbook",
             tools::describe_workbook(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("describe_workbook", e))
     }
 
     #[tool(
@@ -316,14 +318,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::WorkbookSummaryParams>,
     ) -> Result<Json<WorkbookSummaryResponse>, McpError> {
         self.ensure_tool_enabled("workbook_summary")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("workbook_summary", e))?;
         self.run_tool_with_timeout(
             "workbook_summary",
             tools::workbook_summary(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("workbook_summary", e))
     }
 
     #[tool(name = "list_sheets", description = "List sheets with summaries")]
@@ -332,14 +334,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::ListSheetsParams>,
     ) -> Result<Json<SheetListResponse>, McpError> {
         self.ensure_tool_enabled("list_sheets")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("list_sheets", e))?;
         self.run_tool_with_timeout(
             "list_sheets",
             tools::list_sheets(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("list_sheets", e))
     }
 
     #[tool(
@@ -351,14 +353,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::SheetOverviewParams>,
     ) -> Result<Json<SheetOverviewResponse>, McpError> {
         self.ensure_tool_enabled("sheet_overview")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("sheet_overview", e))?;
         self.run_tool_with_timeout(
             "sheet_overview",
             tools::sheet_overview(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("sheet_overview", e))
     }
 
     #[tool(name = "sheet_page", description = "Page through sheet cells")]
@@ -367,11 +369,11 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::SheetPageParams>,
     ) -> Result<Json<SheetPageResponse>, McpError> {
         self.ensure_tool_enabled("sheet_page")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("sheet_page", e))?;
         self.run_tool_with_timeout("sheet_page", tools::sheet_page(self.state.clone(), params))
             .await
             .map(Json)
-            .map_err(to_mcp_error)
+            .map_err(|e| to_mcp_error_for_tool("sheet_page", e))
     }
 
     #[tool(name = "find_value", description = "Search cell values or labels")]
@@ -380,11 +382,11 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::FindValueParams>,
     ) -> Result<Json<FindValueResponse>, McpError> {
         self.ensure_tool_enabled("find_value")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("find_value", e))?;
         self.run_tool_with_timeout("find_value", tools::find_value(self.state.clone(), params))
             .await
             .map(Json)
-            .map_err(to_mcp_error)
+            .map_err(|e| to_mcp_error_for_tool("find_value", e))
     }
 
     #[tool(
@@ -396,11 +398,11 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::ReadTableParams>,
     ) -> Result<Json<ReadTableResponse>, McpError> {
         self.ensure_tool_enabled("read_table")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("read_table", e))?;
         self.run_tool_with_timeout("read_table", tools::read_table(self.state.clone(), params))
             .await
             .map(Json)
-            .map_err(to_mcp_error)
+            .map_err(|e| to_mcp_error_for_tool("read_table", e))
     }
 
     #[tool(name = "table_profile", description = "Profile a region or table")]
@@ -409,14 +411,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::TableProfileParams>,
     ) -> Result<Json<TableProfileResponse>, McpError> {
         self.ensure_tool_enabled("table_profile")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("table_profile", e))?;
         self.run_tool_with_timeout(
             "table_profile",
             tools::table_profile(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("table_profile", e))
     }
 
     #[tool(
@@ -428,14 +430,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::RangeValuesParams>,
     ) -> Result<Json<RangeValuesResponse>, McpError> {
         self.ensure_tool_enabled("range_values")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("range_values", e))?;
         self.run_tool_with_timeout(
             "range_values",
             tools::range_values(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("range_values", e))
     }
 
     #[tool(
@@ -447,14 +449,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::SheetStatisticsParams>,
     ) -> Result<Json<SheetStatisticsResponse>, McpError> {
         self.ensure_tool_enabled("sheet_statistics")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("sheet_statistics", e))?;
         self.run_tool_with_timeout(
             "sheet_statistics",
             tools::sheet_statistics(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("sheet_statistics", e))
     }
 
     #[tool(
@@ -466,14 +468,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::SheetFormulaMapParams>,
     ) -> Result<Json<SheetFormulaMapResponse>, McpError> {
         self.ensure_tool_enabled("sheet_formula_map")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("sheet_formula_map", e))?;
         self.run_tool_with_timeout(
             "sheet_formula_map",
             tools::sheet_formula_map(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("sheet_formula_map", e))
     }
 
     #[tool(
@@ -485,14 +487,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::FormulaTraceParams>,
     ) -> Result<Json<FormulaTraceResponse>, McpError> {
         self.ensure_tool_enabled("formula_trace")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("formula_trace", e))?;
         self.run_tool_with_timeout(
             "formula_trace",
             tools::formula_trace(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("formula_trace", e))
     }
 
     #[tool(name = "named_ranges", description = "List named ranges and tables")]
@@ -501,14 +503,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::NamedRangesParams>,
     ) -> Result<Json<NamedRangesResponse>, McpError> {
         self.ensure_tool_enabled("named_ranges")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("named_ranges", e))?;
         self.run_tool_with_timeout(
             "named_ranges",
             tools::named_ranges(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("named_ranges", e))
     }
 
     #[tool(
@@ -520,14 +522,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::FindFormulaParams>,
     ) -> Result<Json<FindFormulaResponse>, McpError> {
         self.ensure_tool_enabled("find_formula")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("find_formula", e))?;
         self.run_tool_with_timeout(
             "find_formula",
             tools::find_formula(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("find_formula", e))
     }
 
     #[tool(name = "scan_volatiles", description = "Scan for volatile formulas")]
@@ -536,14 +538,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::ScanVolatilesParams>,
     ) -> Result<Json<VolatileScanResponse>, McpError> {
         self.ensure_tool_enabled("scan_volatiles")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("scan_volatiles", e))?;
         self.run_tool_with_timeout(
             "scan_volatiles",
             tools::scan_volatiles(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("scan_volatiles", e))
     }
 
     #[tool(
@@ -555,14 +557,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::SheetStylesParams>,
     ) -> Result<Json<SheetStylesResponse>, McpError> {
         self.ensure_tool_enabled("sheet_styles")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("sheet_styles", e))?;
         self.run_tool_with_timeout(
             "sheet_styles",
             tools::sheet_styles(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("sheet_styles", e))
     }
 
     #[tool(
@@ -574,14 +576,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::WorkbookStyleSummaryParams>,
     ) -> Result<Json<WorkbookStyleSummaryResponse>, McpError> {
         self.ensure_tool_enabled("workbook_style_summary")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("workbook_style_summary", e))?;
         self.run_tool_with_timeout(
             "workbook_style_summary",
             tools::workbook_style_summary(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("workbook_style_summary", e))
     }
 
     #[tool(
@@ -593,14 +595,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::ManifestStubParams>,
     ) -> Result<Json<ManifestStubResponse>, McpError> {
         self.ensure_tool_enabled("get_manifest_stub")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("get_manifest_stub", e))?;
         self.run_tool_with_timeout(
             "get_manifest_stub",
             tools::get_manifest_stub(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("get_manifest_stub", e))
     }
 
     #[tool(name = "close_workbook", description = "Evict a workbook from cache")]
@@ -609,14 +611,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::CloseWorkbookParams>,
     ) -> Result<Json<CloseWorkbookResponse>, McpError> {
         self.ensure_tool_enabled("close_workbook")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("close_workbook", e))?;
         self.run_tool_with_timeout(
             "close_workbook",
             tools::close_workbook(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("close_workbook", e))
     }
 }
 
@@ -631,14 +633,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::vba::VbaProjectSummaryParams>,
     ) -> Result<Json<crate::model::VbaProjectSummaryResponse>, McpError> {
         self.ensure_vba_enabled("vba_project_summary")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("vba_project_summary", e))?;
         self.run_tool_with_timeout(
             "vba_project_summary",
             tools::vba::vba_project_summary(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("vba_project_summary", e))
     }
 
     #[tool(
@@ -650,14 +652,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::vba::VbaModuleSourceParams>,
     ) -> Result<Json<crate::model::VbaModuleSourceResponse>, McpError> {
         self.ensure_vba_enabled("vba_module_source")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("vba_module_source", e))?;
         self.run_tool_with_timeout(
             "vba_module_source",
             tools::vba::vba_module_source(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("vba_module_source", e))
     }
 }
 
@@ -673,14 +675,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::fork::CreateForkParams>,
     ) -> Result<Json<tools::fork::CreateForkResponse>, McpError> {
         self.ensure_recalc_enabled("create_fork")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("create_fork", e))?;
         self.run_tool_with_timeout(
             "create_fork",
             tools::fork::create_fork(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("create_fork", e))
     }
 
     #[tool(
@@ -692,14 +694,14 @@ impl SpreadsheetServer {
         Parameters(params): Parameters<tools::write_normalize::EditBatchParamsInput>,
     ) -> Result<Json<tools::fork::EditBatchResponse>, McpError> {
         self.ensure_recalc_enabled("edit_batch")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("edit_batch", e))?;
         self.run_tool_with_timeout(
             "edit_batch",
             tools::fork::edit_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("edit_batch", e))
     }
 
     #[tool(
@@ -712,14 +714,14 @@ Mode: preview or apply (default apply)."
         Parameters(params): Parameters<tools::fork::TransformBatchParams>,
     ) -> Result<Json<tools::fork::TransformBatchResponse>, McpError> {
         self.ensure_recalc_enabled("transform_batch")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("transform_batch", e))?;
         self.run_tool_with_timeout(
             "transform_batch",
             tools::fork::transform_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("transform_batch", e))
     }
 
     #[tool(
@@ -732,14 +734,14 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
         Parameters(params): Parameters<tools::fork::StyleBatchParamsInput>,
     ) -> Result<Json<tools::fork::StyleBatchResponse>, McpError> {
         self.ensure_recalc_enabled("style_batch")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("style_batch", e))?;
         self.run_tool_with_timeout(
             "style_batch",
             tools::fork::style_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("style_batch", e))
     }
 
     #[tool(
@@ -753,14 +755,14 @@ Note: autosize uses cached/formatted cell values; if a column is mostly formulas
         Parameters(params): Parameters<tools::fork::ColumnSizeBatchParamsInput>,
     ) -> Result<Json<tools::fork::ColumnSizeBatchResponse>, McpError> {
         self.ensure_recalc_enabled("column_size_batch")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("column_size_batch", e))?;
         self.run_tool_with_timeout(
             "column_size_batch",
             tools::fork::column_size_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("column_size_batch", e))
     }
 
     #[tool(
@@ -775,14 +777,14 @@ fill_direction: down, right, both (default both)."
         Parameters(params): Parameters<tools::fork::ApplyFormulaPatternParams>,
     ) -> Result<Json<tools::fork::ApplyFormulaPatternResponse>, McpError> {
         self.ensure_recalc_enabled("apply_formula_pattern")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("apply_formula_pattern", e))?;
         self.run_tool_with_timeout(
             "apply_formula_pattern",
             tools::fork::apply_formula_pattern(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("apply_formula_pattern", e))
     }
 
     #[tool(
@@ -796,14 +798,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::StructureBatchParamsInput>,
     ) -> Result<Json<tools::fork::StructureBatchResponse>, McpError> {
         self.ensure_recalc_enabled("structure_batch")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("structure_batch", e))?;
         self.run_tool_with_timeout(
             "structure_batch",
             tools::fork::structure_batch(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("structure_batch", e))
     }
 
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
@@ -812,14 +814,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::GetEditsParams>,
     ) -> Result<Json<tools::fork::GetEditsResponse>, McpError> {
         self.ensure_recalc_enabled("get_edits")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("get_edits", e))?;
         self.run_tool_with_timeout(
             "get_edits",
             tools::fork::get_edits(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("get_edits", e))
     }
 
     #[tool(
@@ -831,14 +833,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::GetChangesetParams>,
     ) -> Result<Json<tools::fork::GetChangesetResponse>, McpError> {
         self.ensure_recalc_enabled("get_changeset")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("get_changeset", e))?;
         self.run_tool_with_timeout(
             "get_changeset",
             tools::fork::get_changeset(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("get_changeset", e))
     }
 
     #[tool(
@@ -850,14 +852,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::RecalculateParams>,
     ) -> Result<Json<tools::fork::RecalculateResponse>, McpError> {
         self.ensure_recalc_enabled("recalculate")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("recalculate", e))?;
         self.run_tool_with_timeout(
             "recalculate",
             tools::fork::recalculate(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("recalculate", e))
     }
 
     #[tool(name = "list_forks", description = "List all active forks")]
@@ -866,14 +868,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::ListForksParams>,
     ) -> Result<Json<tools::fork::ListForksResponse>, McpError> {
         self.ensure_recalc_enabled("list_forks")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("list_forks", e))?;
         self.run_tool_with_timeout(
             "list_forks",
             tools::fork::list_forks(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("list_forks", e))
     }
 
     #[tool(name = "discard_fork", description = "Discard a fork without saving")]
@@ -882,14 +884,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::DiscardForkParams>,
     ) -> Result<Json<tools::fork::DiscardForkResponse>, McpError> {
         self.ensure_recalc_enabled("discard_fork")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("discard_fork", e))?;
         self.run_tool_with_timeout(
             "discard_fork",
             tools::fork::discard_fork(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("discard_fork", e))
     }
 
     #[tool(
@@ -901,14 +903,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::SaveForkParams>,
     ) -> Result<Json<tools::fork::SaveForkResponse>, McpError> {
         self.ensure_recalc_enabled("save_fork")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("save_fork", e))?;
         self.run_tool_with_timeout(
             "save_fork",
             tools::fork::save_fork(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("save_fork", e))
     }
 
     #[tool(
@@ -920,14 +922,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::CheckpointForkParams>,
     ) -> Result<Json<tools::fork::CheckpointForkResponse>, McpError> {
         self.ensure_recalc_enabled("checkpoint_fork")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("checkpoint_fork", e))?;
         self.run_tool_with_timeout(
             "checkpoint_fork",
             tools::fork::checkpoint_fork(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("checkpoint_fork", e))
     }
 
     #[tool(name = "list_checkpoints", description = "List checkpoints for a fork")]
@@ -936,14 +938,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::ListCheckpointsParams>,
     ) -> Result<Json<tools::fork::ListCheckpointsResponse>, McpError> {
         self.ensure_recalc_enabled("list_checkpoints")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("list_checkpoints", e))?;
         self.run_tool_with_timeout(
             "list_checkpoints",
             tools::fork::list_checkpoints(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("list_checkpoints", e))
     }
 
     #[tool(
@@ -955,14 +957,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::RestoreCheckpointParams>,
     ) -> Result<Json<tools::fork::RestoreCheckpointResponse>, McpError> {
         self.ensure_recalc_enabled("restore_checkpoint")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("restore_checkpoint", e))?;
         self.run_tool_with_timeout(
             "restore_checkpoint",
             tools::fork::restore_checkpoint(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("restore_checkpoint", e))
     }
 
     #[tool(
@@ -974,14 +976,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::DeleteCheckpointParams>,
     ) -> Result<Json<tools::fork::DeleteCheckpointResponse>, McpError> {
         self.ensure_recalc_enabled("delete_checkpoint")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("delete_checkpoint", e))?;
         self.run_tool_with_timeout(
             "delete_checkpoint",
             tools::fork::delete_checkpoint(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("delete_checkpoint", e))
     }
 
     #[tool(
@@ -993,14 +995,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::ListStagedChangesParams>,
     ) -> Result<Json<tools::fork::ListStagedChangesResponse>, McpError> {
         self.ensure_recalc_enabled("list_staged_changes")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("list_staged_changes", e))?;
         self.run_tool_with_timeout(
             "list_staged_changes",
             tools::fork::list_staged_changes(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("list_staged_changes", e))
     }
 
     #[tool(
@@ -1012,14 +1014,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::ApplyStagedChangeParams>,
     ) -> Result<Json<tools::fork::ApplyStagedChangeResponse>, McpError> {
         self.ensure_recalc_enabled("apply_staged_change")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("apply_staged_change", e))?;
         self.run_tool_with_timeout(
             "apply_staged_change",
             tools::fork::apply_staged_change(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("apply_staged_change", e))
     }
 
     #[tool(
@@ -1031,14 +1033,14 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         Parameters(params): Parameters<tools::fork::DiscardStagedChangeParams>,
     ) -> Result<Json<tools::fork::DiscardStagedChangeResponse>, McpError> {
         self.ensure_recalc_enabled("discard_staged_change")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("discard_staged_change", e))?;
         self.run_tool_with_timeout(
             "discard_staged_change",
             tools::fork::discard_staged_change(self.state.clone(), params),
         )
         .await
         .map(Json)
-        .map_err(to_mcp_error)
+        .map_err(|e| to_mcp_error_for_tool("discard_staged_change", e))
     }
 
     #[tool(
@@ -1054,7 +1056,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         use rmcp::model::Content;
 
         self.ensure_recalc_enabled("screenshot_sheet")
-            .map_err(to_mcp_error)?;
+            .map_err(|e| to_mcp_error_for_tool("screenshot_sheet", e))?;
 
         let result = async {
             let response = self
@@ -1104,7 +1106,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         }
         .await;
 
-        result.map_err(to_mcp_error)
+        result.map_err(|e| to_mcp_error_for_tool("screenshot_sheet", e))
     }
 }
 
@@ -1133,11 +1135,294 @@ impl ServerHandler for SpreadsheetServer {
     }
 }
 
-fn to_mcp_error(error: anyhow::Error) -> McpError {
+fn to_mcp_error_for_tool(tool: &str, error: anyhow::Error) -> McpError {
     if error.is::<ToolDisabledError>() || error.is::<ResponseTooLargeError>() {
-        McpError::invalid_request(error.to_string(), None)
-    } else {
-        McpError::internal_error(error.to_string(), None)
+        return McpError::invalid_request(error.to_string(), None);
+    }
+
+    if let Some(inv) = error.downcast_ref::<InvalidParamsError>() {
+        let example = tool_minimal_example(tool);
+        let variants = tool_variants(tool, inv.message())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let msg = format_invalid_params_message(
+            tool,
+            inv.message(),
+            inv.path(),
+            if variants.is_empty() {
+                None
+            } else {
+                Some(&variants)
+            },
+            example,
+        );
+        return McpError::invalid_params(msg, None);
+    }
+
+    if let Some(serde_err) = error.downcast_ref::<serde_json::Error>() {
+        let problem = serde_err.to_string();
+        let path = infer_path_for_tool(tool, &problem);
+
+        let mut variants = extract_expected_variants(&problem);
+        if variants.is_empty() {
+            if let Some(extra) = tool_variants(tool, &problem) {
+                variants = extra.into_iter().map(|s| s.to_string()).collect();
+            }
+        }
+
+        let example = tool_minimal_example(tool);
+        let msg = format_invalid_params_message(
+            tool,
+            &problem,
+            path.as_deref(),
+            if variants.is_empty() {
+                None
+            } else {
+                Some(&variants)
+            },
+            example,
+        );
+        return McpError::invalid_params(msg, None);
+    }
+
+    // Heuristic fallbacks for common user-caused shape/enum mistakes that may not
+    // be typed as serde_json::Error (e.g., anyhow::bail! paths).
+    let problem = error.to_string();
+    if looks_like_invalid_params(&problem) {
+        let path = infer_path_for_tool(tool, &problem);
+        let variants = tool_variants(tool, &problem)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let example = tool_minimal_example(tool);
+        let msg = format_invalid_params_message(
+            tool,
+            &problem,
+            path.as_deref(),
+            if variants.is_empty() {
+                None
+            } else {
+                Some(&variants)
+            },
+            example,
+        );
+        return McpError::invalid_params(msg, None);
+    }
+
+    McpError::internal_error(problem, None)
+}
+
+fn format_invalid_params_message(
+    tool: &str,
+    problem: &str,
+    path: Option<&str>,
+    variants: Option<&[String]>,
+    example: Option<&'static str>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Invalid params for tool '{tool}': {problem}"));
+
+    if let Some(path) = path {
+        out.push_str(&format!("\npath: {path}"));
+    }
+
+    if let Some(variants) = variants {
+        if !variants.is_empty() {
+            out.push_str("\nvalid variants: ");
+            out.push_str(&variants.join(", "));
+        }
+    }
+
+    if let Some(example) = example {
+        out.push_str("\nexample: ");
+        out.push_str(example);
+    }
+
+    out
+}
+
+fn tool_minimal_example(tool: &str) -> Option<&'static str> {
+    match tool {
+        "structure_batch" => Some(
+            r#"{"fork_id":"<fork_id>","ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}],"mode":"apply"}"#,
+        ),
+        "style_batch" => Some(
+            r#"{"fork_id":"<fork_id>","ops":[{"sheet_name":"Sheet1","target":{"kind":"range","range":"A1:A1"},"patch":{"fill":{"kind":"pattern","pattern_type":"solid","foreground_color":"FFFF0000"}},"op_mode":"merge"}],"mode":"apply"}"#,
+        ),
+        "edit_batch" => Some(
+            r#"{"fork_id":"<fork_id>","sheet_name":"Sheet1","edits":["A1=100","B2==SUM(A1:A2)"]}"#,
+        ),
+        _ => None,
+    }
+}
+
+fn infer_path_for_tool(tool: &str, problem: &str) -> Option<String> {
+    let p = problem.to_ascii_lowercase();
+
+    match tool {
+        "structure_batch" => {
+            if p.contains("structure op") && (p.contains("kind") || p.contains("op")) {
+                return Some("ops[0].kind".to_string());
+            }
+            if p.contains("missing field `kind`") || p.contains("missing field kind") {
+                return Some("ops[0].kind".to_string());
+            }
+            None
+        }
+        "style_batch" => {
+            if p.contains("fillpatch") || p.contains("fillpatchinput") {
+                return Some("ops[0].patch.fill.kind".to_string());
+            }
+            if p.contains("styletarget") && p.contains("kind") {
+                return Some("ops[0].target.kind".to_string());
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn tool_variants(tool: &str, problem: &str) -> Option<Vec<&'static str>> {
+    let p = problem.to_ascii_lowercase();
+
+    match tool {
+        "structure_batch" => {
+            if p.contains("structure op")
+                || p.contains("structureop")
+                || (p.contains("unknown variant") && p.contains("kind"))
+            {
+                return Some(vec![
+                    "insert_rows",
+                    "delete_rows",
+                    "insert_cols",
+                    "delete_cols",
+                    "rename_sheet",
+                    "create_sheet",
+                    "delete_sheet",
+                    "copy_range",
+                    "move_range",
+                ]);
+            }
+            None
+        }
+        "style_batch" => {
+            if p.contains("fill") || p.contains("fillpatch") || p.contains("fillpatchinput") {
+                return Some(vec!["pattern", "gradient"]);
+            }
+            if p.contains("op_mode") || p.contains("op mode") {
+                return Some(vec!["merge", "set", "clear"]);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn looks_like_invalid_params(problem: &str) -> bool {
+    let p = problem.to_ascii_lowercase();
+
+    // serde-driven shape/enum failures
+    if p.contains("missing field")
+        || p.contains("unknown field")
+        || p.contains("unknown variant")
+        || p.contains("did not match any variant")
+        || p.contains("must be an object")
+    {
+        return true;
+    }
+
+    // common hand-rolled validation errors
+    if p.contains("invalid shorthand edit") {
+        return true;
+    }
+
+    false
+}
+
+fn extract_expected_variants(problem: &str) -> Vec<String> {
+    static EXPECTED_TAIL_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"expected(?: one of)? (?P<tail>.*)$").expect("regex"));
+    static BACKTICK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"`([^`]+)`").expect("regex"));
+
+    let Some(caps) = EXPECTED_TAIL_RE.captures(problem) else {
+        return Vec::new();
+    };
+    let tail = caps.name("tail").map(|m| m.as_str()).unwrap_or("");
+    BACKTICK_RE
+        .captures_iter(tail)
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod typed_errors_tests {
+    use super::to_mcp_error_for_tool;
+    use crate::tools;
+    use rmcp::model::ErrorCode;
+    use serde_json::json;
+
+    #[test]
+    fn structure_batch_missing_kind_or_op_is_invalid_params_with_example_and_variants() {
+        let bad = json!({
+            "fork_id": "f1",
+            "ops": [
+                { "sheet_name": "Sheet1", "at_row": 2, "count": 1 }
+            ]
+        });
+
+        let err =
+            serde_json::from_value::<tools::fork::StructureBatchParamsInput>(bad).unwrap_err();
+        let mcp = to_mcp_error_for_tool("structure_batch", err.into());
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.contains("insert_rows"));
+        assert!(mcp.message.to_ascii_lowercase().contains("valid variants"));
+    }
+
+    #[test]
+    fn style_batch_fill_missing_kind_is_invalid_params_with_example_and_variants() {
+        let bad = json!({
+            "fork_id": "f1",
+            "ops": [
+                {
+                    "sheet_name": "Sheet1",
+                    "target": { "kind": "range", "range": "A1:A1" },
+                    "patch": {
+                        "fill": { "pattern_type": "solid", "foreground_color": "FFFF0000" }
+                    }
+                }
+            ]
+        });
+
+        let err = serde_json::from_value::<tools::fork::StyleBatchParamsInput>(bad).unwrap_err();
+        let mcp = to_mcp_error_for_tool("style_batch", err.into());
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.contains("pattern"));
+        assert!(mcp.message.to_ascii_lowercase().contains("valid variants"));
+    }
+
+    #[test]
+    fn edit_batch_shorthand_missing_equals_is_invalid_params_with_example() {
+        let params = tools::write_normalize::EditBatchParamsInput {
+            fork_id: "f1".to_string(),
+            sheet_name: "Sheet1".to_string(),
+            edits: vec![tools::write_normalize::CellEditInput::Shorthand(
+                "A1".to_string(),
+            )],
+        };
+
+        let err = tools::write_normalize::normalize_edit_batch(params).unwrap_err();
+        let mcp = to_mcp_error_for_tool("edit_batch", err);
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.contains("A1=100"));
     }
 }
 
