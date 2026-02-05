@@ -5,6 +5,7 @@ use crate::model::{
     WorkbookId,
 };
 use crate::recalc::RecalcBackend;
+use crate::security::sanitize_filename_component;
 use crate::state::AppState;
 use crate::tools::write_normalize::{EditBatchParamsInput, normalize_edit_batch};
 use crate::utils::make_short_random_id;
@@ -3739,7 +3740,17 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
     let (target, is_overwrite) = match params.target_path {
         Some(p) => {
             let resolved = config.resolve_path(&p);
-            let is_overwrite = resolved == fork_ctx.base_path;
+            let is_overwrite = if resolved.exists() {
+                let base_canon = fork_ctx.base_path.canonicalize().map_err(|e| {
+                    anyhow!("failed to canonicalize base_path for overwrite check: {e}")
+                })?;
+                let target_canon = resolved.canonicalize().map_err(|e| {
+                    anyhow!("failed to canonicalize target_path for overwrite check: {e}")
+                })?;
+                target_canon == base_canon
+            } else {
+                false
+            };
             (resolved, is_overwrite)
         }
         None => (fork_ctx.base_path.clone(), true),
@@ -4224,13 +4235,10 @@ pub async fn screenshot_sheet(
 
     let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
 
-    let safe_range = range.replace(':', "-");
-    let filename = format!(
-        "{}_{}_{}.png",
-        workbook.slug,
-        params.sheet_name.replace(' ', "_"),
-        safe_range
-    );
+    let safe_range = sanitize_filename_component(&range.replace(':', "-"));
+    let safe_sheet = sanitize_filename_component(&params.sheet_name).replace(' ', "_");
+    let safe_slug = sanitize_filename_component(&workbook.slug);
+    let filename = format!("{}_{}_{}.png", safe_slug, safe_sheet, safe_range);
 
     let screenshot_dir = state.config().workspace_root.join("screenshots");
     tokio::fs::create_dir_all(&screenshot_dir).await?;

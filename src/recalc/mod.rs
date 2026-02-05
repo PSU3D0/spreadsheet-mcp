@@ -5,6 +5,8 @@ mod executor;
 #[cfg(feature = "recalc")]
 mod fire_and_forget;
 #[cfg(feature = "recalc")]
+pub mod macro_uri;
+#[cfg(feature = "recalc")]
 mod pooled;
 #[cfg(feature = "recalc")]
 mod screenshot;
