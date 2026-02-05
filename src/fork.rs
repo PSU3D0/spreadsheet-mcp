@@ -45,6 +45,9 @@ pub struct ChangeSummary {
     pub affected_sheets: Vec<String>,
     pub affected_bounds: Vec<String>,
     pub counts: BTreeMap<String, u64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub flags: BTreeMap<String, bool>,
     pub warnings: Vec<String>,
 }
 
@@ -64,6 +67,7 @@ pub struct Checkpoint {
     pub created_at: DateTime<Utc>,
     pub label: Option<String>,
     pub snapshot_path: PathBuf,
+    pub recalc_needed: bool,
 }
 
 #[derive(Debug)]
@@ -76,6 +80,7 @@ pub struct ForkContext {
     pub edits: Vec<EditOp>,
     pub staged_changes: Vec<StagedChange>,
     pub checkpoints: Vec<Checkpoint>,
+    pub recalc_needed: bool,
     base_hash: String,
     base_modified: std::time::SystemTime,
 }
@@ -95,6 +100,7 @@ impl ForkContext {
             edits: Vec::new(),
             staged_changes: Vec::new(),
             checkpoints: Vec::new(),
+            recalc_needed: false,
             base_hash,
             base_modified,
         })
@@ -353,6 +359,7 @@ impl ForkRegistry {
                 base_path: ctx.base_path.display().to_string(),
                 created_at: ctx.created_at,
                 edit_count: ctx.edits.len(),
+                recalc_needed: ctx.recalc_needed,
             })
             .collect()
     }
@@ -374,11 +381,17 @@ impl ForkRegistry {
         let snapshot_path = dir.join(format!("{}.xlsx", checkpoint_id));
         fs::copy(&work_path, &snapshot_path)?;
 
+        let recalc_needed = self
+            .get_fork(fork_id)
+            .map(|ctx| ctx.recalc_needed)
+            .unwrap_or(false);
+
         let checkpoint = Checkpoint {
             checkpoint_id: checkpoint_id.clone(),
             created_at: Utc::now(),
             label,
             snapshot_path,
+            recalc_needed,
         };
 
         self.with_fork_mut(fork_id, |ctx| {
@@ -439,6 +452,7 @@ impl ForkRegistry {
                     i += 1;
                 }
             }
+            ctx.recalc_needed = checkpoint.recalc_needed;
             Ok(())
         })?;
 
@@ -542,6 +556,7 @@ impl Clone for ForkContext {
             edits: self.edits.clone(),
             staged_changes: self.staged_changes.clone(),
             checkpoints: self.checkpoints.clone(),
+            recalc_needed: self.recalc_needed,
             base_hash: self.base_hash.clone(),
             base_modified: self.base_modified,
         }
@@ -554,4 +569,5 @@ pub struct ForkInfo {
     pub base_path: String,
     pub created_at: Instant,
     pub edit_count: usize,
+    pub recalc_needed: bool,
 }
