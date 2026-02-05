@@ -27,6 +27,7 @@ fn fork_recalc_needed(state: &AppState, workbook_or_fork_id: &WorkbookId) -> boo
         .is_some_and(|ctx| ctx.recalc_needed)
 }
 
+#[cfg(feature = "recalc")]
 fn sheet_has_formula_in_bounds(
     sheet: &umya_spreadsheet::Worksheet,
     bounds: &[((u32, u32), (u32, u32))],
@@ -3416,12 +3417,14 @@ pub async fn range_values(
     }
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();
+    #[cfg(feature = "recalc")]
     let requested_bounds: Vec<((u32, u32), (u32, u32))> = params
         .ranges
         .iter()
         .filter_map(|r| parse_range(r))
         .collect();
 
+    #[cfg(feature = "recalc")]
     let (values, has_formula_in_target) = workbook.with_sheet(&params.sheet_name, |sheet| {
         let has_formula_in_target = sheet_has_formula_in_bounds(sheet, &requested_bounds);
         let values = params
@@ -3482,16 +3485,80 @@ pub async fn range_values(
         Ok::<_, anyhow::Error>((values, has_formula_in_target))
     })??;
 
-    let mut warnings: Vec<Warning> = Vec::new();
+    #[cfg(not(feature = "recalc"))]
+    let values = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let values = params
+            .ranges
+            .iter()
+            .filter_map(|range| {
+                parse_range(range).map(|((start_col, start_row), (end_col, end_row))| {
+                    let total_rows = (end_row - start_row + 1) as usize;
+                    let total_cols = (end_col - start_col + 1) as usize;
+                    let mut row_limit = total_rows;
+                    if let Some(page_size) = params.page_size {
+                        row_limit = row_limit.min(page_size as usize);
+                    }
+
+                    let mut rows = Vec::new();
+                    for r in start_row..=end_row {
+                        if rows.len() >= row_limit {
+                            break;
+                        }
+                        let mut row_vals = Vec::new();
+                        for c in start_col..=end_col {
+                            if include_headers && r == start_row && start_row == 1 {
+                                row_vals.push(sheet.get_cell((c, 1u32)).and_then(cell_to_value));
+                            } else {
+                                row_vals.push(sheet.get_cell((c, r)).and_then(cell_to_value));
+                            }
+                        }
+                        rows.push(row_vals);
+                    }
+
+                    let mut row_limit = cap_rows_by_cells(rows.len(), total_cols, max_cells);
+                    if row_limit > 0 {
+                        row_limit =
+                            cap_rows_by_payload_bytes(row_limit, max_payload_bytes, |count| {
+                                let entry =
+                                    build_range_values_entry(format, range, &rows[..count], None);
+                                serde_json::to_vec(&entry)
+                                    .map(|payload| payload.len())
+                                    .unwrap_or(usize::MAX)
+                            });
+                    }
+
+                    if row_limit < rows.len() {
+                        rows.truncate(row_limit);
+                    }
+
+                    let next_start_row = if rows.len() < total_rows {
+                        Some(start_row + rows.len() as u32)
+                    } else {
+                        None
+                    };
+
+                    build_range_values_entry(format, range, &rows, next_start_row)
+                })
+            })
+            .collect();
+
+        Ok::<_, anyhow::Error>(values)
+    })??;
+
     #[cfg(feature = "recalc")]
-    {
+    let warnings: Vec<Warning> = {
         if fork_recalc_needed(&state, &params.workbook_or_fork_id) && has_formula_in_target {
-            warnings.push(Warning {
+            vec![Warning {
                 code: "WARN_STALE_FORMULAS".to_string(),
                 message: "Fork has pending edits and may contain stale formula results; call recalculate on the fork for fresh values.".to_string(),
-            });
+            }]
+        } else {
+            Vec::new()
         }
-    }
+    };
+
+    #[cfg(not(feature = "recalc"))]
+    let warnings: Vec<Warning> = Vec::new();
 
     Ok(RangeValuesResponse {
         workbook_id: workbook.id.clone(),
@@ -3596,6 +3663,7 @@ pub async fn read_table(
     let offset = params.offset.unwrap_or(0) as usize;
     let sample_mode = params.sample_mode.unwrap_or_default();
 
+    #[cfg(feature = "recalc")]
     let (headers, rows, total_rows, has_formula_in_target) =
         workbook.with_sheet(&resolved.sheet_name, |sheet| {
             let has_formula_in_target = sheet_has_formula_in_bounds(sheet, &[resolved.range]);
@@ -3613,16 +3681,36 @@ pub async fn read_table(
             Ok::<_, anyhow::Error>((headers, rows, total_rows, has_formula_in_target))
         })??;
 
-    let mut warnings: Vec<Warning> = Vec::new();
+    #[cfg(not(feature = "recalc"))]
+    let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
+        let (headers, rows, total_rows) = extract_table_rows(
+            sheet,
+            &resolved,
+            params.header_row,
+            params.header_rows,
+            params.columns.clone(),
+            params.filters.clone(),
+            limit,
+            offset,
+            sample_mode,
+        )?;
+        Ok::<_, anyhow::Error>((headers, rows, total_rows))
+    })??;
+
     #[cfg(feature = "recalc")]
-    {
+    let warnings: Vec<Warning> = {
         if fork_recalc_needed(&state, &params.workbook_or_fork_id) && has_formula_in_target {
-            warnings.push(Warning {
+            vec![Warning {
                 code: "WARN_STALE_FORMULAS".to_string(),
                 message: "Fork has pending edits and may contain stale formula results; call recalculate on the fork for fresh values.".to_string(),
-            });
+            }]
+        } else {
+            Vec::new()
         }
-    }
+    };
+
+    #[cfg(not(feature = "recalc"))]
+    let warnings: Vec<Warning> = Vec::new();
 
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();

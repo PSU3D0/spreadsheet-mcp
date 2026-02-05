@@ -1357,7 +1357,7 @@ fn extract_expected_variants(problem: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "recalc"))]
 mod typed_errors_tests {
     use super::to_mcp_error_for_tool;
     use crate::tools;

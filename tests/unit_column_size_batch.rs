@@ -1,3 +1,5 @@
+#![cfg(feature = "recalc")]
+
 use anyhow::Result;
 use serde_json::json;
 use spreadsheet_mcp::model::WorkbookId;
