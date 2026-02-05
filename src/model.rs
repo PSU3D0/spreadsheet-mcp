@@ -841,6 +841,8 @@ pub struct ReadTableResponse {
     pub sheet_name: String,
     pub table_name: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<TableRow>,
@@ -887,6 +889,8 @@ pub struct RangeValuesResponse {
     pub workbook_id: WorkbookId,
     pub workbook_short_id: String,
     pub sheet_name: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Warning>,
     pub values: Vec<RangeValuesEntry>,
 }
 

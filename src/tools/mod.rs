@@ -19,6 +19,39 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(feature = "recalc")]
+fn fork_recalc_needed(state: &AppState, workbook_or_fork_id: &WorkbookId) -> bool {
+    state
+        .fork_registry()
+        .and_then(|registry| registry.get_fork(workbook_or_fork_id.as_str()).ok())
+        .is_some_and(|ctx| ctx.recalc_needed)
+}
+
+fn sheet_has_formula_in_bounds(
+    sheet: &umya_spreadsheet::Worksheet,
+    bounds: &[((u32, u32), (u32, u32))],
+) -> bool {
+    if bounds.is_empty() {
+        return false;
+    }
+    for cell in sheet.get_cell_collection() {
+        if !cell.is_formula() {
+            continue;
+        }
+        let address = cell.get_coordinate().get_coordinate().to_string();
+        let Some((col, row)) = parse_address(&address) else {
+            continue;
+        };
+        if bounds
+            .iter()
+            .any(|b| col >= b.0.0 && col <= b.1.0 && row >= b.0.1 && row <= b.1.1)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 const DEFAULT_TRACE_PAGE_SIZE: usize = 20;
 const TRACE_PAGE_MIN: usize = 5;
 const TRACE_PAGE_MAX: usize = 200;
@@ -3383,8 +3416,15 @@ pub async fn range_values(
     }
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();
-    let values = workbook.with_sheet(&params.sheet_name, |sheet| {
-        params
+    let requested_bounds: Vec<((u32, u32), (u32, u32))> = params
+        .ranges
+        .iter()
+        .filter_map(|r| parse_range(r))
+        .collect();
+
+    let (values, has_formula_in_target) = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let has_formula_in_target = sheet_has_formula_in_bounds(sheet, &requested_bounds);
+        let values = params
             .ranges
             .iter()
             .filter_map(|range| {
@@ -3437,13 +3477,27 @@ pub async fn range_values(
                     build_range_values_entry(format, range, &rows, next_start_row)
                 })
             })
-            .collect()
-    })?;
+            .collect();
+
+        Ok::<_, anyhow::Error>((values, has_formula_in_target))
+    })??;
+
+    let mut warnings: Vec<Warning> = Vec::new();
+    #[cfg(feature = "recalc")]
+    {
+        if fork_recalc_needed(&state, &params.workbook_or_fork_id) && has_formula_in_target {
+            warnings.push(Warning {
+                code: "WARN_STALE_FORMULAS".to_string(),
+                message: "Fork has pending edits and may contain stale formula results; call recalculate on the fork for fresh values.".to_string(),
+            });
+        }
+    }
 
     Ok(RangeValuesResponse {
         workbook_id: workbook.id.clone(),
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name,
+        warnings,
         values,
     })
 }
@@ -3542,19 +3596,33 @@ pub async fn read_table(
     let offset = params.offset.unwrap_or(0) as usize;
     let sample_mode = params.sample_mode.unwrap_or_default();
 
-    let (headers, rows, total_rows) = workbook.with_sheet(&resolved.sheet_name, |sheet| {
-        extract_table_rows(
-            sheet,
-            &resolved,
-            params.header_row,
-            params.header_rows,
-            params.columns.clone(),
-            params.filters.clone(),
-            limit,
-            offset,
-            sample_mode,
-        )
-    })??;
+    let (headers, rows, total_rows, has_formula_in_target) =
+        workbook.with_sheet(&resolved.sheet_name, |sheet| {
+            let has_formula_in_target = sheet_has_formula_in_bounds(sheet, &[resolved.range]);
+            let (headers, rows, total_rows) = extract_table_rows(
+                sheet,
+                &resolved,
+                params.header_row,
+                params.header_rows,
+                params.columns.clone(),
+                params.filters.clone(),
+                limit,
+                offset,
+                sample_mode,
+            )?;
+            Ok::<_, anyhow::Error>((headers, rows, total_rows, has_formula_in_target))
+        })??;
+
+    let mut warnings: Vec<Warning> = Vec::new();
+    #[cfg(feature = "recalc")]
+    {
+        if fork_recalc_needed(&state, &params.workbook_or_fork_id) && has_formula_in_target {
+            warnings.push(Warning {
+                code: "WARN_STALE_FORMULAS".to_string(),
+                message: "Fork has pending edits and may contain stale formula results; call recalculate on the fork for fresh values.".to_string(),
+            });
+        }
+    }
 
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();
@@ -3573,6 +3641,7 @@ pub async fn read_table(
                 workbook_short_id: workbook.short_id.clone(),
                 sheet_name: resolved.sheet_name.clone(),
                 table_name: resolved.table_name.clone(),
+                warnings: warnings.clone(),
                 headers: headers_out,
                 rows: rows_out,
                 values: values_out,
@@ -3601,6 +3670,7 @@ pub async fn read_table(
         workbook_short_id: workbook.short_id.clone(),
         sheet_name: resolved.sheet_name,
         table_name: resolved.table_name,
+        warnings,
         headers: headers_out,
         rows: rows_out,
         values: values_out,

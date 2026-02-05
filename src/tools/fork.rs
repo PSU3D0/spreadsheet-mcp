@@ -4,6 +4,7 @@ use crate::model::{
     AlignmentPatch, BordersPatch, FillPatch, FontPatch, PatternFillPatch, StylePatch, Warning,
     WorkbookId,
 };
+use crate::recalc::RecalcBackend;
 use crate::state::AppState;
 use crate::tools::write_normalize::{EditBatchParamsInput, normalize_edit_batch};
 use crate::utils::make_short_random_id;
@@ -16,6 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+fn set_recalc_needed_flag(summary: &mut ChangeSummary, recalc_needed: bool) {
+    summary
+        .flags
+        .insert("recalc_needed".to_string(), recalc_needed);
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateForkParams {
@@ -71,6 +78,7 @@ pub struct EditBatchResponse {
     pub fork_id: String,
     pub edits_applied: usize,
     pub total_edits: usize,
+    pub recalc_needed: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
 }
@@ -110,6 +118,7 @@ pub async fn edit_batch(
 
     let total = registry.with_fork_mut(&params.fork_id, |ctx| {
         ctx.edits.extend(edits_to_apply);
+        ctx.recalc_needed = true;
         Ok(ctx.edits.len())
     })?;
 
@@ -120,6 +129,7 @@ pub async fn edit_batch(
         fork_id: params.fork_id,
         edits_applied: edit_count,
         total_edits: total,
+        recalc_needed: true,
         warnings,
     })
 }
@@ -345,6 +355,7 @@ pub async fn transform_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["transform_batch".to_string()];
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let staged_op = StagedOp {
             kind: "transform_batch".to_string(),
@@ -381,6 +392,12 @@ pub async fn transform_batch(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["transform_batch".to_string()];
+
+        registry.with_fork_mut(&params.fork_id, |ctx| {
+            ctx.recalc_needed = true;
+            Ok(())
+        })?;
+        set_recalc_needed_flag(&mut summary, true);
 
         let _ = state.close_workbook(&fork_workbook_id);
 
@@ -702,6 +719,7 @@ pub async fn column_size_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["column_size_batch".to_string()];
         summary.warnings.extend(warning_messages.clone());
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let staged_op = StagedOp {
             kind: "column_size_batch".to_string(),
@@ -742,6 +760,7 @@ pub async fn column_size_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["column_size_batch".to_string()];
         summary.warnings.extend(warning_messages);
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let _ = state.close_workbook(&fork_workbook_id);
 
@@ -959,6 +978,7 @@ pub async fn style_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["style_batch".to_string()];
         summary.warnings.extend(warning_messages.clone());
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let staged_op = StagedOp {
             kind: "style_batch".to_string(),
@@ -996,6 +1016,7 @@ pub async fn style_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["style_batch".to_string()];
         summary.warnings.extend(warning_messages);
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let _ = state.close_workbook(&fork_workbook_id);
 
@@ -1109,6 +1130,7 @@ pub async fn apply_formula_pattern(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
 
         let staged_op = StagedOp {
             kind: "apply_formula_pattern".to_string(),
@@ -1164,6 +1186,12 @@ pub async fn apply_formula_pattern(
 
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["apply_formula_pattern".to_string()];
+
+        registry.with_fork_mut(&params.fork_id, |ctx| {
+            ctx.recalc_needed = true;
+            Ok(())
+        })?;
+        set_recalc_needed_flag(&mut summary, true);
 
         let _ = state.close_workbook(&fork_workbook_id);
 
@@ -1227,6 +1255,7 @@ fn apply_formula_pattern_to_file(
         affected_bounds: vec![target_range.to_string()],
         counts,
         warnings: Vec::new(),
+        ..Default::default()
     };
 
     Ok(FormulaPatternApplyResult {
@@ -1446,6 +1475,25 @@ pub enum StructureOp {
     },
 }
 
+fn structure_ops_require_recalc(ops: &[StructureOp]) -> bool {
+    ops.iter().any(|op| match op {
+        StructureOp::InsertRows { .. }
+        | StructureOp::DeleteRows { .. }
+        | StructureOp::InsertCols { .. }
+        | StructureOp::DeleteCols { .. }
+        | StructureOp::RenameSheet { .. } => true,
+        StructureOp::CopyRange {
+            include_formulas: true,
+            ..
+        }
+        | StructureOp::MoveRange {
+            include_formulas: true,
+            ..
+        } => true,
+        _ => false,
+    })
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StructureBatchResponse {
     pub fork_id: String,
@@ -1476,6 +1524,8 @@ pub async fn structure_batch(
     let fork_ctx = registry.get_fork(&params.fork_id)?;
     let work_path = fork_ctx.work_path.clone();
 
+    let will_need_recalc = fork_ctx.recalc_needed || structure_ops_require_recalc(&params.ops);
+
     let mode = params
         .mode
         .as_deref()
@@ -1499,6 +1549,7 @@ pub async fn structure_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["structure_batch".to_string()];
         summary.warnings.extend(alias_warnings);
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
         // Best-effort preview diff size: compare current fork to preview snapshot.
         // This is intentionally summarized as a count to avoid large payloads.
         if let Ok(change_count) = tokio::task::spawn_blocking({
@@ -1556,6 +1607,14 @@ pub async fn structure_batch(
         let mut summary = apply_result.summary;
         summary.op_kinds = vec!["structure_batch".to_string()];
         summary.warnings.extend(alias_warnings);
+
+        if will_need_recalc {
+            registry.with_fork_mut(&params.fork_id, |ctx| {
+                ctx.recalc_needed = true;
+                Ok(())
+            })?;
+        }
+        set_recalc_needed_flag(&mut summary, will_need_recalc);
 
         let fork_workbook_id = WorkbookId(params.fork_id.clone());
         let _ = state.close_workbook(&fork_workbook_id);
@@ -1833,6 +1892,7 @@ fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<Struc
         affected_bounds,
         counts,
         warnings,
+        ..Default::default()
     };
 
     Ok(StructureApplyResult {
@@ -2774,6 +2834,7 @@ fn apply_column_size_ops_to_file(
             affected_bounds,
             counts,
             warnings,
+            ..Default::default()
         },
     })
 }
@@ -3108,6 +3169,7 @@ fn apply_transform_ops_to_file(path: &Path, ops: &[TransformOp]) -> Result<Trans
         affected_bounds,
         counts,
         warnings: Vec::new(),
+        ..Default::default()
     };
 
     Ok(TransformApplyResult {
@@ -3199,6 +3261,7 @@ fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyRes
         affected_bounds,
         counts,
         warnings: Vec::new(),
+        ..Default::default()
     };
 
     Ok(StyleApplyResult {
@@ -3530,13 +3593,22 @@ pub async fn recalculate(
     state: Arc<AppState>,
     params: RecalculateParams,
 ) -> Result<RecalculateResponse> {
+    let backend = state
+        .recalc_backend()
+        .ok_or_else(|| anyhow!("recalc backend not available (soffice not found?)"))?
+        .clone();
+
+    recalculate_with_backend(state, params, backend).await
+}
+
+pub async fn recalculate_with_backend(
+    state: Arc<AppState>,
+    params: RecalculateParams,
+    backend: Arc<dyn RecalcBackend>,
+) -> Result<RecalculateResponse> {
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
-
-    let backend = state
-        .recalc_backend()
-        .ok_or_else(|| anyhow!("recalc backend not available (soffice not found?)"))?;
 
     let semaphore = state
         .recalc_semaphore()
@@ -3551,6 +3623,11 @@ pub async fn recalculate(
         .map_err(|e| anyhow!("failed to acquire recalc permit: {}", e))?;
 
     let result = backend.recalculate(&fork_ctx.work_path).await?;
+
+    registry.with_fork_mut(&params.fork_id, |ctx| {
+        ctx.recalc_needed = false;
+        Ok(())
+    })?;
 
     let fork_workbook_id = WorkbookId(params.fork_id.clone());
     let _ = state.close_workbook(&fork_workbook_id);
@@ -3576,6 +3653,7 @@ pub struct ForkSummary {
     pub base_path: String,
     pub age_seconds: u64,
     pub edit_count: usize,
+    pub recalc_needed: bool,
 }
 
 pub async fn list_forks(
@@ -3594,6 +3672,7 @@ pub async fn list_forks(
             base_path: f.base_path,
             age_seconds: f.created_at.elapsed().as_secs(),
             edit_count: f.edit_count,
+            recalc_needed: f.recalc_needed,
         })
         .collect();
 
@@ -3910,11 +3989,15 @@ pub async fn apply_staged_change(
     let fork_ctx = registry.get_fork(&params.fork_id)?;
     let work_path = fork_ctx.work_path.clone();
 
+    let initial_recalc_needed = fork_ctx.recalc_needed;
+    let mut recalc_triggered = false;
+
     let mut ops_applied = 0usize;
 
     for op in &staged.ops {
         match op.kind.as_str() {
             "edit_batch" => {
+                recalc_triggered = true;
                 let payload: EditBatchStagedPayload = serde_json::from_value(op.payload.clone())
                     .map_err(|e| anyhow!("invalid edit_batch payload: {}", e))?;
 
@@ -3940,6 +4023,7 @@ pub async fn apply_staged_change(
 
                 registry.with_fork_mut(&params.fork_id, |ctx| {
                     ctx.edits.extend(edits_to_apply);
+                    ctx.recalc_needed = true;
                     Ok(())
                 })?;
 
@@ -3975,6 +4059,7 @@ pub async fn apply_staged_change(
                 ops_applied += 1;
             }
             "transform_batch" => {
+                recalc_triggered = true;
                 let payload: TransformBatchStagedPayload =
                     serde_json::from_value(op.payload.clone())
                         .map_err(|e| anyhow!("invalid transform_batch payload: {}", e))?;
@@ -3989,6 +4074,7 @@ pub async fn apply_staged_change(
                 ops_applied += 1;
             }
             "apply_formula_pattern" => {
+                recalc_triggered = true;
                 let payload: ApplyFormulaPatternStagedPayload =
                     serde_json::from_value(op.payload.clone())
                         .map_err(|e| anyhow!("invalid apply_formula_pattern payload: {}", e))?;
@@ -4029,6 +4115,10 @@ pub async fn apply_staged_change(
                     serde_json::from_value(op.payload.clone())
                         .map_err(|e| anyhow!("invalid structure_batch payload: {}", e))?;
 
+                if structure_ops_require_recalc(&payload.ops) {
+                    recalc_triggered = true;
+                }
+
                 tokio::task::spawn_blocking({
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
@@ -4044,15 +4134,26 @@ pub async fn apply_staged_change(
         }
     }
 
+    let recalc_needed_now = initial_recalc_needed || recalc_triggered;
+    if recalc_needed_now {
+        registry.with_fork_mut(&params.fork_id, |ctx| {
+            ctx.recalc_needed = true;
+            Ok(())
+        })?;
+    }
+
     registry.discard_staged_change(&params.fork_id, &params.change_id)?;
     let fork_workbook_id = WorkbookId(params.fork_id.clone());
     let _ = state.close_workbook(&fork_workbook_id);
+
+    let mut summary = staged.summary;
+    set_recalc_needed_flag(&mut summary, recalc_needed_now);
 
     Ok(ApplyStagedChangeResponse {
         fork_id: params.fork_id,
         change_id: params.change_id,
         ops_applied,
-        summary: staged.summary,
+        summary,
     })
 }
 
