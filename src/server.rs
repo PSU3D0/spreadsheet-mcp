@@ -808,6 +808,25 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         .map_err(|e| to_mcp_error_for_tool("structure_batch", e))
     }
 
+    #[tool(
+        name = "rules_batch",
+        description = "Apply rule operations to a fork (DV v1: set_data_validation). Mode: preview or apply (default apply)."
+    )]
+    pub async fn rules_batch(
+        &self,
+        Parameters(params): Parameters<tools::rules_batch::RulesBatchParams>,
+    ) -> Result<Json<tools::rules_batch::RulesBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("rules_batch")
+            .map_err(|e| to_mcp_error_for_tool("rules_batch", e))?;
+        self.run_tool_with_timeout(
+            "rules_batch",
+            tools::rules_batch::rules_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| to_mcp_error_for_tool("rules_batch", e))
+    }
+
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
     pub async fn get_edits(
         &self,

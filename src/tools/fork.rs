@@ -2696,7 +2696,7 @@ struct StyleApplyResult {
     summary: ChangeSummary,
 }
 
-fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
+pub(crate) fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
     PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
 }
 
@@ -4134,6 +4134,20 @@ pub async fn apply_staged_change(
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
                     move || apply_structure_ops_to_file(&work_path, &ops)
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
+            "rules_batch" => {
+                let payload: crate::tools::rules_batch::RulesBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid rules_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || crate::tools::rules_batch::apply_rules_ops_to_file(&work_path, &ops)
                 })
                 .await??;
 
