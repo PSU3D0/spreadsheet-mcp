@@ -2,6 +2,7 @@ use crate::fork::{ChangeSummary, StagedChange, StagedOp};
 use crate::model::WorkbookId;
 use crate::state::AppState;
 use crate::utils::make_short_random_id;
+use crate::{rules::conditional_format, styles::normalize_color_hex};
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -11,7 +12,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use umya_spreadsheet::{
-    DataValidation, DataValidationOperatorValues, DataValidationValues, DataValidations,
+    ConditionalFormattingOperatorValues, DataValidation, DataValidationOperatorValues,
+    DataValidationValues, DataValidations,
 };
 
 fn default_mode() -> String {
@@ -35,6 +37,71 @@ pub enum RulesOp {
         target_range: String,
         validation: DataValidationSpec,
     },
+    AddConditionalFormat {
+        sheet_name: String,
+        target_range: String,
+        rule: ConditionalFormatRuleSpec,
+        #[serde(default)]
+        style: ConditionalFormatStyleSpec,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConditionalFormatRuleSpec {
+    CellIs {
+        operator: ConditionalFormatOperator,
+        formula: String,
+    },
+    Expression {
+        formula: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionalFormatOperator {
+    #[serde(alias = "lessThan")]
+    LessThan,
+    #[serde(alias = "lessThanOrEqual")]
+    LessThanOrEqual,
+    #[serde(alias = "greaterThan")]
+    GreaterThan,
+    #[serde(alias = "greaterThanOrEqual")]
+    GreaterThanOrEqual,
+    #[serde(alias = "equal")]
+    Equal,
+    #[serde(alias = "notEqual")]
+    NotEqual,
+    #[serde(alias = "between")]
+    Between,
+    #[serde(alias = "notBetween")]
+    NotBetween,
+}
+
+impl ConditionalFormatOperator {
+    fn to_umya(self) -> ConditionalFormattingOperatorValues {
+        match self {
+            Self::LessThan => ConditionalFormattingOperatorValues::LessThan,
+            Self::LessThanOrEqual => ConditionalFormattingOperatorValues::LessThanOrEqual,
+            Self::GreaterThan => ConditionalFormattingOperatorValues::GreaterThan,
+            Self::GreaterThanOrEqual => ConditionalFormattingOperatorValues::GreaterThanOrEqual,
+            Self::Equal => ConditionalFormattingOperatorValues::Equal,
+            Self::NotEqual => ConditionalFormattingOperatorValues::NotEqual,
+            Self::Between => ConditionalFormattingOperatorValues::Between,
+            Self::NotBetween => ConditionalFormattingOperatorValues::NotBetween,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ConditionalFormatStyleSpec {
+    #[serde(default)]
+    pub fill_color: Option<String>,
+    #[serde(default)]
+    pub font_color: Option<String>,
+    #[serde(default)]
+    pub bold: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -98,6 +165,9 @@ pub async fn rules_batch(
     for op in &params.ops {
         match op {
             RulesOp::SetDataValidation { sheet_name, .. } => {
+                let _ = workbook.with_sheet(sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
+            }
+            RulesOp::AddConditionalFormat { sheet_name, .. } => {
                 let _ = workbook.with_sheet(sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
             }
         }
@@ -192,8 +262,11 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
 
     let mut validations_set: u64 = 0;
     let mut validations_replaced: u64 = 0;
+    let mut conditional_formats_added: u64 = 0;
+    let mut conditional_formats_skipped: u64 = 0;
 
     let mut warned_not_parsed = false;
+    let mut warned_cf_structure = false;
 
     for op in ops {
         match op {
@@ -222,6 +295,29 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
                 validations_set += set_inc;
                 validations_replaced += replaced_inc;
             }
+            RulesOp::AddConditionalFormat {
+                sheet_name,
+                target_range,
+                rule,
+                style,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+                affected_sheets.insert(sheet_name.clone());
+                affected_bounds.push(target_range.clone());
+
+                if !warned_cf_structure {
+                    warnings.push("WARN_CF_FORMULA_NOT_ADJUSTED_ON_STRUCTURE: Conditional format formulas are not automatically rewritten on structural edits; re-apply or review after row/col insertion/deletion.".to_string());
+                    warned_cf_structure = true;
+                }
+
+                let (added, skipped) =
+                    add_conditional_format(sheet, target_range, rule, style, &mut warnings)?;
+                conditional_formats_added += added;
+                conditional_formats_skipped += skipped;
+            }
         }
     }
 
@@ -229,6 +325,14 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
 
     counts.insert("validations_set".to_string(), validations_set);
     counts.insert("validations_replaced".to_string(), validations_replaced);
+    counts.insert(
+        "conditional_formats_added".to_string(),
+        conditional_formats_added,
+    );
+    counts.insert(
+        "conditional_formats_skipped".to_string(),
+        conditional_formats_skipped,
+    );
 
     Ok(RulesApplyResult {
         ops_applied: ops.len(),
@@ -250,6 +354,111 @@ fn normalize_sqref(input: &str) -> Result<String> {
     }
     // DV sqref is space-separated list of ranges; v1 uses a single range.
     Ok(trimmed.replace(' ', "").to_ascii_uppercase())
+}
+
+fn normalize_cf_formula(field: &str, value: &str, warnings: &mut Vec<String>) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("{field} is required");
+    }
+    if let Some(stripped) = trimmed.strip_prefix('=') {
+        warnings.push(format!(
+            "WARN_CF_FORMULA_PREFIX: Stripped leading '=' from {field}"
+        ));
+        return Ok(stripped.to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_argb_color(field: &str, input: &str, warnings: &mut Vec<String>) -> Result<String> {
+    let trimmed = input.trim();
+    let Some((argb, defaulted_alpha)) = normalize_color_hex(trimmed) else {
+        bail!("invalid color for {field}: expected #RGB/#RRGGBB/#AARRGGBB");
+    };
+    if defaulted_alpha {
+        warnings.push(format!(
+            "WARN_COLOR_ALPHA_DEFAULT: Defaulted alpha to FF for {field}"
+        ));
+    }
+    Ok(argb)
+}
+
+fn add_conditional_format(
+    sheet: &mut umya_spreadsheet::Worksheet,
+    target_range: &str,
+    rule: &ConditionalFormatRuleSpec,
+    style: &ConditionalFormatStyleSpec,
+    warnings: &mut Vec<String>,
+) -> Result<(u64, u64)> {
+    let sqref = normalize_sqref(target_range)?;
+
+    let desired = match rule {
+        ConditionalFormatRuleSpec::Expression { formula } => (
+            umya_spreadsheet::ConditionalFormatValues::Expression,
+            None,
+            normalize_cf_formula("rule.formula", formula, warnings)?,
+        ),
+        ConditionalFormatRuleSpec::CellIs { operator, formula } => (
+            umya_spreadsheet::ConditionalFormatValues::CellIs,
+            Some(operator.to_umya()),
+            normalize_cf_formula("rule.formula", formula, warnings)?,
+        ),
+    };
+
+    // Defaults aim for determinism and readability.
+    let fill = style.fill_color.as_deref().unwrap_or("FFFFE0E0");
+    let font = style.font_color.as_deref().unwrap_or("FF000000");
+    let bold = style.bold.unwrap_or(false);
+
+    let fill_argb = normalize_argb_color("style.fill_color", fill, warnings)?;
+    let font_argb = normalize_argb_color("style.font_color", font, warnings)?;
+
+    // Deduplicate exact matches (sqref + kind/operator + formula).
+    for existing in sheet.get_conditional_formatting_collection() {
+        if existing.get_sequence_of_references().get_sqref() != sqref {
+            continue;
+        }
+        for existing_rule in existing.get_conditional_collection() {
+            if existing_rule.get_type() != &desired.0 {
+                continue;
+            }
+            if let Some(ref op) = desired.1 {
+                if existing_rule.get_operator() != op {
+                    continue;
+                }
+            }
+            let existing_formula = existing_rule
+                .get_formula()
+                .map(|f| f.get_address_str())
+                .unwrap_or_default();
+            if existing_formula == desired.2 {
+                return Ok((0, 1));
+            }
+        }
+    }
+
+    let dxf_style = conditional_format::build_simple_dxf_style(&fill_argb, &font_argb, bold);
+
+    match desired.0 {
+        umya_spreadsheet::ConditionalFormatValues::Expression => {
+            conditional_format::append_cf_expression_rule(sheet, &sqref, &desired.2, dxf_style);
+        }
+        umya_spreadsheet::ConditionalFormatValues::CellIs => {
+            conditional_format::append_cf_cellis_rule(
+                sheet,
+                &sqref,
+                desired
+                    .1
+                    .clone()
+                    .unwrap_or(ConditionalFormattingOperatorValues::LessThan),
+                &desired.2,
+                dxf_style,
+            );
+        }
+        _ => unreachable!("only expression and cellIs are supported"),
+    }
+
+    Ok((1, 0))
 }
 
 fn normalize_dv_formula(field: &str, value: &str, warnings: &mut Vec<String>) -> String {
