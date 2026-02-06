@@ -4198,7 +4198,9 @@ pub async fn apply_staged_change(
                 tokio::task::spawn_blocking({
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
-                    move || crate::tools::sheet_layout::apply_sheet_layout_ops_to_file(&work_path, &ops)
+                    move || {
+                        crate::tools::sheet_layout::apply_sheet_layout_ops_to_file(&work_path, &ops)
+                    }
                 })
                 .await??;
 
