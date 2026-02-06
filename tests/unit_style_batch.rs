@@ -708,6 +708,88 @@ async fn style_batch_preserves_conditional_formats() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn style_batch_number_format_shorthand_applies_and_is_idempotent() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("numfmt.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(123.45);
+        sheet.get_cell_mut("B1").set_value_number(0.25);
+        sheet.get_cell_mut("C1").set_value_number(45123.0);
+        sheet.get_cell_mut("D1").set_value_number(123.45);
+        sheet.get_cell_mut("E1").set_value_number(42);
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let fork_id = fork.fork_id;
+    let input = json!({
+        "fork_id": fork_id,
+        "mode": "apply",
+        "ops": [
+            { "sheet_name": "Sheet1", "range": "A1:A1", "style": { "number_format": { "kind": "currency" } } },
+            { "sheet_name": "Sheet1", "range": "B1:B1", "style": { "number_format": { "kind": "percent" } } },
+            { "sheet_name": "Sheet1", "range": "C1:C1", "style": { "number_format": { "kind": "date_iso" } } },
+            { "sheet_name": "Sheet1", "range": "D1:D1", "style": { "number_format": { "kind": "accounting" } } },
+            { "sheet_name": "Sheet1", "range": "E1:E1", "style": { "number_format": { "kind": "integer" } } }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input.clone()).unwrap();
+    style_batch(state.clone(), params).await?;
+
+    let fork_wb = state
+        .open_workbook(&spreadsheet_mcp::model::WorkbookId(
+            input["fork_id"].as_str().unwrap().to_string(),
+        ))
+        .await?;
+    let expect = [
+        ("A1", "$#,##0.00"),
+        ("B1", "0.00%"),
+        ("C1", "yyyy-mm-dd"),
+        ("D1", "_($* #,##0.00_)"),
+        ("E1", "0"),
+    ];
+    for (cell, expected_fmt) in expect {
+        let desc = fork_wb.with_sheet("Sheet1", |sheet| {
+            spreadsheet_mcp::styles::descriptor_from_style(
+                sheet.get_cell(cell).unwrap().get_style(),
+            )
+        })?;
+        assert_eq!(desc.number_format.as_deref(), Some(expected_fmt));
+    }
+
+    // Apply the same shorthand again; should be a no-op.
+    let params2: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let resp2 = style_batch(state.clone(), params2).await?;
+    assert_eq!(
+        resp2.summary.counts.get("cells_style_changed").copied(),
+        Some(0)
+    );
+
+    Ok(())
+}
+
 #[test]
 fn style_batch_accepts_range_and_style_shorthand() {
     let input = json!({
@@ -742,6 +824,90 @@ fn style_batch_accepts_range_and_style_shorthand() {
         .and_then(|bold| *bold);
     assert_eq!(bold, Some(true));
     assert!(warnings.iter().any(|w| w.code == "WARN_STYLE_SHORTHAND"));
+}
+
+#[test]
+fn style_batch_normalizes_number_format_shorthand_to_format_code() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "B3:B3",
+                "style": {
+                    "number_format": { "kind": "currency" }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    assert_eq!(
+        op.patch
+            .number_format
+            .as_ref()
+            .and_then(|nf| nf.as_ref().map(String::as_str)),
+        Some("$#,##0.00")
+    );
+}
+
+#[test]
+fn style_batch_number_format_format_code_takes_precedence_over_kind() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "B3:B3",
+                "style": {
+                    "number_format": { "kind": "percent", "format_code": "0.000%" }
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    assert_eq!(
+        op.patch
+            .number_format
+            .as_ref()
+            .and_then(|nf| nf.as_ref().map(String::as_str)),
+        Some("0.000%")
+    );
+}
+
+#[test]
+fn style_batch_number_format_explicit_string_is_preserved() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "sheet_name": "Accounts",
+                "range": "B3:B3",
+                "style": {
+                    "number_format": "0.0000"
+                }
+            }
+        ]
+    });
+
+    let params: StyleBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _warnings) = normalize_style_batch(params).unwrap();
+
+    let op = &normalized.ops[0];
+    assert_eq!(
+        op.patch
+            .number_format
+            .as_ref()
+            .and_then(|nf| nf.as_ref().map(String::as_str)),
+        Some("0.0000")
+    );
 }
 
 #[test]
