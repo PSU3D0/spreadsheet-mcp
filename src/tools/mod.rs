@@ -1,6 +1,8 @@
 pub mod filters;
 #[cfg(feature = "recalc")]
 pub mod fork;
+#[cfg(feature = "recalc")]
+pub mod rules_batch;
 pub mod vba;
 #[cfg(feature = "recalc")]
 pub mod write_normalize;
