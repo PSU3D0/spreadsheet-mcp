@@ -28,6 +28,8 @@ pub struct WorkbookDescriptor {
     pub folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_path: Option<String>,
     pub bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
@@ -48,6 +50,8 @@ pub struct WorkbookDescription {
     pub short_id: String,
     pub slug: String,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_path: Option<String>,
     pub bytes: u64,
     pub sheet_count: usize,
     pub defined_names: usize,

@@ -43,8 +43,13 @@ impl ScreenshotExecutor {
             .canonicalize()
             .map_err(|e| anyhow!("failed to canonicalize workbook path: {}", e))?;
 
-        let file_url = format!("file://{}", abs_path.display());
+        let file_path = abs_path.display().to_string();
         let range_arg = range.unwrap_or("A1:M40");
+
+        // LibreOffice will try to write cache/config under HOME and XDG dirs.
+        // In containerized environments we want a known-writable location.
+        let _ = std::fs::create_dir_all("/tmp/.cache");
+        let _ = std::fs::create_dir_all("/tmp/.config");
 
         fn truncate_for_log(s: &str, max_bytes: usize) -> String {
             if s.len() <= max_bytes {
@@ -65,22 +70,35 @@ impl ScreenshotExecutor {
         }
 
         let run_macro = |macro_uri: String| async move {
-            let macro_result = time::timeout(
-                self.timeout,
-                Command::new(&self.soffice_path)
-                    .args([
-                        "--headless",
-                        "--norestore",
-                        "--nodefault",
-                        "--nofirststartwizard",
-                        "--nolockcheck",
-                        "--calc",
-                        &macro_uri,
-                    ])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output(),
-            )
+            let macro_result = time::timeout(self.timeout, {
+                let mut cmd = Command::new(&self.soffice_path);
+                if let Ok(root) = std::env::var("SPREADSHEET_MCP_LIBREOFFICE_USER_INSTALLATION")
+                    && !root.trim().is_empty()
+                {
+                    let root = root.trim();
+                    let uri = if root.starts_with("file://") {
+                        root.to_string()
+                    } else {
+                        format!("file:///{}", root.trim_start_matches('/'))
+                    };
+                    cmd.arg(format!("-env:UserInstallation={}", uri));
+                }
+                cmd.args([
+                    "--headless",
+                    "--norestore",
+                    "--nodefault",
+                    "--nofirststartwizard",
+                    "--nolockcheck",
+                    "--calc",
+                    &macro_uri,
+                ])
+                .env("HOME", "/tmp")
+                .env("XDG_CACHE_HOME", "/tmp/.cache")
+                .env("XDG_CONFIG_HOME", "/tmp/.config")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+            })
             .await
             .map_err(|_| anyhow!("soffice timed out after {:?}", self.timeout))
             .and_then(|res| res.map_err(|e| anyhow!("failed to spawn soffice: {}", e)))?;
@@ -114,7 +132,7 @@ impl ScreenshotExecutor {
 
         let pdf_output_path = output_path.with_extension("pdf");
         let macro_uri_pdf = export_screenshot_uri(
-            &file_url,
+            &file_path,
             &pdf_output_path.display().to_string(),
             sheet_name,
             range_arg,
@@ -143,25 +161,38 @@ impl ScreenshotExecutor {
             .to_str()
             .ok_or_else(|| anyhow!("pdf output path is not valid UTF-8"))?;
 
-        let convert_result = time::timeout(
-            self.timeout,
-            Command::new(&self.soffice_path)
-                .args([
-                    "--headless",
-                    "--norestore",
-                    "--nodefault",
-                    "--nofirststartwizard",
-                    "--nolockcheck",
-                    "--convert-to",
-                    "png",
-                    "--outdir",
-                    out_dir_str,
-                    pdf_str,
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        )
+        let convert_result = time::timeout(self.timeout, {
+            let mut cmd = Command::new(&self.soffice_path);
+            if let Ok(root) = std::env::var("SPREADSHEET_MCP_LIBREOFFICE_USER_INSTALLATION")
+                && !root.trim().is_empty()
+            {
+                let root = root.trim();
+                let uri = if root.starts_with("file://") {
+                    root.to_string()
+                } else {
+                    format!("file:///{}", root.trim_start_matches('/'))
+                };
+                cmd.arg(format!("-env:UserInstallation={}", uri));
+            }
+            cmd.args([
+                "--headless",
+                "--norestore",
+                "--nodefault",
+                "--nofirststartwizard",
+                "--nolockcheck",
+                "--convert-to",
+                "png",
+                "--outdir",
+                out_dir_str,
+                pdf_str,
+            ])
+            .env("HOME", "/tmp")
+            .env("XDG_CACHE_HOME", "/tmp/.cache")
+            .env("XDG_CONFIG_HOME", "/tmp/.config")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+        })
         .await
         .map_err(|_| {
             anyhow!(

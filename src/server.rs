@@ -97,7 +97,7 @@ Fork-based editing allows 'what-if' analysis without modifying original files.
 WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
 2) Optional: checkpoint_fork before large edits.
-3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern: Apply edits to the fork.
+3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch: Apply edits to the fork.
 4) recalculate: Trigger LibreOffice to recompute all formulas.
 5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
@@ -121,11 +121,14 @@ Use include_types/exclude_types/include_subtypes/exclude_subtypes to filter (e.g
 Use summary_only=true when you only need counts.
 - screenshot_sheet: {workbook_or_fork_id, sheet_name, range?}. Renders a cropped PNG for inspecting an area visually.
   workbook_or_fork_id may be either a real workbook_id OR a fork_id (to screenshot an edited fork).
-  Returns a file:// URI under workspace_root/screenshots/ (Docker default: /data/screenshots/).
+  Returns a file:// URI under screenshot_dir (default: <workspace_root>/screenshots).
+  If path mapping is configured (--path-map), client_output_path is included to help locate the file on the host.
   DO NOT call save_fork just to get a screenshot.
   If formulas changed, run recalculate on the fork first.
 - save_fork: Requires target_path for new file location.
   If target_path is relative, it is resolved under workspace_root (Docker default: `/data`).
+  If target_path is absolute and matches a configured path mapping, it is mapped to the internal path automatically.
+  If path mapping is configured (--path-map), client_saved_to is included.
   Overwriting original requires server --allow-overwrite flag.
   Use drop_fork=false to keep fork active after saving (default: true drops fork).
   Validates base file unchanged since fork creation.
@@ -143,7 +146,7 @@ BEST PRACTICES:
 - Always recalculate after edit_batch before get_changeset.
 - Review changeset before save_fork to verify expected changes.
 - Use screenshot_sheet for quick visual inspection; save_fork is ONLY for exporting a workbook file.
-- Discard forks when done to free resources (auto-cleanup after 1 hour).
+- Discard forks when done to free resources (fork TTL is disabled by default).
 - For large edits, batch multiple cells in single edit_batch call.";
 
 fn build_instructions(recalc_enabled: bool, vba_enabled: bool) -> String {
@@ -1204,11 +1207,10 @@ fn to_mcp_error_for_tool(tool: &str, error: anyhow::Error) -> McpError {
         let path = infer_path_for_tool(tool, &problem);
 
         let mut variants = extract_expected_variants(&problem);
-        if variants.is_empty() {
-            if let Some(extra) = tool_variants(tool, &problem) {
+        if variants.is_empty()
+            && let Some(extra) = tool_variants(tool, &problem) {
                 variants = extra.into_iter().map(|s| s.to_string()).collect();
             }
-        }
 
         let example = tool_minimal_example(tool);
         let msg = format_invalid_params_message(
@@ -1267,12 +1269,11 @@ fn format_invalid_params_message(
         out.push_str(&format!("\npath: {path}"));
     }
 
-    if let Some(variants) = variants {
-        if !variants.is_empty() {
+    if let Some(variants) = variants
+        && !variants.is_empty() {
             out.push_str("\nvalid variants: ");
             out.push_str(&variants.join(", "));
         }
-    }
 
     if let Some(example) = example {
         out.push_str("\nexample: ");
@@ -1292,6 +1293,12 @@ fn tool_minimal_example(tool: &str) -> Option<&'static str> {
         ),
         "edit_batch" => Some(
             r#"{"fork_id":"<fork_id>","sheet_name":"Sheet1","edits":["A1=100","B2==SUM(A1:A2)"]}"#,
+        ),
+        "sheet_layout_batch" => Some(
+            r#"{"fork_id":"<fork_id>","ops":[{"kind":"freeze_panes","sheet_name":"Dashboard","freeze_rows":1,"freeze_cols":1}],"mode":"apply"}"#,
+        ),
+        "rules_batch" => Some(
+            r#"{"fork_id":"<fork_id>","ops":[{"kind":"set_data_validation","sheet_name":"Inputs","target_range":"B3:B100","validation":{"kind":"list","formula1":"=Lists!$A$1:$A$10","allow_blank":false}}],"mode":"apply"}"#,
         ),
         _ => None,
     }
@@ -1316,6 +1323,45 @@ fn infer_path_for_tool(tool: &str, problem: &str) -> Option<String> {
             }
             if p.contains("styletarget") && p.contains("kind") {
                 return Some("ops[0].target.kind".to_string());
+            }
+            None
+        }
+        "sheet_layout_batch" => {
+            if p.contains("missing field `kind`") || p.contains("missing field kind") {
+                return Some("ops[0].kind".to_string());
+            }
+            if p.contains("sheetlayoutop") && p.contains("kind") {
+                return Some("ops[0].kind".to_string());
+            }
+            if p.contains("unknown variant") && p.contains("apply") && p.contains("preview") {
+                return Some("mode".to_string());
+            }
+            if p.contains("mode") && p.contains("invalid") {
+                return Some("mode".to_string());
+            }
+            None
+        }
+        "rules_batch" => {
+            if p.contains("missing field `kind`") || p.contains("missing field kind") {
+                return Some("ops[0].kind".to_string());
+            }
+            if p.contains("rulesop") && p.contains("kind") {
+                return Some("ops[0].kind".to_string());
+            }
+            if p.contains("datavalidationkind") {
+                return Some("ops[0].validation.kind".to_string());
+            }
+            if p.contains("conditionalformat") && p.contains("operator") {
+                return Some("ops[0].rule.operator".to_string());
+            }
+            if p.contains("conditionalformatrulespec") && p.contains("kind") {
+                return Some("ops[0].rule.kind".to_string());
+            }
+            if p.contains("unknown variant") && p.contains("apply") && p.contains("preview") {
+                return Some("mode".to_string());
+            }
+            if p.contains("mode") && p.contains("invalid") {
+                return Some("mode".to_string());
             }
             None
         }
@@ -1355,6 +1401,60 @@ fn tool_variants(tool: &str, problem: &str) -> Option<Vec<&'static str>> {
             }
             None
         }
+        "sheet_layout_batch" => {
+            if p.contains("sheetlayoutop")
+                || p.contains("sheet layout op")
+                || (p.contains("unknown variant") && p.contains("kind"))
+                || p.contains("missing field `kind`")
+                || p.contains("missing field kind")
+            {
+                return Some(vec![
+                    "freeze_panes",
+                    "set_zoom",
+                    "set_gridlines",
+                    "set_page_margins",
+                    "set_page_setup",
+                    "set_print_area",
+                    "set_page_breaks",
+                ]);
+            }
+            None
+        }
+        "rules_batch" => {
+            if p.contains("rulesop")
+                || p.contains("rules op")
+                || (p.contains("unknown variant") && p.contains("kind"))
+                || p.contains("missing field `kind`")
+                || p.contains("missing field kind")
+            {
+                return Some(vec![
+                    "set_data_validation",
+                    "add_conditional_format",
+                    "set_conditional_format",
+                    "clear_conditional_formats",
+                ]);
+            }
+
+            if p.contains("datavalidationkind") {
+                return Some(vec!["list", "whole", "decimal", "date", "custom"]);
+            }
+            if p.contains("conditionalformatrulespec") {
+                return Some(vec!["cell_is", "expression"]);
+            }
+            if p.contains("conditionalformatoperator") {
+                return Some(vec![
+                    "less_than",
+                    "less_than_or_equal",
+                    "greater_than",
+                    "greater_than_or_equal",
+                    "equal",
+                    "not_equal",
+                    "between",
+                    "not_between",
+                ]);
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1374,6 +1474,10 @@ fn looks_like_invalid_params(problem: &str) -> bool {
 
     // common hand-rolled validation errors
     if p.contains("invalid shorthand edit") {
+        return true;
+    }
+
+    if p.contains("invalid mode") {
         return true;
     }
 
@@ -1461,6 +1565,72 @@ mod typed_errors_tests {
         assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
         assert!(mcp.message.to_ascii_lowercase().contains("example:"));
         assert!(mcp.message.contains("A1=100"));
+    }
+
+    #[test]
+    fn sheet_layout_batch_missing_kind_is_invalid_params_with_example_and_variants() {
+        let bad = json!({
+            "fork_id": "f1",
+            "ops": [
+                { "sheet_name": "Dashboard", "freeze_rows": 1, "freeze_cols": 1 }
+            ],
+            "mode": "apply"
+        });
+
+        let err =
+            serde_json::from_value::<tools::sheet_layout::SheetLayoutBatchParams>(bad).unwrap_err();
+        let mcp = to_mcp_error_for_tool("sheet_layout_batch", err.into());
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.to_ascii_lowercase().contains("valid variants"));
+        assert!(mcp.message.contains("freeze_panes"));
+    }
+
+    #[test]
+    fn rules_batch_missing_kind_is_invalid_params_with_example_and_variants() {
+        let bad = json!({
+            "fork_id": "f1",
+            "ops": [
+                {
+                    "sheet_name": "Inputs",
+                    "target_range": "B3:B10",
+                    "validation": { "kind": "list", "formula1": "=Lists!$A$1:$A$10" }
+                }
+            ],
+            "mode": "apply"
+        });
+
+        let err = serde_json::from_value::<tools::rules_batch::RulesBatchParams>(bad).unwrap_err();
+        let mcp = to_mcp_error_for_tool("rules_batch", err.into());
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.to_ascii_lowercase().contains("valid variants"));
+        assert!(mcp.message.contains("set_data_validation"));
+    }
+
+    #[test]
+    fn rules_batch_invalid_mode_is_invalid_params_with_example_and_path() {
+        let bad = json!({
+            "fork_id": "f1",
+            "ops": [
+                {
+                    "kind": "set_data_validation",
+                    "sheet_name": "Inputs",
+                    "target_range": "B3:B10",
+                    "validation": { "kind": "list", "formula1": "=Lists!$A$1:$A$10" }
+                }
+            ],
+            "mode": "maybe"
+        });
+
+        let err = serde_json::from_value::<tools::rules_batch::RulesBatchParams>(bad).unwrap_err();
+        let mcp = to_mcp_error_for_tool("rules_batch", err.into());
+
+        assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS);
+        assert!(mcp.message.to_ascii_lowercase().contains("example:"));
+        assert!(mcp.message.to_ascii_lowercase().contains("path: mode"));
     }
 }
 

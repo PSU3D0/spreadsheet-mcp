@@ -2,6 +2,7 @@ use crate::fork::{ChangeSummary, StagedChange, StagedOp};
 use crate::model::{FillDescriptor, WorkbookId};
 use crate::state::AppState;
 use crate::styles::descriptor_from_style;
+use crate::tools::param_enums::BatchMode;
 use crate::utils::make_short_random_id;
 use crate::{rules::conditional_format, styles::normalize_color_hex};
 use anyhow::{Result, anyhow, bail};
@@ -17,16 +18,12 @@ use umya_spreadsheet::{
     DataValidationValues, DataValidations,
 };
 
-fn default_mode() -> String {
-    "apply".to_string()
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RulesBatchParams {
     pub fork_id: String,
     pub ops: Vec<RulesOp>,
-    #[serde(default = "default_mode")]
-    pub mode: String, // preview|apply
+    #[serde(default)]
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -187,15 +184,9 @@ pub async fn rules_batch(
         }
     }
 
-    let mode = params.mode.to_ascii_lowercase();
-    if mode != "apply" && mode != "preview" {
-        bail!(
-            "invalid mode: {} (expected 'apply' or 'preview')",
-            params.mode
-        );
-    }
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = crate::tools::fork::stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -231,7 +222,7 @@ pub async fn rules_batch(
 
         Ok(RulesBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
@@ -253,7 +244,7 @@ pub async fn rules_batch(
 
         Ok(RulesBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,

@@ -46,6 +46,11 @@ pub enum OutputProfile {
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub workspace_root: PathBuf,
+    /// Directory to write screenshot PNGs into (screenshot_sheet).
+    pub screenshot_dir: PathBuf,
+    /// Optional mapping from server-internal paths to client/host-visible paths.
+    /// This is primarily useful when the server runs in Docker and volumes are mounted.
+    pub path_mappings: Vec<PathMapping>,
     pub cache_capacity: usize,
     pub supported_extensions: Vec<String>,
     pub single_workbook: Option<PathBuf>,
@@ -64,11 +69,40 @@ pub struct ServerConfig {
     pub allow_overwrite: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathMapping {
+    pub internal_prefix: PathBuf,
+    pub client_prefix: PathBuf,
+}
+
+impl PathMapping {
+    fn parse(spec: &str) -> Result<Self> {
+        let (internal, client) = spec.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("invalid path mapping '{spec}' (expected INTERNAL=CLIENT)")
+        })?;
+
+        let internal_prefix = PathBuf::from(internal.trim());
+        let client_prefix = PathBuf::from(client.trim());
+
+        anyhow::ensure!(
+            !internal_prefix.as_os_str().is_empty() && !client_prefix.as_os_str().is_empty(),
+            "invalid path mapping '{spec}' (empty prefix)"
+        );
+
+        Ok(Self {
+            internal_prefix,
+            client_prefix,
+        })
+    }
+}
+
 impl ServerConfig {
     pub fn from_args(args: CliArgs) -> Result<Self> {
         let CliArgs {
             config,
             workspace_root: cli_workspace_root,
+            screenshot_dir: cli_screenshot_dir,
+            path_map: cli_path_map,
             cache_capacity: cli_cache_capacity,
             extensions: cli_extensions,
             workbook: cli_single_workbook,
@@ -95,6 +129,8 @@ impl ServerConfig {
 
         let PartialConfig {
             workspace_root: file_workspace_root,
+            screenshot_dir: file_screenshot_dir,
+            path_map: file_path_map,
             cache_capacity: file_cache_capacity,
             extensions: file_extensions,
             single_workbook: file_single_workbook,
@@ -113,6 +149,18 @@ impl ServerConfig {
             allow_overwrite: file_allow_overwrite,
         } = file_config;
 
+        let mut path_mappings = Vec::new();
+        for spec in cli_path_map
+            .or(file_path_map)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| !s.trim().is_empty())
+        {
+            path_mappings.push(PathMapping::parse(&spec)?);
+        }
+        // Prefer longer, more specific prefixes first.
+        path_mappings.sort_by_key(|m| std::cmp::Reverse(m.internal_prefix.as_os_str().len()));
+
         let single_workbook = cli_single_workbook.or(file_single_workbook);
 
         let workspace_root = cli_workspace_root
@@ -127,6 +175,17 @@ impl ServerConfig {
                 })
             })
             .unwrap_or_else(|| PathBuf::from("."));
+
+        let screenshot_dir = cli_screenshot_dir
+            .or(file_screenshot_dir)
+            .map(|p| {
+                if p.is_absolute() {
+                    p
+                } else {
+                    workspace_root.join(p)
+                }
+            })
+            .unwrap_or_else(|| workspace_root.join("screenshots"));
 
         let cache_capacity = cli_cache_capacity
             .or(file_cache_capacity)
@@ -269,6 +328,8 @@ impl ServerConfig {
 
         Ok(Self {
             workspace_root,
+            screenshot_dir,
+            path_mappings,
             cache_capacity,
             supported_extensions,
             single_workbook,
@@ -312,6 +373,42 @@ impl ServerConfig {
             );
         }
         Ok(())
+    }
+
+    pub fn map_path_for_client<P: AsRef<Path>>(&self, internal_path: P) -> Option<PathBuf> {
+        let internal_path = internal_path.as_ref();
+        for m in &self.path_mappings {
+            if internal_path.starts_with(&m.internal_prefix) {
+                let suffix = internal_path.strip_prefix(&m.internal_prefix).ok()?;
+                return Some(m.client_prefix.join(suffix));
+            }
+        }
+        None
+    }
+
+    pub fn map_path_from_client<P: AsRef<Path>>(&self, client_path: P) -> Option<PathBuf> {
+        let client_path = client_path.as_ref();
+        for m in &self.path_mappings {
+            if client_path.starts_with(&m.client_prefix) {
+                let suffix = client_path.strip_prefix(&m.client_prefix).ok()?;
+                return Some(m.internal_prefix.join(suffix));
+            }
+        }
+        None
+    }
+
+    /// Resolve a user-supplied path for tools (e.g. save_fork target_path).
+    /// - If the path is absolute and matches a configured client path mapping, map it to internal.
+    /// - Otherwise, treat absolute paths as internal.
+    /// - Relative paths are resolved under workspace_root.
+    pub fn resolve_user_path<P: AsRef<Path>>(&self, p: P) -> PathBuf {
+        let p = p.as_ref();
+        if p.is_absolute() {
+            self.map_path_from_client(p)
+                .unwrap_or_else(|| p.to_path_buf())
+        } else {
+            self.workspace_root.join(p)
+        }
     }
 
     pub fn resolve_path<P: AsRef<Path>>(&self, relative: P) -> PathBuf {
@@ -389,6 +486,23 @@ pub struct CliArgs {
         help = "Workspace root containing spreadsheet files"
     )]
     pub workspace_root: Option<PathBuf>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_SCREENSHOT_DIR",
+        value_name = "DIR",
+        help = "Directory to write screenshot PNGs (default: <workspace_root>/screenshots)"
+    )]
+    pub screenshot_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        env = "SPREADSHEET_MCP_PATH_MAP",
+        value_name = "INTERNAL=CLIENT",
+        value_delimiter = ',',
+        help = "Optional path mapping(s) to include client-visible paths in responses (repeatable; useful for Docker volume mounts)"
+    )]
+    pub path_map: Option<Vec<String>>,
 
     #[arg(
         long,
@@ -528,6 +642,8 @@ pub struct CliArgs {
 #[derive(Debug, Default, Deserialize)]
 struct PartialConfig {
     workspace_root: Option<PathBuf>,
+    screenshot_dir: Option<PathBuf>,
+    path_map: Option<Vec<String>>,
     cache_capacity: Option<usize>,
     extensions: Option<Vec<String>>,
     single_workbook: Option<PathBuf>,

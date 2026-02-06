@@ -53,6 +53,8 @@ fn empty_extensions_is_error() {
     let args = CliArgs {
         config: None,
         workspace_root: Some(workspace.path().to_path_buf()),
+        screenshot_dir: None,
+        path_map: None,
         cache_capacity: Some(1),
         extensions: Some(Vec::new()),
         workbook: None,
@@ -78,6 +80,8 @@ fn empty_extensions_is_error() {
 fn ensure_workspace_root_errors_for_missing_dir() {
     let config = ServerConfig {
         workspace_root: std::path::PathBuf::from("/this/does/not/exist"),
+        screenshot_dir: std::path::PathBuf::from("/this/does/not/exist/screenshots"),
+        path_mappings: Vec::new(),
         cache_capacity: 2,
         supported_extensions: vec!["xlsx".to_string()],
         single_workbook: None,

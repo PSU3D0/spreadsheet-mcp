@@ -6,6 +6,7 @@ use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, TransformBatchParams, TransformOp, TransformTarget,
     apply_staged_change, create_fork, transform_batch,
 };
+use spreadsheet_mcp::tools::param_enums::{BatchMode, ReplaceMatchMode};
 use spreadsheet_mcp::tools::{
     ListWorkbooksParams, SheetOverviewParams, list_workbooks, sheet_overview,
 };
@@ -65,7 +66,7 @@ async fn transform_batch_clear_range_clears_values_keeps_formulas_by_default() -
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -133,7 +134,7 @@ async fn transform_batch_preview_stages_and_apply() -> Result<()> {
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("blank inputs".to_string()),
         },
     )
@@ -239,7 +240,7 @@ async fn transform_batch_region_target_resolves() -> Result<()> {
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -310,7 +311,7 @@ async fn transform_batch_cells_target_skips_missing_and_handles_duplicates() -> 
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -388,7 +389,7 @@ async fn transform_batch_accepts_reversed_range() -> Result<()> {
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -459,7 +460,7 @@ async fn transform_batch_noop_flags_do_not_change_cells() -> Result<()> {
                 clear_values: false,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -536,7 +537,7 @@ async fn transform_batch_counts_mixed_range() -> Result<()> {
                 clear_values: true,
                 clear_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -606,7 +607,7 @@ async fn transform_batch_clear_formulas_only_removes_formula_keeps_literal_value
                 clear_values: false,
                 clear_formulas: true,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -683,7 +684,7 @@ async fn transform_batch_fill_range_creates_cells_and_skips_formulas_by_default(
                 is_formula: false,
                 overwrite_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -756,11 +757,11 @@ async fn transform_batch_replace_in_range_replaces_values_exact() -> Result<()> 
                 },
                 find: "Foo".to_string(),
                 replace: "Bar".to_string(),
-                match_mode: "exact".to_string(),
+                match_mode: ReplaceMatchMode::Exact,
                 case_sensitive: true,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -828,11 +829,11 @@ async fn transform_batch_replace_in_range_contains_case_sensitive() -> Result<()
                 },
                 find: "Foo".to_string(),
                 replace: "Z".to_string(),
-                match_mode: "contains".to_string(),
+                match_mode: ReplaceMatchMode::Contains,
                 case_sensitive: true,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -897,11 +898,11 @@ async fn transform_batch_replace_in_range_skips_formulas_by_default() -> Result<
                 },
                 find: "A1".to_string(),
                 replace: "A2".to_string(),
-                match_mode: "exact".to_string(),
+                match_mode: ReplaceMatchMode::Exact,
                 case_sensitive: true,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -969,11 +970,11 @@ async fn transform_batch_replace_in_range_can_mutate_formulas_when_enabled() -> 
                 },
                 find: "A1".to_string(),
                 replace: "A2".to_string(),
-                match_mode: "exact".to_string(),
+                match_mode: ReplaceMatchMode::Exact,
                 case_sensitive: true,
                 include_formulas: true,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -1040,7 +1041,7 @@ async fn transform_batch_fill_range_preview_stages_and_apply() -> Result<()> {
                 is_formula: false,
                 overwrite_formulas: false,
             }],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("fill".to_string()),
         },
     )
@@ -1121,11 +1122,11 @@ async fn transform_batch_replace_in_range_preview_stages_and_apply() -> Result<(
                 },
                 find: "Foo".to_string(),
                 replace: "Bar".to_string(),
-                match_mode: "exact".to_string(),
+                match_mode: ReplaceMatchMode::Exact,
                 case_sensitive: true,
                 include_formulas: false,
             }],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("replace".to_string()),
         },
     )
@@ -1204,11 +1205,11 @@ async fn transform_batch_replace_in_range_exact_case_insensitive() -> Result<()>
                 },
                 find: "foo".to_string(),
                 replace: "bar".to_string(),
-                match_mode: "exact".to_string(),
+                match_mode: ReplaceMatchMode::Exact,
                 case_sensitive: false,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -1271,11 +1272,11 @@ async fn transform_batch_replace_in_range_contains_replaces_all_occurrences() ->
                 },
                 find: "aa".to_string(),
                 replace: "b".to_string(),
-                match_mode: "contains".to_string(),
+                match_mode: ReplaceMatchMode::Contains,
                 case_sensitive: true,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -1348,7 +1349,7 @@ async fn transform_batch_multiple_ops_last_wins() -> Result<()> {
                     overwrite_formulas: false,
                 },
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -1362,64 +1363,6 @@ async fn transform_batch_multiple_ops_last_wins() -> Result<()> {
     })?;
 
     assert_eq!(a1, "z");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn transform_batch_replace_in_range_rejects_invalid_match_mode() -> Result<()> {
-    let workspace = support::TestWorkspace::new();
-    workspace.create_workbook("transform_replace_invalid.xlsx", |book| {
-        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        sheet.get_cell_mut("A1").set_value("Foo");
-    });
-
-    let state = recalc_state(&workspace);
-    let list = list_workbooks(
-        state.clone(),
-        ListWorkbooksParams {
-            slug_prefix: None,
-            folder: None,
-            path_glob: None,
-            limit: None,
-            offset: None,
-            include_paths: None,
-        },
-    )
-    .await?;
-    let workbook_id = list.workbooks[0].workbook_id.clone();
-
-    let fork = create_fork(
-        state.clone(),
-        CreateForkParams {
-            workbook_or_fork_id: workbook_id,
-        },
-    )
-    .await?;
-
-    let err = transform_batch(
-        state.clone(),
-        TransformBatchParams {
-            fork_id: fork.fork_id.clone(),
-            ops: vec![TransformOp::ReplaceInRange {
-                sheet_name: "Sheet1".to_string(),
-                target: TransformTarget::Cells {
-                    cells: vec!["A1".to_string()],
-                },
-                find: "Foo".to_string(),
-                replace: "Bar".to_string(),
-                match_mode: "wat".to_string(),
-                case_sensitive: true,
-                include_formulas: false,
-            }],
-            mode: Some("apply".to_string()),
-            label: None,
-        },
-    )
-    .await
-    .unwrap_err();
-
-    assert!(err.to_string().contains("invalid match_mode"));
 
     Ok(())
 }
@@ -1466,11 +1409,11 @@ async fn transform_batch_replace_in_range_contains_rejects_case_insensitive() ->
                 },
                 find: "Foo".to_string(),
                 replace: "Bar".to_string(),
-                match_mode: "contains".to_string(),
+                match_mode: ReplaceMatchMode::Contains,
                 case_sensitive: false,
                 include_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -1526,7 +1469,7 @@ async fn transform_batch_fill_range_overwrite_formulas_removes_formula() -> Resu
                 is_formula: false,
                 overwrite_formulas: true,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )

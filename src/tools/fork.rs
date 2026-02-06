@@ -1,3 +1,4 @@
+use super::param_enums::{BatchMode, FillDirection, FormulaRelativeMode, ReplaceMatchMode};
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{
@@ -35,6 +36,8 @@ pub struct CreateForkParams {
 pub struct CreateForkResponse {
     pub fork_id: String,
     pub base_workbook: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_base_workbook: Option<String>,
     pub ttl_seconds: u64,
 }
 
@@ -48,13 +51,17 @@ pub async fn create_fork(
 
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let base_path = &workbook.path;
-    let workspace_root = &state.config().workspace_root;
+    let config = state.config();
+    let workspace_root = &config.workspace_root;
 
     let fork_id = registry.create_fork(base_path, workspace_root)?;
 
     Ok(CreateForkResponse {
         fork_id,
         base_workbook: base_path.display().to_string(),
+        client_base_workbook: config
+            .map_path_for_client(base_path)
+            .map(|p| p.display().to_string()),
         ttl_seconds: registry.ttl().as_secs(),
     })
 }
@@ -169,16 +176,12 @@ fn default_replace_case_sensitive() -> bool {
     true
 }
 
-fn default_replace_match_mode() -> String {
-    "exact".to_string()
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TransformBatchParams {
     pub fork_id: String,
     pub ops: Vec<TransformOp>,
     #[serde(default)]
-    pub mode: Option<String>, // preview|apply (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -207,8 +210,8 @@ pub enum TransformOp {
         target: TransformTarget,
         find: String,
         replace: String,
-        #[serde(default = "default_replace_match_mode")]
-        match_mode: String, // exact|contains
+        #[serde(default)]
+        match_mode: ReplaceMatchMode,
         #[serde(default = "default_replace_case_sensitive")]
         case_sensitive: bool,
         #[serde(default)]
@@ -335,13 +338,9 @@ pub async fn transform_batch(
         }
     }
 
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -378,7 +377,7 @@ pub async fn transform_batch(
 
         Ok(TransformBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
@@ -404,7 +403,7 @@ pub async fn transform_batch(
 
         Ok(TransformBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
@@ -417,7 +416,7 @@ pub struct StyleBatchParams {
     pub fork_id: String,
     pub ops: Vec<StyleOp>,
     #[serde(default)]
-    pub mode: Option<String>, // "preview" | "apply" (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -426,7 +425,7 @@ pub struct StyleBatchParamsInput {
     pub fork_id: String,
     pub ops: Vec<StyleOpInput>,
     #[serde(default)]
-    pub mode: Option<String>,
+    pub mode: Option<BatchMode>,
     pub label: Option<String>,
 }
 
@@ -583,7 +582,7 @@ pub struct StyleOp {
     pub target: StyleTarget,
     pub patch: StylePatch,
     #[serde(default)]
-    pub op_mode: Option<String>, // "merge" | "set" | "clear"
+    pub op_mode: Option<crate::styles::StylePatchMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -608,7 +607,7 @@ pub struct ColumnSizeBatchParamsInput {
     pub fork_id: String,
     pub sheet_name: String,
     pub ops: Vec<ColumnSizeOpInput>,
-    pub mode: Option<String>, // preview|apply (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -656,7 +655,7 @@ struct ColumnSizeBatchParams {
     fork_id: String,
     sheet_name: String,
     ops: Vec<ColumnSizeOp>,
-    mode: Option<String>,
+    mode: Option<BatchMode>,
     label: Option<String>,
 }
 
@@ -731,13 +730,9 @@ pub async fn column_size_batch(
     let workbook = state.open_workbook(&fork_workbook_id).await?;
     let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
 
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -778,7 +773,7 @@ pub async fn column_size_batch(
         Ok(ColumnSizeBatchResponse {
             fork_id: params.fork_id,
             sheet_name: params.sheet_name,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
@@ -802,7 +797,7 @@ pub async fn column_size_batch(
         Ok(ColumnSizeBatchResponse {
             fork_id: params.fork_id,
             sheet_name: params.sheet_name,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
@@ -1008,13 +1003,9 @@ pub async fn style_batch(
         resolved_ops.push(resolved);
     }
 
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -1052,7 +1043,7 @@ pub async fn style_batch(
 
         Ok(StyleBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: resolved_ops.len(),
             summary,
@@ -1074,7 +1065,7 @@ pub async fn style_batch(
 
         Ok(StyleBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
@@ -1090,11 +1081,11 @@ pub struct ApplyFormulaPatternParams {
     pub anchor_cell: String,
     pub base_formula: String,
     #[serde(default)]
-    pub fill_direction: Option<String>, // down|right|both (default both)
+    pub fill_direction: Option<FillDirection>, // down|right|both (default both)
     #[serde(default)]
-    pub relative_mode: Option<String>, // excel|abs_cols|abs_rows
+    pub relative_mode: Option<FormulaRelativeMode>, // excel|abs_cols|abs_rows
     #[serde(default)]
-    pub mode: Option<String>, // preview|apply (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -1115,8 +1106,8 @@ struct ApplyFormulaPatternStagedPayload {
     target_range: String,
     anchor_cell: String,
     base_formula: String,
-    fill_direction: Option<String>,
-    relative_mode: Option<String>,
+    fill_direction: Option<FillDirection>,
+    relative_mode: Option<FormulaRelativeMode>,
 }
 
 pub async fn apply_formula_pattern(
@@ -1132,25 +1123,18 @@ pub async fn apply_formula_pattern(
 
     let bounds = parse_range_bounds(&params.target_range)?;
     let (anchor_col, anchor_row) = parse_cell_ref(&params.anchor_cell)?;
-    validate_formula_pattern_bounds(
-        &bounds,
-        anchor_col,
-        anchor_row,
-        params.fill_direction.as_deref(),
-    )?;
+    let fill_direction = params.fill_direction.unwrap_or_default();
+    validate_formula_pattern_bounds(&bounds, anchor_col, anchor_row, fill_direction)?;
 
     let fork_workbook_id = WorkbookId(params.fork_id.clone());
     let workbook = state.open_workbook(&fork_workbook_id).await?;
     let _ = workbook.with_sheet(&params.sheet_name, |_| Ok::<_, anyhow::Error>(()))?;
 
-    let relative_mode = RelativeMode::parse(params.relative_mode.as_deref())?;
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let relative_mode_param = params.relative_mode.unwrap_or_default();
+    let relative_mode: RelativeMode = relative_mode_param.into();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -1160,8 +1144,8 @@ pub async fn apply_formula_pattern(
         let target_range = params.target_range.clone();
         let anchor_cell = params.anchor_cell.clone();
         let base_formula = params.base_formula.clone();
-        let fill_direction = params.fill_direction.clone();
-        let relative_mode_str = params.relative_mode.clone();
+        let fill_direction = Some(fill_direction);
+        let relative_mode_param = Some(relative_mode_param);
         let snapshot_for_apply = snapshot_path.clone();
         let sheet_name_for_apply = sheet_name.clone();
         let target_range_for_apply = target_range.clone();
@@ -1192,7 +1176,7 @@ pub async fn apply_formula_pattern(
                 anchor_cell: anchor_cell.clone(),
                 base_formula: base_formula.clone(),
                 fill_direction,
-                relative_mode: relative_mode_str,
+                relative_mode: relative_mode_param,
             })?,
         };
 
@@ -1211,7 +1195,7 @@ pub async fn apply_formula_pattern(
             fork_id: params.fork_id,
             sheet_name,
             target_range,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             cells_filled: apply_result.cells_filled,
             summary,
@@ -1251,7 +1235,7 @@ pub async fn apply_formula_pattern(
             fork_id: params.fork_id,
             sheet_name,
             target_range,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             cells_filled: apply_result.cells_filled,
             summary,
@@ -1320,7 +1304,7 @@ fn validate_formula_pattern_bounds(
     bounds: &ScreenshotBounds,
     anchor_col: u32,
     anchor_row: u32,
-    fill_direction: Option<&str>,
+    fill_direction: FillDirection,
 ) -> Result<()> {
     if anchor_col < bounds.min_col
         || anchor_col > bounds.max_col
@@ -1343,20 +1327,18 @@ fn validate_formula_pattern_bounds(
         bail!("target_range must start at anchor_cell (anchor should be top-left of fill range)");
     }
 
-    let dir = fill_direction.unwrap_or("both").to_ascii_lowercase();
-    match dir.as_str() {
-        "down" => {
+    match fill_direction {
+        FillDirection::Down => {
             if bounds.min_col != bounds.max_col {
                 bail!("fill_direction=down requires a single-column target_range");
             }
         }
-        "right" => {
+        FillDirection::Right => {
             if bounds.min_row != bounds.max_row {
                 bail!("fill_direction=right requires a single-row target_range");
             }
         }
-        "both" => {}
-        other => bail!("invalid fill_direction: {}", other),
+        FillDirection::Both => {}
     }
     Ok(())
 }
@@ -1366,7 +1348,7 @@ pub struct StructureBatchParams {
     pub fork_id: String,
     pub ops: Vec<StructureOp>,
     #[serde(default)]
-    pub mode: Option<String>, // preview|apply (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -1375,7 +1357,7 @@ pub struct StructureBatchParamsInput {
     pub fork_id: String,
     pub ops: Vec<StructureOpInput>,
     #[serde(default)]
-    pub mode: Option<String>,
+    pub mode: Option<BatchMode>,
     pub label: Option<String>,
 }
 
@@ -1578,13 +1560,9 @@ pub async fn structure_batch(
 
     let will_need_recalc = fork_ctx.recalc_needed || structure_ops_require_recalc(&params.ops);
 
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -1644,7 +1622,7 @@ pub async fn structure_batch(
 
         Ok(StructureBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
@@ -1673,7 +1651,7 @@ pub async fn structure_batch(
 
         Ok(StructureBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
@@ -3081,21 +3059,14 @@ fn apply_transform_ops_to_file(path: &Path, ops: &[TransformOp]) -> Result<Trans
                     .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                 sheets.insert(sheet_name.clone());
 
-                let match_mode = match_mode.to_ascii_lowercase();
-                if match_mode != "exact" && match_mode != "contains" {
-                    return Err(anyhow!(
-                        "invalid match_mode '{}'; expected 'exact' or 'contains'",
-                        match_mode
-                    ));
-                }
-                if match_mode == "contains" && !*case_sensitive {
+                if *match_mode == ReplaceMatchMode::Contains && !*case_sensitive {
                     return Err(anyhow!(
                         "match_mode 'contains' requires case_sensitive=true"
                     ));
                 }
 
                 let replace_value = |input: &str| -> Option<String> {
-                    if match_mode == "exact" {
+                    if *match_mode == ReplaceMatchMode::Exact {
                         if *case_sensitive {
                             (input == find).then(|| replace.clone())
                         } else {
@@ -3248,17 +3219,7 @@ fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyRes
             .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
         sheets.insert(op.sheet_name.clone());
 
-        let op_mode = match op
-            .op_mode
-            .as_deref()
-            .unwrap_or("merge")
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "set" => StylePatchMode::Set,
-            "clear" => StylePatchMode::Clear,
-            _ => StylePatchMode::Merge,
-        };
+        let op_mode = op.op_mode.unwrap_or(StylePatchMode::Merge);
 
         match &op.target {
             StyleTarget::Range { range } => {
@@ -3423,6 +3384,8 @@ pub struct ChangesetSummary {
 pub struct GetChangesetResponse {
     pub fork_id: String,
     pub base_workbook: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_base_workbook: Option<String>,
     pub changes: Vec<crate::diff::Change>,
     pub summary: ChangesetSummary,
 }
@@ -3618,6 +3581,10 @@ pub async fn get_changeset(
     Ok(GetChangesetResponse {
         fork_id: params.fork_id,
         base_workbook: fork_ctx.base_path.display().to_string(),
+        client_base_workbook: state
+            .config()
+            .map_path_for_client(&fork_ctx.base_path)
+            .map(|p| p.display().to_string()),
         changes,
         summary,
     })
@@ -3703,6 +3670,8 @@ pub struct ListForksResponse {
 pub struct ForkSummary {
     pub fork_id: String,
     pub base_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_base_path: Option<String>,
     pub age_seconds: u64,
     pub edit_count: usize,
     pub recalc_needed: bool,
@@ -3716,15 +3685,27 @@ pub async fn list_forks(
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
 
+    let config = state.config();
     let forks: Vec<ForkSummary> = registry
         .list_forks()
         .into_iter()
-        .map(|f| ForkSummary {
-            fork_id: f.fork_id,
-            base_path: f.base_path,
-            age_seconds: f.created_at.elapsed().as_secs(),
-            edit_count: f.edit_count,
-            recalc_needed: f.recalc_needed,
+        .map(|f| {
+            let base_path = f.base_path;
+            let client_base_path = if config.path_mappings.is_empty() {
+                None
+            } else {
+                config
+                    .map_path_for_client(PathBuf::from(&base_path))
+                    .map(|p| p.display().to_string())
+            };
+            ForkSummary {
+                fork_id: f.fork_id,
+                base_path,
+                client_base_path,
+                age_seconds: f.created_at.elapsed().as_secs(),
+                edit_count: f.edit_count,
+                recalc_needed: f.recalc_needed,
+            }
         })
         .collect();
 
@@ -3776,6 +3757,8 @@ fn default_drop_fork() -> bool {
 pub struct SaveForkResponse {
     pub fork_id: String,
     pub saved_to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_saved_to: Option<String>,
     pub fork_dropped: bool,
 }
 
@@ -3790,7 +3773,7 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
 
     let (target, is_overwrite) = match params.target_path {
         Some(p) => {
-            let resolved = config.resolve_path(&p);
+            let resolved = config.resolve_user_path(&p);
             let is_overwrite = if resolved.exists() {
                 let base_canon = fork_ctx.base_path.canonicalize().map_err(|e| {
                     anyhow!("failed to canonicalize base_path for overwrite check: {e}")
@@ -3823,6 +3806,9 @@ pub async fn save_fork(state: Arc<AppState>, params: SaveForkParams) -> Result<S
     Ok(SaveForkResponse {
         fork_id: params.fork_id,
         saved_to: target.display().to_string(),
+        client_saved_to: config
+            .map_path_for_client(&target)
+            .map(|p| p.display().to_string()),
         fork_dropped: params.drop_fork,
     })
 }
@@ -4143,13 +4129,9 @@ pub async fn apply_staged_change(
 
                 let bounds = parse_range_bounds(&payload.target_range)?;
                 let (anchor_col, anchor_row) = parse_cell_ref(&payload.anchor_cell)?;
-                validate_formula_pattern_bounds(
-                    &bounds,
-                    anchor_col,
-                    anchor_row,
-                    payload.fill_direction.as_deref(),
-                )?;
-                let relative_mode = RelativeMode::parse(payload.relative_mode.as_deref())?;
+                let fill_direction = payload.fill_direction.unwrap_or_default();
+                validate_formula_pattern_bounds(&bounds, anchor_col, anchor_row, fill_direction)?;
+                let relative_mode: RelativeMode = payload.relative_mode.unwrap_or_default().into();
 
                 tokio::task::spawn_blocking({
                     let sheet_name = payload.sheet_name.clone();
@@ -4300,6 +4282,8 @@ pub struct ScreenshotSheetResponse {
     pub sheet_name: String,
     pub range: String,
     pub output_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_output_path: Option<String>,
     pub size_bytes: u64,
     pub duration_ms: u64,
 }
@@ -4321,7 +4305,8 @@ pub async fn screenshot_sheet(
     let safe_slug = sanitize_filename_component(&workbook.slug);
     let filename = format!("{}_{}_{}.png", safe_slug, safe_sheet, safe_range);
 
-    let screenshot_dir = state.config().workspace_root.join("screenshots");
+    let config = state.config();
+    let screenshot_dir = config.screenshot_dir.clone();
     tokio::fs::create_dir_all(&screenshot_dir).await?;
     let output_path = screenshot_dir.join(&filename);
 
@@ -4353,6 +4338,9 @@ pub async fn screenshot_sheet(
         sheet_name: params.sheet_name,
         range: range.to_string(),
         output_path: format!("file://{}", result.output_path.display()),
+        client_output_path: config
+            .map_path_for_client(&result.output_path)
+            .map(|p| format!("file://{}", p.display())),
         size_bytes: result.size_bytes,
         duration_ms: result.duration_ms,
     })

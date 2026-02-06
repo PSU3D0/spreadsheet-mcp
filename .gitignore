@@ -3,5 +3,6 @@ target/
 opencode.json
 .opencode/
 stest/
+test_workdir/
 private_planning/
 .worktrees/

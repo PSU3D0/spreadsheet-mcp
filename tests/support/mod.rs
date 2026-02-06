@@ -80,6 +80,8 @@ impl TestWorkspace {
     pub fn config(&self) -> ServerConfig {
         ServerConfig {
             workspace_root: self.root.clone(),
+            screenshot_dir: self.root.join("screenshots"),
+            path_mappings: Vec::new(),
             cache_capacity: 8,
             supported_extensions: DEFAULT_EXTENSIONS
                 .iter()
