@@ -528,7 +528,41 @@ struct StylePatchInput {
     #[serde(default)]
     pub alignment: Option<Option<AlignmentPatch>>,
     #[serde(default)]
-    pub number_format: Option<Option<String>>,
+    pub number_format: Option<Option<NumberFormatPatchInput>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum NumberFormatPatchInput {
+    FormatCode(String),
+    Shorthand(NumberFormatShorthandInput),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NumberFormatShorthandInput {
+    pub kind: NumberFormatKind,
+    #[serde(default)]
+    pub format_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NumberFormatKind {
+    Currency,
+    Percent,
+    DateIso,
+    Accounting,
+    Integer,
+}
+
+fn number_format_kind_to_format_code(kind: &NumberFormatKind) -> &'static str {
+    match kind {
+        NumberFormatKind::Currency => "$#,##0.00",
+        NumberFormatKind::Percent => "0.00%",
+        NumberFormatKind::DateIso => "yyyy-mm-dd",
+        NumberFormatKind::Accounting => "_($* #,##0.00_)",
+        NumberFormatKind::Integer => "0",
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -842,12 +876,29 @@ fn normalize_style_patch_input(input: StylePatchInput) -> (StylePatch, bool, boo
         }
     };
 
+    let number_format: Option<Option<String>> = match input.number_format {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(nf)) => match nf {
+            NumberFormatPatchInput::FormatCode(code) => Some(Some(code)),
+            NumberFormatPatchInput::Shorthand(sh) => {
+                if let Some(code) = sh.format_code {
+                    Some(Some(code))
+                } else {
+                    Some(Some(
+                        number_format_kind_to_format_code(&sh.kind).to_string(),
+                    ))
+                }
+            }
+        },
+    };
+
     let mut patch = StylePatch {
         font: input.font,
         fill,
         borders: input.borders,
         alignment: input.alignment,
-        number_format: input.number_format,
+        number_format,
     };
     normalize_style_patch_colors(&mut patch, &mut color_alpha_defaulted);
 
