@@ -829,7 +829,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
 
     #[tool(
         name = "rules_batch",
-        description = "Apply rule operations to a fork (DV v1: set_data_validation). Mode: preview or apply (default apply)."
+        description = "Apply rule operations to a fork (DV v1: set_data_validation; CF v1: add_conditional_format). Mode: preview or apply (default apply)."
     )]
     pub async fn rules_batch(
         &self,
