@@ -4139,6 +4139,22 @@ pub async fn apply_staged_change(
 
                 ops_applied += 1;
             }
+            "sheet_layout_batch" => {
+                let payload: crate::tools::sheet_layout::SheetLayoutBatchStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid sheet_layout_batch payload: {}", e))?;
+
+                tokio::task::spawn_blocking({
+                    let ops = payload.ops.clone();
+                    let work_path = work_path.clone();
+                    move || {
+                        crate::tools::sheet_layout::apply_sheet_layout_ops_to_file(&work_path, &ops)
+                    }
+                })
+                .await??;
+
+                ops_applied += 1;
+            }
             other => {
                 return Err(anyhow!("unsupported staged op kind: {}", other));
             }

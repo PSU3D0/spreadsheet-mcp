@@ -766,6 +766,25 @@ Note: autosize uses cached/formatted cell values; if a column is mostly formulas
     }
 
     #[tool(
+        name = "sheet_layout_batch",
+        description = "Apply sheet layout/view/print settings in a fork (freeze panes, zoom, gridlines, margins, setup, print area, page breaks). Mode: preview or apply (default apply)."
+    )]
+    pub async fn sheet_layout_batch(
+        &self,
+        Parameters(params): Parameters<tools::sheet_layout::SheetLayoutBatchParams>,
+    ) -> Result<Json<tools::sheet_layout::SheetLayoutBatchResponse>, McpError> {
+        self.ensure_recalc_enabled("sheet_layout_batch")
+            .map_err(|e| to_mcp_error_for_tool("sheet_layout_batch", e))?;
+        self.run_tool_with_timeout(
+            "sheet_layout_batch",
+            tools::sheet_layout::sheet_layout_batch(self.state.clone(), params),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| to_mcp_error_for_tool("sheet_layout_batch", e))
+    }
+
+    #[tool(
         name = "apply_formula_pattern",
         description = "Autofill-like formula pattern application over a target range in a fork. \
 Provide base_formula at anchor_cell, then fill across target_range. \
