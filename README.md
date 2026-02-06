@@ -104,6 +104,8 @@ The Docker image includes LibreOffice with pre-configured macros required for re
 | `apply_formula_pattern` | Autofill-like formula fill over a target range |
 | `structure_batch` | Batch structural edits (rows/cols/sheets + copy/move ranges) |
 | `column_size_batch` | Set column widths or compute auto-width for columns |
+| `sheet_layout_batch` | Set sheet view/print layout (freeze panes, zoom, print area) |
+| `rules_batch` | Add/replace rules (data validation, conditional formatting) |
 | `recalculate` | Trigger LibreOffice to update formula results |
 | `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
 | `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
@@ -203,6 +205,53 @@ Notes:
 Notes:
 - `auto` computes and sets widths immediately (persisted in the file).
 - Autosize uses cached/formatted cell values; formula-only columns with no cached results may size too narrow unless recalculated.
+
+**sheet_layout_batch (canonical)**
+```json
+{
+  "tool": "sheet_layout_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "mode": "preview",
+    "ops": [
+      { "kind": "freeze_panes", "sheet_name": "Dashboard", "freeze_rows": 1, "freeze_cols": 1 },
+      { "kind": "set_zoom", "sheet_name": "Dashboard", "zoom_percent": 110 },
+      { "kind": "set_print_area", "sheet_name": "Dashboard", "range": "A1:G30" },
+      { "kind": "set_page_setup", "sheet_name": "Dashboard", "orientation": "landscape", "fit_to_width": 1, "fit_to_height": 1 }
+    ]
+  }
+}
+```
+
+**rules_batch (DV + CF)**
+```json
+{
+  "tool": "rules_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "mode": "apply",
+    "ops": [
+      {
+        "kind": "set_data_validation",
+        "sheet_name": "Inputs",
+        "target_range": "B3:B100",
+        "validation": { "kind": "list", "formula1": "=Lists!$A$1:$A$10", "allow_blank": false }
+      },
+      {
+        "kind": "set_conditional_format",
+        "sheet_name": "Dashboard",
+        "target_range": "D3:D100",
+        "rule": { "kind": "cell_is", "operator": "less_than", "formula": "0" },
+        "style": { "fill_color": "#FFE0E0", "font_color": "#8A0000", "bold": true }
+      },
+      { "kind": "clear_conditional_formats", "sheet_name": "Dashboard", "target_range": "D3:D100" }
+    ]
+  }
+}
+```
+Notes:
+- Conditional formatting formulas are written verbatim; structural edits do not rewrite CF formulas (review after insert/delete).
+- Colors accept `#RGB`, `#RRGGBB`, or `#AARRGGBB` and normalize to ARGB.
 
 ### Token-Efficient Write Workflows
 
