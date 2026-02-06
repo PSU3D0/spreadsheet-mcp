@@ -3,6 +3,8 @@ pub mod filters;
 pub mod fork;
 #[cfg(feature = "recalc")]
 pub mod sheet_layout;
+#[cfg(feature = "recalc")]
+pub mod rules_batch;
 pub mod vba;
 #[cfg(feature = "recalc")]
 pub mod write_normalize;
