@@ -173,7 +173,10 @@ pub fn cell_is_error(page: &Value, row: usize, col: usize) -> bool {
 pub fn cell_error_type(page: &Value, row: usize, col: usize) -> Option<String> {
     let value = sheet_page_value_node(page, row, col)?;
     if value.get("kind").and_then(|v| v.as_str()) == Some("Error") {
-        return value.get("value").and_then(|v| v.as_str()).map(|s| s.to_string());
+        return value
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
     }
     if let Some(val) = value.get("value").and_then(|v| v.as_str())
         && val.starts_with('#')
@@ -228,9 +231,10 @@ fn cell_value_from_node(value: &Value) -> Option<String> {
                 format!("{}", n)
             }
         }),
-        "Text" | "String" | "Date" | "Error" => {
-            value.get("value").and_then(|v| v.as_str()).map(|s| s.to_string())
-        }
+        "Text" | "String" | "Date" | "Error" => value
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         "Bool" => value
             .get("value")
             .and_then(|v| v.as_bool())

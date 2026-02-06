@@ -179,6 +179,7 @@ Notes:
 Notes:
 - Canonical form uses `target` + `patch`.
 - Shorthand `range` + `style` is accepted and normalized.
+- `number_format` accepts either an explicit Excel format code string (e.g. `"0.00%"`) or a shorthand object (e.g. `{ "kind": "currency" }`).
 - Colors prefer 8-digit ARGB (`AARRGGBB`). 6-digit RGB is accepted, expanded to opaque (`FFRRGGBB`) with a warning.
 
 **column_size_batch (canonical + shorthand)**
