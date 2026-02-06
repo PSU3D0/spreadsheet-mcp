@@ -8,6 +8,7 @@ use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, StructureBatchParamsInput, StructureOp,
     apply_staged_change, create_fork, normalize_structure_batch, structure_batch,
 };
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
 mod support;
@@ -64,7 +65,7 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -144,7 +145,7 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -213,7 +214,7 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -289,7 +290,7 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -342,7 +343,7 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("insert col".to_string()),
         },
     )
@@ -427,7 +428,7 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: None,
         },
     )
@@ -488,7 +489,7 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -543,7 +544,7 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -595,7 +596,7 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )

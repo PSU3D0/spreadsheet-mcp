@@ -32,29 +32,48 @@ impl RecalcExecutor for FireAndForgetExecutor {
     async fn recalculate(&self, workbook_path: &Path) -> Result<RecalcResult> {
         let start = Instant::now();
 
+        // LibreOffice will try to write cache/config under HOME and XDG dirs.
+        // In containerized environments we want a known-writable location.
+        // This also prevents attempts to write to '/.cache' when HOME is unset.
+        let _ = std::fs::create_dir_all("/tmp/.cache");
+        let _ = std::fs::create_dir_all("/tmp/.config");
+
         let abs_path = workbook_path
             .canonicalize()
             .map_err(|e| anyhow!("failed to canonicalize path: {}", e))?;
 
-        let file_url = format!("file://{}", abs_path.to_str().unwrap());
-        let macro_uri = recalc_and_save_uri(&file_url)?;
+        let file_path = abs_path.to_string_lossy().to_string();
+        let macro_uri = recalc_and_save_uri(&file_path)?;
 
-        let output_result = time::timeout(
-            self.timeout,
-            Command::new(&self.soffice_path)
-                .args([
-                    "--headless",
-                    "--norestore",
-                    "--nodefault",
-                    "--nofirststartwizard",
-                    "--nolockcheck",
-                    "--calc",
-                    &macro_uri,
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        )
+        let output_result = time::timeout(self.timeout, {
+            let mut cmd = Command::new(&self.soffice_path);
+            if let Ok(root) = std::env::var("SPREADSHEET_MCP_LIBREOFFICE_USER_INSTALLATION")
+                && !root.trim().is_empty()
+            {
+                let root = root.trim();
+                let uri = if root.starts_with("file://") {
+                    root.to_string()
+                } else {
+                    format!("file:///{}", root.trim_start_matches('/'))
+                };
+                cmd.arg(format!("-env:UserInstallation={}", uri));
+            }
+            cmd.args([
+                "--headless",
+                "--norestore",
+                "--nodefault",
+                "--nofirststartwizard",
+                "--nolockcheck",
+                "--calc",
+                &macro_uri,
+            ])
+            .env("HOME", "/tmp")
+            .env("XDG_CACHE_HOME", "/tmp/.cache")
+            .env("XDG_CONFIG_HOME", "/tmp/.config")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+        })
         .await
         .map_err(|_| anyhow!("soffice timed out after {:?}", self.timeout))
         .and_then(|res| res.map_err(|e| anyhow!("failed to spawn soffice: {}", e)));
@@ -70,6 +89,48 @@ impl RecalcExecutor for FireAndForgetExecutor {
                 stderr,
                 stdout
             ));
+        }
+
+        // LibreOffice can sometimes exit 0 even when the macro failed.
+        // Heuristic: treat obvious Basic/macro errors as failures so callers don't silently
+        // proceed with stale / missing cached results.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr_trim = stderr.trim();
+        let stdout_trim = stdout.trim();
+
+        // Surface logs to help diagnose macro issues in Docker.
+        // Keep it bounded to avoid blowing up logs.
+        let truncate = |s: &str, max: usize| {
+            if s.len() <= max {
+                return s.to_string();
+            }
+            let mut end = max;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...[truncated]", &s[..end])
+        };
+        if !stderr_trim.is_empty() || !stdout_trim.is_empty() {
+            tracing::warn!(
+                soffice_stderr = %truncate(stderr_trim, 16 * 1024),
+                soffice_stdout = %truncate(stdout_trim, 16 * 1024),
+                "soffice recalc macro output"
+            );
+        }
+        if !stderr_trim.is_empty() {
+            let lower = stderr_trim.to_ascii_lowercase();
+            if lower.contains("basic")
+                || lower.contains("script could not be found")
+                || lower.contains("macro")
+                || lower.contains("uno exception")
+            {
+                return Err(anyhow!(
+                    "soffice reported a macro error (exit 0): stderr={}, stdout={}",
+                    stderr_trim,
+                    stdout_trim
+                ));
+            }
         }
 
         Ok(RecalcResult {

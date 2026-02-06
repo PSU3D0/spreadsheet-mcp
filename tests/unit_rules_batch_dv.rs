@@ -5,6 +5,7 @@ use spreadsheet_mcp::model::WorkbookId;
 use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, apply_staged_change, create_fork,
 };
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::rules_batch::{
     DataValidationKind, DataValidationSpec, RulesBatchParams, RulesOp, ValidationMessage,
     rules_batch,
@@ -80,7 +81,7 @@ async fn rules_batch_set_data_validation_list_persists_and_is_idempotent() -> Re
         RulesBatchParams {
             fork_id: fork.fork_id.clone(),
             ops: vec![op.clone()],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -92,7 +93,7 @@ async fn rules_batch_set_data_validation_list_persists_and_is_idempotent() -> Re
         RulesBatchParams {
             fork_id: fork.fork_id.clone(),
             ops: vec![op],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -167,7 +168,7 @@ async fn rules_batch_preview_then_apply_staged_change() -> Result<()> {
                     error: None,
                 },
             }],
-            mode: "preview".to_string(),
+            mode: Some(BatchMode::Preview),
             label: Some("add dropdown".to_string()),
         },
     )

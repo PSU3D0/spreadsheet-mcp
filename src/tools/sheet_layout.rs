@@ -3,6 +3,7 @@
 use crate::fork::{ChangeSummary, StagedChange, StagedOp};
 use crate::model::WorkbookId;
 use crate::state::AppState;
+use crate::tools::param_enums::{BatchMode, PageOrientation};
 use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
@@ -13,8 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use umya_spreadsheet::{
-    Break, Coordinate, OrientationValues, Pane, PaneStateValues, PaneValues, SheetView, SheetViews,
-    Worksheet,
+    Break, Coordinate, Pane, PaneStateValues, PaneValues, SheetView, SheetViews, Worksheet,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -22,7 +22,7 @@ pub struct SheetLayoutBatchParams {
     pub fork_id: String,
     pub ops: Vec<SheetLayoutOp>,
     #[serde(default)]
-    pub mode: Option<String>, // preview|apply (default apply)
+    pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
 }
 
@@ -59,7 +59,7 @@ pub enum SheetLayoutOp {
     },
     SetPageSetup {
         sheet_name: String,
-        orientation: String, // portrait|landscape
+        orientation: PageOrientation,
         #[serde(default)]
         fit_to_width: Option<u32>,
         #[serde(default)]
@@ -118,13 +118,9 @@ pub async fn sheet_layout_batch(
         }
     }
 
-    let mode = params
-        .mode
-        .as_deref()
-        .unwrap_or("apply")
-        .to_ascii_lowercase();
+    let mode = params.mode.unwrap_or_default();
 
-    if mode == "preview" {
+    if mode.is_preview() {
         let change_id = make_short_random_id("chg", 12);
         let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
         fs::create_dir_all(snapshot_path.parent().unwrap())?;
@@ -161,7 +157,7 @@ pub async fn sheet_layout_batch(
 
         Ok(SheetLayoutBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
@@ -182,7 +178,7 @@ pub async fn sheet_layout_batch(
 
         Ok(SheetLayoutBatchResponse {
             fork_id: params.fork_id,
-            mode,
+            mode: mode.as_str().to_string(),
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
@@ -328,7 +324,7 @@ pub(crate) fn apply_sheet_layout_ops_to_file(
             } => {
                 setup_ops += 1;
                 affected_sheets.insert(sheet_name.clone());
-                let orientation_value = parse_orientation(orientation)?;
+                let orientation_value = orientation.to_umya();
                 if let Some(v) = fit_to_width {
                     if *v < 1 {
                         bail!("fit_to_width must be >= 1");
@@ -507,14 +503,6 @@ fn validate_margin_value(field: &str, value: f64) -> Result<()> {
         bail!("{field} margin must be >= 0");
     }
     Ok(())
-}
-
-fn parse_orientation(value: &str) -> Result<OrientationValues> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "portrait" => Ok(OrientationValues::Portrait),
-        "landscape" => Ok(OrientationValues::Landscape),
-        other => bail!("invalid orientation: {other} (expected portrait|landscape)"),
-    }
 }
 
 fn set_print_area_defined_name(

@@ -3,10 +3,12 @@
 use anyhow::Result;
 use serde_json::json;
 use spreadsheet_mcp::model::{FillPatch, FontPatch, PatternFillPatch, StylePatch};
+use spreadsheet_mcp::styles::StylePatchMode;
 use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, StyleBatchParamsInput, StyleOp, StyleTarget,
     apply_staged_change, create_fork, normalize_style_batch, style_batch,
 };
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 use umya_spreadsheet::{
     ConditionalFormatValues, ConditionalFormatting, ConditionalFormattingRule, Formula,
@@ -84,11 +86,11 @@ async fn style_batch_merge_set_clear_semantics() -> Result<()> {
                         range: "A1:A1".to_string(),
                     },
                     patch: patch_merge,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -128,11 +130,11 @@ async fn style_batch_merge_set_clear_semantics() -> Result<()> {
                         cells: vec!["A1".to_string()],
                     },
                     patch: patch_set,
-                    op_mode: Some("set".to_string()),
+                    op_mode: Some(StylePatchMode::Set),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -212,7 +214,7 @@ async fn style_batch_preview_stages_and_apply() -> Result<()> {
                 }
                 .into(),
             ],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("bold headers".to_string()),
         },
     )
@@ -311,7 +313,7 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
                         range: "A1:C3".to_string(),
                     },
                     patch: base_fill,
-                    op_mode: Some("set".to_string()),
+                    op_mode: Some(StylePatchMode::Set),
                 }
                 .into(),
                 StyleOp {
@@ -320,11 +322,11 @@ async fn style_batch_overlap_ordering_last_wins() -> Result<()> {
                         range: "A1:C1".to_string(),
                     },
                     patch: header_bold,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -404,11 +406,11 @@ async fn style_batch_nested_null_clear_only_subfield() -> Result<()> {
                         cells: vec!["A1".to_string()],
                     },
                     patch,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -501,11 +503,11 @@ async fn style_batch_region_target_resolves() -> Result<()> {
                     sheet_name: "Sheet1".to_string(),
                     target: StyleTarget::Region { region_id },
                     patch,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -578,11 +580,11 @@ async fn style_batch_idempotent_noop_counts_and_no_diff() -> Result<()> {
                         cells: vec!["A1".to_string()],
                     },
                     patch,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -687,11 +689,11 @@ async fn style_batch_preserves_conditional_formats() -> Result<()> {
                         range: "A1:A3".to_string(),
                     },
                     patch,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )

@@ -5,6 +5,7 @@ use spreadsheet_mcp::model::{FillDescriptor, WorkbookId};
 use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, apply_staged_change, create_fork,
 };
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::rules_batch::{
     ConditionalFormatOperator, ConditionalFormatRuleSpec, ConditionalFormatStyleSpec,
     RulesBatchParams, RulesOp, rules_batch,
@@ -73,7 +74,7 @@ async fn rules_batch_add_conditional_format_persists_and_is_idempotent() -> Resu
         RulesBatchParams {
             fork_id: fork.fork_id.clone(),
             ops: vec![op.clone()],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -92,7 +93,7 @@ async fn rules_batch_add_conditional_format_persists_and_is_idempotent() -> Resu
         RulesBatchParams {
             fork_id: fork.fork_id.clone(),
             ops: vec![op],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -190,7 +191,7 @@ async fn rules_batch_conditional_format_preview_then_apply_staged_change() -> Re
                     bold: Some(false),
                 },
             }],
-            mode: "preview".to_string(),
+            mode: Some(BatchMode::Preview),
             label: Some("cf".to_string()),
         },
     )
@@ -276,7 +277,7 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
                     bold: Some(true),
                 },
             }],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -309,7 +310,7 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
                     bold: Some(false),
                 },
             }],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -341,7 +342,7 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
                     bold: Some(false),
                 },
             }],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -396,7 +397,7 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
                 sheet_name: "Sheet1".to_string(),
                 target_range: "A1:A3".to_string(),
             }],
-            mode: "apply".to_string(),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )

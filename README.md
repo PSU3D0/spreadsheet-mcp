@@ -87,10 +87,42 @@ Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate f
 
 **Always use the `:full` Docker image for write/recalc features:**
 ```bash
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
+docker run \
+  -v /path/to/workbooks:/data \
+  -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
 
+Notes:
+- The `:full` image includes an entrypoint that (by default) drops privileges to the owner of the mounted workspace directory to avoid creating root-owned files on the host.
+- If that doesn't fit your environment, you can override with `SPREADSHEET_MCP_RUN_UID` / `SPREADSHEET_MCP_RUN_GID` or run with `--user`.
+
 The Docker image includes LibreOffice with pre-configured macros required for reliable recalculation. Running outside Docker requires manual LibreOffice setup (macro trust, headless config) and is not recommended.
+
+### Docker Deployment (Recommended)
+
+This is a good default setup when:
+- The MCP server runs in Docker
+- Your agent can also access the host filesystem directly (so you want host-visible paths in tool outputs)
+- You want screenshots written to a separate host directory
+
+```bash
+WORKBOOK_DIR="/absolute/path/to/workbooks"
+SCREENSHOT_DIR="/absolute/path/to/screenshots"
+
+docker run \
+  -v "${WORKBOOK_DIR}:/data" \
+  -v "${SCREENSHOT_DIR}:/screenshots" \
+  -e SPREADSHEET_MCP_SCREENSHOT_DIR=/screenshots \
+  -e SPREADSHEET_MCP_PATH_MAP="/data=${WORKBOOK_DIR},/screenshots=${SCREENSHOT_DIR}" \
+  -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+What you get from this configuration:
+- Write/export paths remain container-internal (`/data/...`) but responses also include `client_*` fields pointing at host paths (useful for agents that can read files directly).
+- `save_fork.target_path` can be a host absolute path (matching the `SPREADSHEET_MCP_PATH_MAP` client prefix) and it will be mapped to the container path automatically.
+- `screenshot_sheet` writes to `/screenshots` (separate from workbook workspace) and includes `client_output_path` when path mapping is configured.
 
 ### Write Tools
 
@@ -291,11 +323,44 @@ When running in Docker with `--workspace-root /data` and a host mount like `-v /
 - Fork working files live under `/tmp/mcp-forks` inside the container (not visible on host).
 - `save_fork.target_path` is resolved under `workspace_root` (Docker default: `/data`).
   Use a relative path like `out.xlsx` (or `exports/out.xlsx`) to write back into the mounted folder on the host.
-- `screenshot_sheet` writes PNGs under `screenshots/` in `workspace_root` (Docker default: `/data/screenshots/`).
+- `screenshot_sheet` writes PNGs under `screenshot_dir` (default: `<workspace_root>/screenshots`, so `/data/screenshots/` in the default Docker config).
+
+Optional: separate screenshot output dir
+
+If you want screenshots separate from the workbook workspace, mount a second volume and set `SPREADSHEET_MCP_SCREENSHOT_DIR`:
+
+```bash
+docker run \
+  -v /path/to/workbooks:/data \
+  -v /path/to/screenshots:/screenshots \
+  -e SPREADSHEET_MCP_SCREENSHOT_DIR=/screenshots \
+  -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+Optional: host/client path mapping
+
+When the server runs in Docker, tool outputs often include container paths (e.g. `/data/foo.xlsx`). If your agent also has direct access to the host filesystem, configure path mapping so responses include `client_*` paths:
+
+```bash
+docker run \
+  -v /path/to/workbooks:/data \
+  -e SPREADSHEET_MCP_PATH_MAP=/data=/path/to/workbooks \
+  -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+This adds:
+- `client_path` to `list_workbooks` items (when include_paths=true)
+- `client_path` to `describe_workbook`
+- `client_output_path` to `screenshot_sheet`
+- `client_saved_to` to `save_fork`
 
 ### Screenshot Tool
 
-`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshots/` in the workspace. Note: the tool returns a `file://` URI on the server filesystem; when running via Docker, treat it as a container path and look for the PNG under your mounted workspace folder (e.g. `screenshots/<name>.png`).
+`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshot_dir` (default: `<workspace_root>/screenshots`).
+
+Note: the tool returns a `file://` URI on the server filesystem. When running via Docker, this is typically a container path; either locate the file via your volume mount or enable `SPREADSHEET_MCP_PATH_MAP` so the response includes `client_output_path`.
 
 Arguments:
 - `workbook_or_fork_id` (required; accepts a workbook_id or fork_id)

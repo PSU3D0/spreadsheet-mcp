@@ -3,9 +3,11 @@
 use anyhow::Result;
 use spreadsheet_mcp::model::{FontPatch, StylePatch};
 use spreadsheet_mcp::state::AppState;
+use spreadsheet_mcp::styles::StylePatchMode;
 use spreadsheet_mcp::tools::fork::{
     CreateForkParams, StyleBatchParamsInput, StyleOp, StyleTarget, create_fork, style_batch,
 };
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::{
     ListWorkbooksParams, WorkbookStyleSummaryParams, list_workbooks, workbook_style_summary,
 };
@@ -91,11 +93,11 @@ async fn workbook_style_summary_reflects_styles_in_forks() -> Result<()> {
                         cells: vec!["A2".to_string()],
                     },
                     patch,
-                    op_mode: Some("merge".to_string()),
+                    op_mode: Some(StylePatchMode::Merge),
                 }
                 .into(),
             ],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )

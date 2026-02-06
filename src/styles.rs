@@ -4,6 +4,8 @@ use crate::model::{
     GradientFillPatch, GradientStopDescriptor, PatternFillDescriptor, PatternFillPatch,
     StyleDescriptor, StylePatch,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -366,7 +368,8 @@ impl IsEmpty for AlignmentDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum StylePatchMode {
     Merge,
     Set,

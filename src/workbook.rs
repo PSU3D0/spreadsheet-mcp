@@ -189,6 +189,7 @@ impl WorkbookContext {
             short_id: self.short_id.clone(),
             slug: self.slug.clone(),
             path: path_to_forward_slashes(&self.path),
+            client_path: None,
             bytes: self.bytes,
             sheet_count: book.get_sheet_collection().len(),
             defined_names: defined_names_count,
@@ -1619,6 +1620,7 @@ pub fn build_workbook_list(
                 slug,
                 folder,
                 path: Some(path_to_forward_slashes(relative)),
+                client_path: None,
                 bytes: metadata.len(),
                 last_modified: metadata
                     .modified()
@@ -1668,6 +1670,7 @@ pub fn build_workbook_list(
             slug,
             folder,
             path: Some(path_to_forward_slashes(relative)),
+            client_path: None,
             bytes: metadata.len(),
             last_modified: metadata
                 .modified()

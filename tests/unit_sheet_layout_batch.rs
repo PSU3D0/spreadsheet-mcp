@@ -7,6 +7,7 @@ use spreadsheet_mcp::tools::fork::{
     ApplyStagedChangeParams, CreateForkParams, apply_staged_change, create_fork,
 };
 use spreadsheet_mcp::tools::list_workbooks;
+use spreadsheet_mcp::tools::param_enums::BatchMode;
 use spreadsheet_mcp::tools::sheet_layout::{
     SheetLayoutBatchParams, SheetLayoutOp, sheet_layout_batch,
 };
@@ -64,7 +65,7 @@ async fn sheet_layout_freeze_panes_persists_and_infers_top_left() -> Result<()> 
                 freeze_cols: 1,
                 top_left_cell: None,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -125,7 +126,7 @@ async fn sheet_layout_print_area_defined_name_written_and_scoped() -> Result<()>
                 sheet_name: "Sheet1".to_string(),
                 range: "A1:G30".to_string(),
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
@@ -195,7 +196,7 @@ async fn sheet_layout_preview_then_apply_staged_change() -> Result<()> {
                 freeze_cols: 0,
                 top_left_cell: None,
             }],
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("freeze headers".to_string()),
         },
     )

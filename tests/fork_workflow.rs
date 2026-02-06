@@ -856,7 +856,7 @@ async fn test_get_changeset_paging_limit_offset_and_summary_only() -> Result<()>
                 is_formula: false,
                 overwrite_formulas: false,
             }],
-            mode: Some("apply".to_string()),
+            mode: Some(spreadsheet_mcp::tools::param_enums::BatchMode::Apply),
             label: None,
         },
     )

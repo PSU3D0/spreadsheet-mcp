@@ -1,6 +1,7 @@
 pub mod filters;
 #[cfg(feature = "recalc")]
 pub mod fork;
+pub mod param_enums;
 #[cfg(feature = "recalc")]
 pub mod rules_batch;
 #[cfg(feature = "recalc")]
@@ -21,6 +22,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(feature = "recalc")]
@@ -109,6 +111,16 @@ pub async fn list_workbooks(
         for wb in &mut response.workbooks {
             wb.path = None;
             wb.caps = None;
+            wb.client_path = None;
+        }
+    } else if !config.path_mappings.is_empty() {
+        for wb in &mut response.workbooks {
+            if let Some(p) = wb.path.as_ref() {
+                let abs = config.resolve_path(PathBuf::from(p));
+                wb.client_path = config
+                    .map_path_for_client(&abs)
+                    .map(|mapped| mapped.display().to_string());
+            }
         }
     }
 
@@ -127,7 +139,14 @@ pub async fn describe_workbook(
     params: DescribeWorkbookParams,
 ) -> Result<WorkbookDescription> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let desc = workbook.describe();
+    let mut desc = workbook.describe();
+    let config = state.config();
+    if !config.path_mappings.is_empty() {
+        let internal = PathBuf::from(&desc.path);
+        desc.client_path = config
+            .map_path_for_client(&internal)
+            .map(|mapped| mapped.display().to_string());
+    }
     Ok(desc)
 }
 

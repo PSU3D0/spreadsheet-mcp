@@ -6,6 +6,7 @@ use spreadsheet_mcp::tools::fork::{
     ApplyFormulaPatternParams, ApplyStagedChangeParams, CreateForkParams, apply_formula_pattern,
     apply_staged_change, create_fork,
 };
+use spreadsheet_mcp::tools::param_enums::{BatchMode, FillDirection};
 use spreadsheet_mcp::tools::{ListWorkbooksParams, list_workbooks};
 
 mod support;
@@ -58,9 +59,9 @@ async fn apply_formula_pattern_preview_stages_and_apply() -> Result<()> {
             target_range: "C1:C3".to_string(),
             anchor_cell: "C1".to_string(),
             base_formula: "A1+B1".to_string(),
-            fill_direction: Some("down".to_string()),
+            fill_direction: Some(FillDirection::Down),
             relative_mode: None,
-            mode: Some("preview".to_string()),
+            mode: Some(BatchMode::Preview),
             label: Some("fill sums".to_string()),
         },
     )
@@ -138,9 +139,9 @@ async fn apply_formula_pattern_validates_anchor_and_direction() -> Result<()> {
             target_range: "C1:C3".to_string(),
             anchor_cell: "C2".to_string(),
             base_formula: "A1+B1".to_string(),
-            fill_direction: Some("down".to_string()),
+            fill_direction: Some(FillDirection::Down),
             relative_mode: None,
-            mode: Some("apply".to_string()),
+            mode: Some(BatchMode::Apply),
             label: None,
         },
     )
