@@ -182,7 +182,9 @@ impl FormulaGraph {
             let refs = ast.collect_references(&collect_policy);
             for reference in refs {
                 match &reference {
-                    ReferenceType::Cell { sheet, row, col } => {
+                    ReferenceType::Cell {
+                        sheet, row, col, ..
+                    } => {
                         let dep_addr = format_cell_address(sheet.as_deref(), *row, *col);
                         precedents_build
                             .entry(address.clone())
@@ -220,7 +222,7 @@ impl FormulaGraph {
                             .or_default()
                             .insert(name.clone());
                     }
-                    ReferenceType::Table(_) => {
+                    ReferenceType::Table(_) | ReferenceType::External(_) => {
                         let table_str = reference.to_string();
                         precedents_build
                             .entry(address.clone())
@@ -355,6 +357,7 @@ fn range_contains_cell(
             start_col,
             end_row,
             end_col,
+            ..
         } => {
             let range_sheet_name = range_sheet.as_deref().unwrap_or(current_sheet);
             let query_sheet_name = query_sheet.unwrap_or(current_sheet);
