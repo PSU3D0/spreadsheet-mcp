@@ -12,7 +12,6 @@ pub enum BatchMode {
     Preview,
 }
 
-
 impl BatchMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -55,7 +54,6 @@ pub enum ReplaceMatchMode {
     Contains,
 }
 
-
 impl ReplaceMatchMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -88,7 +86,6 @@ pub enum FillDirection {
     #[default]
     Both,
 }
-
 
 impl FillDirection {
     pub fn as_str(self) -> &'static str {
@@ -127,7 +124,6 @@ pub enum FormulaRelativeMode {
     AbsCols,
     AbsRows,
 }
-
 
 impl<'de> Deserialize<'de> for FormulaRelativeMode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

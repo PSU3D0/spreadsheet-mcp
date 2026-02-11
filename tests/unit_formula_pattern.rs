@@ -80,3 +80,109 @@ fn structured_and_named_refs_do_not_shift() -> Result<()> {
     assert_eq!(shifted, "=SUM(Table1[Col1]) + MyName");
     Ok(())
 }
+
+// --- Parenthesization preservation tests ---
+
+#[test]
+fn shift_preserves_grouping_parens_division() -> Result<()> {
+    // (A1+B1+C1)/D1 must NOT become A2+B2+C2/D2
+    let ast = parse_base_formula("(A1+B1+C1)/D1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=(A2 + B2 + C2) / D2");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_grouping_parens_multiplication() -> Result<()> {
+    // (A1+B1)*C1 must NOT become A2+B2*C2
+    let ast = parse_base_formula("(A1+B1)*C1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=(A2 + B2) * C2");
+    Ok(())
+}
+
+#[test]
+fn shift_no_unnecessary_parens_same_precedence() -> Result<()> {
+    // A1+B1+C1 should stay flat (left-associative, same precedence)
+    let ast = parse_base_formula("A1+B1+C1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 + B2 + C2");
+    Ok(())
+}
+
+#[test]
+fn shift_no_unnecessary_parens_higher_child() -> Result<()> {
+    // A1*B1+C1 — multiplication is higher precedence, no parens needed
+    let ast = parse_base_formula("A1*B1+C1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 * B2 + C2");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_nested_grouping_parens() -> Result<()> {
+    // ((A1+B1)*C1)/D1
+    let ast = parse_base_formula("((A1+B1)*C1)/D1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=(A2 + B2) * C2 / D2");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_subtraction_right_associativity() -> Result<()> {
+    // A1-(B1-C1) must NOT become A2-B2-C2
+    let ast = parse_base_formula("A1-(B1-C1)")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 - (B2 - C2)");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_division_right_associativity() -> Result<()> {
+    // A1/(B1/C1) must NOT become A2/B2/C2
+    let ast = parse_base_formula("A1/(B1/C1)")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 / (B2 / C2)");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_concatenation_parens() -> Result<()> {
+    // + binds tighter than & in Excel, so parens around B+C are unnecessary
+    let ast = parse_base_formula("A1&(B1+C1)")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 & B2 + C2");
+
+    // But & in a + context does need parens: (A1&B1)+C1
+    let ast = parse_base_formula("(A1&B1)+C1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=(A2 & B2) + C2");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_comparison_parens() -> Result<()> {
+    // (A1+B1)>C1
+    let ast = parse_base_formula("(A1+B1)>C1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 + B2 > C2");
+    Ok(())
+}
+
+#[test]
+fn shift_preserves_power_right_parens() -> Result<()> {
+    // A1^(B1+C1) — exponent with lower-prec right child
+    let ast = parse_base_formula("A1^(B1+C1)")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=A2 ^ (B2 + C2)");
+    Ok(())
+}
+
+#[test]
+fn shift_unary_negation_in_expression() -> Result<()> {
+    // -A1+B1 should remain -A2+B2
+    let ast = parse_base_formula("-A1+B1")?;
+    let shifted = shift_formula_ast(&ast, 0, 1, RelativeMode::Excel)?;
+    assert_eq!(shifted, "=-A2 + B2");
+    Ok(())
+}

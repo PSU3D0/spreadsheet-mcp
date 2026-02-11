@@ -1208,9 +1208,10 @@ fn to_mcp_error_for_tool(tool: &str, error: anyhow::Error) -> McpError {
 
         let mut variants = extract_expected_variants(&problem);
         if variants.is_empty()
-            && let Some(extra) = tool_variants(tool, &problem) {
-                variants = extra.into_iter().map(|s| s.to_string()).collect();
-            }
+            && let Some(extra) = tool_variants(tool, &problem)
+        {
+            variants = extra.into_iter().map(|s| s.to_string()).collect();
+        }
 
         let example = tool_minimal_example(tool);
         let msg = format_invalid_params_message(
@@ -1270,10 +1271,11 @@ fn format_invalid_params_message(
     }
 
     if let Some(variants) = variants
-        && !variants.is_empty() {
-            out.push_str("\nvalid variants: ");
-            out.push_str(&variants.join(", "));
-        }
+        && !variants.is_empty()
+    {
+        out.push_str("\nvalid variants: ");
+        out.push_str(&variants.join(", "));
+    }
 
     if let Some(example) = example {
         out.push_str("\nexample: ");
