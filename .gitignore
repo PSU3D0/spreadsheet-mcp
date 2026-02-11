@@ -6,3 +6,4 @@ stest/
 test_workdir/
 private_planning/
 .worktrees/
+tickets/
