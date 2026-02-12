@@ -51,8 +51,8 @@ async fn server_tool_handlers_return_json() -> Result<()> {
         .await
         .expect("list workbooks")
         .0;
-    assert_eq!(list.workbooks.len(), 1);
-    let workbook_id = list.workbooks[0].workbook_id.clone();
+    assert_eq!(list.0.workbooks.len(), 1);
+    let workbook_id = list.0.workbooks[0].workbook_id.clone();
 
     let error = match server
         .sheet_page(Parameters(SheetPageParams {
@@ -90,8 +90,9 @@ async fn server_tool_handlers_return_json() -> Result<()> {
         .await
         .expect("page fetch")
         .0;
-    assert_eq!(page.rows.len(), 3);
+    assert_eq!(page.0.rows.len(), 3);
     let contains_b3 = page
+        .0
         .rows
         .iter()
         .flat_map(|row| row.cells.iter())
@@ -165,8 +166,8 @@ async fn disabled_tools_return_invalid_request() -> Result<()> {
         }))
         .await?
         .0;
-    assert_eq!(list.workbooks.len(), 1);
-    let workbook_id = list.workbooks[0].workbook_id.clone();
+    assert_eq!(list.0.workbooks.len(), 1);
+    let workbook_id = list.0.workbooks[0].workbook_id.clone();
 
     let error = match server
         .sheet_page(Parameters(SheetPageParams {
