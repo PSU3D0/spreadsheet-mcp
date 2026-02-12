@@ -10,23 +10,27 @@ WORKDIR /build
 
 # Copy manifests first for dependency caching
 COPY Cargo.toml Cargo.lock ./
+COPY crates/spreadsheet-mcp/Cargo.toml crates/spreadsheet-mcp/Cargo.toml
+COPY crates/spreadsheet-kit/Cargo.toml crates/spreadsheet-kit/Cargo.toml
 
 # Create dummy src to build deps
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src \
+    && echo "fn main() {}" > crates/spreadsheet-mcp/src/main.rs \
+    && echo "" > crates/spreadsheet-kit/src/lib.rs
 
 # Build dependencies only (cached unless Cargo.toml/lock change)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release --locked --features recalc
+    cargo build --release --locked --features recalc -p spreadsheet-mcp
 
 # Copy actual source
-COPY src ./src
+COPY crates ./crates
 
 # Build the real binary
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    touch src/main.rs && \
-    cargo build --release --locked --features recalc && \
+    touch crates/spreadsheet-mcp/src/main.rs && \
+    cargo build --release --locked --features recalc -p spreadsheet-mcp && \
     cp target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 FROM debian:bookworm-slim

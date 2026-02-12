@@ -45,17 +45,25 @@ jobs:
         run: cargo fetch --locked
 
       - name: Run tests
-        run: cargo test --all --locked
+        run: cargo test --workspace --locked
 
-      - name: Build release binary
-        run: cargo build --release --locked
+      - name: Build release binaries
+        run: cargo build --release --locked -p spreadsheet-mcp -p agent-spreadsheet
 
-      - name: Upload artifact
+      - name: Upload MCP artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: spreadsheet-mcp-${{ matrix.artifact_suffix }}
           path: ${{ matrix.binary_path }}
+          if-no-files-found: error
+
+      - name: Upload CLI artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-spreadsheet-${{ matrix.artifact_suffix }}
+          path: target/release/agent-spreadsheet
           if-no-files-found: error
 
   docker-integration:
@@ -85,4 +93,4 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Run docker integration tests
-        run: cargo test --test recalc_docker --locked --features docker-tests
+        run: cargo test -p spreadsheet-mcp --test recalc_docker --locked --features docker-tests
