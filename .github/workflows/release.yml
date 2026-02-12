@@ -10,7 +10,7 @@ env:
 
 jobs:
   build:
-    name: Build (${{ matrix.asset_name }})
+    name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,52 +18,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            package: spreadsheet-mcp
-            artifact_name: spreadsheet-mcp
-            binary_path: spreadsheet-mcp
-            asset_name: spreadsheet-mcp-linux-x86_64
+            asset_suffix: linux-x86_64
+            binary_extension: ""
           - os: macos-latest
             target: x86_64-apple-darwin
-            package: spreadsheet-mcp
-            artifact_name: spreadsheet-mcp
-            binary_path: spreadsheet-mcp
-            asset_name: spreadsheet-mcp-macos-x86_64
+            asset_suffix: macos-x86_64
+            binary_extension: ""
           - os: macos-latest
             target: aarch64-apple-darwin
-            package: spreadsheet-mcp
-            artifact_name: spreadsheet-mcp
-            binary_path: spreadsheet-mcp
-            asset_name: spreadsheet-mcp-macos-aarch64
+            asset_suffix: macos-aarch64
+            binary_extension: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            package: spreadsheet-mcp
-            artifact_name: spreadsheet-mcp.exe
-            binary_path: spreadsheet-mcp.exe
-            asset_name: spreadsheet-mcp-windows-x86_64.exe
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            package: agent-spreadsheet
-            artifact_name: agent-spreadsheet
-            binary_path: agent-spreadsheet
-            asset_name: agent-spreadsheet-linux-x86_64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            package: agent-spreadsheet
-            artifact_name: agent-spreadsheet
-            binary_path: agent-spreadsheet
-            asset_name: agent-spreadsheet-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            package: agent-spreadsheet
-            artifact_name: agent-spreadsheet
-            binary_path: agent-spreadsheet
-            asset_name: agent-spreadsheet-macos-aarch64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            package: agent-spreadsheet
-            artifact_name: agent-spreadsheet.exe
-            binary_path: agent-spreadsheet.exe
-            asset_name: agent-spreadsheet-windows-x86_64.exe
+            asset_suffix: windows-x86_64
+            binary_extension: .exe
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -74,14 +42,28 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
-      - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }} -p ${{ matrix.package }}
+      - name: Build release binaries
+        run: cargo build --release --locked --target ${{ matrix.target }} -p spreadsheet-mcp -p agent-spreadsheet
 
-      - name: Upload artifact
+      - name: Upload spreadsheet-mcp artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary_path }}
+          name: spreadsheet-mcp-${{ matrix.asset_suffix }}${{ matrix.binary_extension }}
+          path: target/${{ matrix.target }}/release/spreadsheet-mcp${{ matrix.binary_extension }}
+          if-no-files-found: error
+
+      - name: Upload spreadsheet-cli artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spreadsheet-cli-${{ matrix.asset_suffix }}${{ matrix.binary_extension }}
+          path: target/${{ matrix.target }}/release/spreadsheet-cli${{ matrix.binary_extension }}
+          if-no-files-found: error
+
+      - name: Upload agent-spreadsheet artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-spreadsheet-${{ matrix.asset_suffix }}${{ matrix.binary_extension }}
+          path: target/${{ matrix.target }}/release/agent-spreadsheet${{ matrix.binary_extension }}
           if-no-files-found: error
 
   release:
@@ -136,17 +118,51 @@ jobs:
 
       - name: Publish to crates.io
         run: |
-          cargo publish --locked --manifest-path crates/spreadsheet-kit/Cargo.toml
-          sleep 30
-          cargo publish --locked --manifest-path crates/spreadsheet-mcp/Cargo.toml
-          sleep 30
+          set -euo pipefail
+
+          crate_version() {
+            local manifest="$1"
+            awk -F '"' '/^version = "[^"]+"/ { print $2; exit }' "$manifest"
+          }
+
+          wait_for_crate() {
+            local crate="$1"
+            local version="$2"
+            local attempts=20
+            local delay=15
+
+            for ((attempt=1; attempt<=attempts; attempt++)); do
+              if curl --silent --show-error --fail "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+                echo "${crate}@${version} is available on crates.io"
+                return 0
+              fi
+              echo "Waiting for ${crate}@${version} to become available (${attempt}/${attempts})"
+              sleep "$delay"
+            done
+
+            echo "Timed out waiting for ${crate}@${version} on crates.io"
+            return 1
+          }
+
+          publish_and_wait() {
+            local manifest="$1"
+            local crate="$2"
+            local version
+            version="$(crate_version "$manifest")"
+
+            cargo publish --locked --manifest-path "$manifest"
+            wait_for_crate "$crate" "$version"
+          }
+
+          publish_and_wait crates/spreadsheet-kit/Cargo.toml spreadsheet-kit
+          publish_and_wait crates/spreadsheet-mcp/Cargo.toml spreadsheet-mcp
           cargo publish --locked --manifest-path crates/agent-spreadsheet/Cargo.toml
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish-npm:
     name: Publish npm CLI
-    needs: release
+    needs: [release, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -162,9 +178,51 @@ jobs:
 
       - name: Set npm package version from tag
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          npm version "$VERSION" --no-git-tag-version
+          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
+            echo "npm package version already matches tag: $VERSION"
+          else
+            npm version "$VERSION" --no-git-tag-version
+          fi
         working-directory: npm/agent-spreadsheet
+
+      - name: Wait for GitHub release assets
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          ATTEMPTS=20
+          DELAY=10
+          ASSETS=(
+            "agent-spreadsheet-linux-x86_64"
+            "agent-spreadsheet-macos-x86_64"
+            "agent-spreadsheet-macos-aarch64"
+            "agent-spreadsheet-windows-x86_64.exe"
+          )
+
+          wait_for_asset() {
+            local asset="$1"
+            local url="${BASE_URL}/${asset}"
+
+            for ((attempt=1; attempt<=ATTEMPTS; attempt++)); do
+              if curl --silent --show-error --fail --location --head "$url" >/dev/null; then
+                echo "Release asset is available: ${asset}"
+                return 0
+              fi
+              echo "Waiting for release asset ${asset} (${attempt}/${ATTEMPTS})"
+              sleep "$DELAY"
+            done
+
+            echo "Timed out waiting for release asset: ${asset}"
+            return 1
+          }
+
+          for asset in "${ASSETS[@]}"; do
+            wait_for_asset "$asset"
+          done
 
       - name: Publish npm package
         run: npm publish --access public

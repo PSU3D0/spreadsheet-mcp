@@ -6,7 +6,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --locked -p spreadsheet-mcp
+RUN cargo build --release --locked --no-default-features -p spreadsheet-mcp
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

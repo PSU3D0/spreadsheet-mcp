@@ -2,11 +2,14 @@
 name = "spreadsheet-kit"
 version = "0.1.0"
 edition = "2024"
-description = "Core spreadsheet automation primitives for agent-spreadsheet surfaces"
+description = "Core spreadsheet automation primitives — shared types, edit normalization, and session traits for agent-facing surfaces"
 authors = ["Frankie Colson"]
 repository = "https://github.com/PSU3D0/spreadsheet-mcp"
+homepage = "https://github.com/PSU3D0/spreadsheet-mcp"
 license = "Apache-2.0"
 readme = "README.md"
+keywords = ["spreadsheet", "xlsx", "automation", "agent", "mcp"]
+categories = ["data-structures", "parser-implementations"]
 
 [dependencies]
 anyhow = "1.0"
