@@ -3,8 +3,9 @@
 const fs = require("node:fs")
 const fsp = require("node:fs/promises")
 const path = require("node:path")
-const os = require("node:os")
+const http = require("node:http")
 const https = require("node:https")
+const { URL } = require("node:url")
 
 const pkg = require("../package.json")
 
@@ -17,6 +18,7 @@ async function main() {
   const version = pkg.version
   const asset = `agent-spreadsheet-${triple.asset}`
 
+  const localBinary = process.env.AGENT_SPREADSHEET_LOCAL_BINARY
   const base = process.env.AGENT_SPREADSHEET_DOWNLOAD_BASE_URL ||
     "https://github.com/PSU3D0/spreadsheet-mcp/releases/download"
 
@@ -26,11 +28,20 @@ async function main() {
   await fsp.mkdir(vendorDir, { recursive: true })
 
   const dest = path.join(vendorDir, triple.dest)
-  await download(url, dest)
+  if (localBinary) {
+    await copyLocalBinary(localBinary, dest)
+  } else {
+    await download(url, dest)
+  }
 
   if (process.platform !== "win32") {
     await fsp.chmod(dest, 0o755)
   }
+}
+
+async function copyLocalBinary(source, dest) {
+  const sourcePath = path.resolve(source)
+  await fsp.copyFile(sourcePath, dest)
 }
 
 function supportedTriple(platform, arch) {
@@ -52,7 +63,8 @@ function supportedTriple(platform, arch) {
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest)
-    const request = https.get(url, (response) => {
+    const client = chooseHttpClient(url)
+    const request = client.get(url, (response) => {
       if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         file.close()
         fs.unlink(dest, () => {
@@ -78,6 +90,14 @@ function download(url, dest) {
       fs.unlink(dest, () => reject(error))
     })
   })
+}
+
+function chooseHttpClient(rawUrl) {
+  const protocol = new URL(rawUrl).protocol
+  if (protocol === "http:") {
+    return http
+  }
+  return https
 }
 
 main().catch((error) => {

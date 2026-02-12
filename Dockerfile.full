@@ -12,16 +12,18 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/spreadsheet-mcp/Cargo.toml crates/spreadsheet-mcp/Cargo.toml
 COPY crates/spreadsheet-kit/Cargo.toml crates/spreadsheet-kit/Cargo.toml
+COPY crates/agent-spreadsheet/Cargo.toml crates/agent-spreadsheet/Cargo.toml
 
 # Create dummy src to build deps
-RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src \
+RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src crates/agent-spreadsheet/src \
     && echo "fn main() {}" > crates/spreadsheet-mcp/src/main.rs \
-    && echo "" > crates/spreadsheet-kit/src/lib.rs
+    && echo "" > crates/spreadsheet-kit/src/lib.rs \
+    && echo "fn main() {}" > crates/agent-spreadsheet/src/main.rs
 
 # Build dependencies only (cached unless Cargo.toml/lock change)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release --locked --features recalc -p spreadsheet-mcp
+    cargo build --release --locked --no-default-features --features recalc-libreoffice -p spreadsheet-mcp
 
 # Copy actual source
 COPY crates ./crates
@@ -30,7 +32,7 @@ COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     touch crates/spreadsheet-mcp/src/main.rs && \
-    cargo build --release --locked --features recalc -p spreadsheet-mcp && \
+    cargo build --release --locked --no-default-features --features recalc-libreoffice -p spreadsheet-mcp && \
     cp target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
 FROM debian:bookworm-slim

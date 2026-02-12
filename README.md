@@ -1,20 +1,404 @@
-# Spreadsheet MCP
+# spreadsheet-kit
 
+[![CI](https://github.com/PSU3D0/spreadsheet-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/PSU3D0/spreadsheet-mcp/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/spreadsheet-mcp.svg)](https://crates.io/crates/spreadsheet-mcp)
-[![Documentation](https://docs.rs/spreadsheet-mcp/badge.svg)](https://docs.rs/spreadsheet-mcp)
+[![npm](https://img.shields.io/npm/v/agent-spreadsheet.svg)](https://www.npmjs.com/package/agent-spreadsheet)
 [![License](https://img.shields.io/crates/l/spreadsheet-mcp.svg)](https://github.com/PSU3D0/spreadsheet-mcp/blob/main/LICENSE)
 
-![Spreadsheet MCP](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/banner.jpeg)
+![spreadsheet-kit](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/banner.jpeg)
 
-MCP server for spreadsheet analysis and editing. Slim, token-efficient tool surface designed for LLM agents.
+**Spreadsheet automation for AI agents.** Read, profile, edit, and recalculate `.xlsx` workbooks with tooling designed to be token-efficient, structurally aware, and agent-friendly.
 
-## Why?
+spreadsheet-kit ships two surfaces:
 
-Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually unnecessary. Most spreadsheet tasks need surgical access: find a region, profile its structure, read a filtered slice. This server exposes tools that let agents **discover → profile → extract** without burning tokens on cells they don't need.
+| Surface | Binary | Mode | Best for |
+| --- | --- | --- | --- |
+| **[agent-spreadsheet](#quickstart-cli)** | `agent-spreadsheet` | Stateless CLI | Scripts, pipelines, one-shot agent tasks |
+| **[spreadsheet-mcp](#quickstart-mcp-server)** | `spreadsheet-mcp` | Stateful MCP server | Multi-turn agent sessions with caching and fork/recalc |
 
-- **Full support:** `.xlsx`, `.xlsm` (via `umya-spreadsheet`)
-- **VBA source inspection (optional):** `.xlsm` via `SPREADSHEET_MCP_VBA_ENABLED=true` / `--vba-enabled` (parses embedded `xl/vbaProject.bin` via `ovba`)
-- **Discovery only:** `.xls`, `.xlsb` (enumerated, not parsed)
+Both share the same core engine and support `.xlsx` / `.xlsm` (read + write) and `.xls` / `.xlsb` (discovery only).
+
+---
+
+## Install
+
+### npm (recommended for CLI)
+
+```bash
+npm i -g agent-spreadsheet
+agent-spreadsheet --help
+```
+
+Downloads a prebuilt native binary for your platform. No Rust toolchain required.
+
+### Cargo
+
+```bash
+# CLI
+cargo install agent-spreadsheet
+
+# MCP server
+cargo install spreadsheet-mcp
+```
+
+Formualizer (native Rust recalc engine) is included by default. To build without it, use `--no-default-features`.
+
+### Prebuilt binaries
+
+Download from [GitHub Releases](https://github.com/PSU3D0/spreadsheet-mcp/releases).
+Builds are published for Linux x86_64, macOS x86_64/aarch64, and Windows x86_64.
+
+### Docker (MCP server)
+
+```bash
+# Read-only (~15 MB)
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest
+
+# With write/recalc support (~800 MB, includes LibreOffice)
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+---
+
+## Quickstart: CLI
+
+The CLI is the fastest path to working with spreadsheets from code. Every command is stateless — pass a file, get JSON.
+
+```bash
+# List sheets
+agent-spreadsheet list-sheets data.xlsx
+
+# Profile structure and detected regions
+agent-spreadsheet sheet-overview data.xlsx "Sheet1"
+
+# Read a table as structured data
+agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
+
+# Search for a value
+agent-spreadsheet find-value data.xlsx "Revenue" --mode label
+
+# Describe workbook metadata
+agent-spreadsheet describe data.xlsx
+```
+
+### Edit → recalculate → diff
+
+```bash
+agent-spreadsheet copy data.xlsx /tmp/draft.xlsx
+agent-spreadsheet edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
+agent-spreadsheet recalculate /tmp/draft.xlsx
+agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
+```
+
+All output is JSON by default. Use `--compact` to minimize whitespace or `--quiet` to suppress warnings.
+For CSV, use command-specific options such as `read-table --table-format csv`.
+
+### CLI command reference
+
+| Command | Description |
+| --- | --- |
+| `list-sheets <file>` | List sheets with summaries |
+| `sheet-overview <file> <sheet>` | Region detection + orientation |
+| `describe <file>` | Workbook metadata |
+| `read-table <file> [--sheet S] [--range R]` | Structured table read (`--table-format json\|values\|csv`) |
+| `range-values <file> <sheet> [ranges...]` | Raw cell values for specific ranges |
+| `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
+| `find-value <file> <query> [--sheet S] [--mode M]` | Search cell values (`value`) or labels (`label`) |
+| `formula-map <file> <sheet>` | Formula inventory (`--sort-by complexity\|count`) |
+| `formula-trace <file> <sheet> <cell> <dir>` | Trace formula `precedents` or `dependents` |
+| `copy <source> <dest>` | Copy workbook (for edit workflows) |
+| `edit <file> <sheet> <edits...>` | Apply cell edits (`A1=42`, `B2==SUM(...)`) |
+| `recalculate <file>` | Recalculate formulas via backend |
+| `diff <original> <modified>` | Diff two workbook versions |
+
+---
+
+## Quickstart: MCP Server
+
+The MCP server provides agents a stateful session with workbook caching, fork management, and recalculation. Connect any MCP-compatible client.
+
+### Claude Code / Claude Desktop
+
+Add to `~/.claude.json` or project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "spreadsheet-mcp",
+      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+Or with Docker:
+
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/path/to/workbooks:/data",
+        "ghcr.io/psu3d0/spreadsheet-mcp:latest",
+        "--transport", "stdio"
+      ]
+    }
+  }
+}
+```
+
+### Cursor / VS Code
+
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "spreadsheet-mcp",
+      "args": ["--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+### HTTP mode
+
+```bash
+spreadsheet-mcp --workspace-root /path/to/workbooks
+# → http://127.0.0.1:8079 — POST /mcp
+```
+
+<details>
+<summary>More MCP client configurations</summary>
+
+**Claude Code — Docker with VBA:**
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio", "--vba-enabled"]
+    }
+  }
+}
+```
+
+**Claude Code — Docker with write/recalc:**
+```json
+{
+  "mcpServers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio", "--recalc-enabled"]
+    }
+  }
+}
+```
+
+**Cursor / VS Code — Docker read-only:**
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+**Cursor / VS Code — Docker write/recalc:**
+```json
+{
+  "mcp.servers": {
+    "spreadsheet": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio", "--recalc-enabled"]
+    }
+  }
+}
+```
+
+</details>
+
+---
+
+## When to use what
+
+| You want to… | Use |
+| --- | --- |
+| One-shot reads from scripts or pipelines | **CLI** (`agent-spreadsheet`) |
+| Agent sessions with caching across calls | **MCP** (`spreadsheet-mcp`) |
+| Fork → edit → recalc → diff workflows | **MCP** (fork lifecycle + recalc backend) |
+| Embed in an LLM tool-use loop | **MCP** (designed for multi-turn agent use) |
+| Quick CLI edits without running a server | **CLI** (`copy` → `edit` → `diff`) |
+| npm/npx install with zero Rust toolchain | **npm** (`npm i -g agent-spreadsheet`) |
+
+---
+
+## Token efficiency
+
+Dumping a 50,000-row spreadsheet into context is expensive and usually unnecessary. spreadsheet-kit tools are built around **discover → profile → extract** — agents get structural awareness without burning tokens on cells they don't need.
+
+### Output profiles
+
+The server defaults to **token-dense** output:
+
+- `read_table` → CSV format (flat string, minimal overhead)
+- `range_values` → values array (no metadata wrapper)
+- `sheet_page` → compact format (no formulas/styles unless requested)
+- `table_profile` / `sheet_statistics` → summary only (no samples unless requested)
+- Pagination fields (`next_offset`, `next_start_row`) only appear when more data exists
+
+Switch to verbose output with `--output-profile verbose` or `SPREADSHEET_MCP_OUTPUT_PROFILE=verbose`.
+
+### Recommended agent workflow
+
+![Token Efficiency Workflow](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/token_efficiency.jpeg)
+
+1. `list_workbooks` → `list_sheets` → `workbook_summary` for orientation
+2. `sheet_overview` to get detected regions (ids, bounds, kind, confidence)
+3. `table_profile` → `read_table` with `region_id` and small `limit`
+4. `find_value` (label mode) or `range_values` for targeted pulls
+5. Reserve `sheet_page` for unknown layouts; prefer `compact` format
+6. Page and filter — avoid full-sheet reads
+
+---
+
+## Tool surface (MCP)
+
+### Read-only tools (always available)
+
+| Tool | Purpose |
+| --- | --- |
+| `list_workbooks` | List spreadsheet files in workspace |
+| `describe_workbook` | Workbook metadata |
+| `list_sheets` | Sheets with summaries |
+| `workbook_summary` | Summary + optional entry points / named ranges |
+| `sheet_overview` | Orientation + region detection (cached) |
+| `sheet_page` | Page through cells (compact / full / values_only) |
+| `read_table` | Structured region/table read (csv / values / json) |
+| `range_values` | Raw cell values for specific ranges |
+| `table_profile` | Column types, cardinality, sample distributions |
+| `find_value` | Search values or labels |
+| `find_formula` | Search formulas with paging |
+| `sheet_statistics` | Density, nulls, duplicates |
+| `sheet_formula_map` | Formulas by complexity / count |
+| `formula_trace` | Precedent / dependent tracing |
+| `scan_volatiles` | Find volatile formulas (NOW, RAND, etc.) |
+| `named_ranges` | Defined names + tables |
+| `sheet_styles` | Style inspection (sheet-scoped) |
+| `workbook_style_summary` | Workbook-wide style summary |
+| `get_manifest_stub` | Generate SheetPort manifest scaffold |
+| `close_workbook` | Evict from cache |
+
+### VBA tools (opt-in: `--vba-enabled`)
+
+| Tool | Purpose |
+| --- | --- |
+| `vba_project_summary` | VBA project metadata + module list |
+| `vba_module_source` | Paged VBA module source extraction |
+
+Read-only — does not execute macros, only extracts source text from `.xlsm` files.
+
+### Write & recalc tools (opt-in: `--recalc-enabled`)
+
+| Tool | Purpose |
+| --- | --- |
+| `create_fork` / `list_forks` / `discard_fork` | Fork lifecycle |
+| `checkpoint_fork` / `restore_checkpoint` / `list_checkpoints` / `delete_checkpoint` | Snapshot + rollback |
+| `edit_batch` | Cell value / formula edits |
+| `transform_batch` | Range-first clear / fill / replace |
+| `style_batch` | Batch style edits (range / region / cells) |
+| `apply_formula_pattern` | Autofill-like formula fills |
+| `structure_batch` | Rows / cols / sheets + copy / move ranges |
+| `column_size_batch` | Column width operations |
+| `sheet_layout_batch` | Freeze panes, zoom, print area, page setup |
+| `rules_batch` | Data validation + conditional formatting |
+| `recalculate` | Trigger formula recalculation |
+| `get_changeset` | Diff fork vs original (paged, filterable) |
+| `screenshot_sheet` | Render range to PNG (max 100x30 cells) |
+| `save_fork` | Export fork to file |
+| `list_staged_changes` / `apply_staged_change` / `discard_staged_change` | Manage previewed changes |
+| `get_edits` | List applied edits on a fork |
+
+---
+
+## Recalc backends
+
+Formula recalculation is handled by a pluggable backend. Two are supported:
+
+| Backend | How | Default | When to use |
+| --- | --- | --- | --- |
+| **Formualizer** | Native Rust engine (320+ functions) | **Yes** (default feature) | Fast, zero external deps. Ships with every `cargo install`. |
+| **LibreOffice** | Headless `soffice` process | Docker `:full` only | Full Excel formula compatibility. Used by the `:full` Docker image. |
+
+**Default behavior:** `cargo install` includes Formualizer out of the box — recalculation works immediately with no extra setup. LibreOffice is only used in the Docker `:full` image, which bundles `soffice` with pre-configured macros for maximum formula coverage.
+
+Compile-time feature flags:
+- `recalc-formualizer` (**default**) — pure Rust, bundled via Formualizer
+- `recalc-libreoffice` — uses LibreOffice (requires `soffice` on PATH)
+- `--no-default-features` — read-only mode, no recalc support
+
+If recalc is disabled, all read, edit, and diff operations still work — only `recalculate` requires a backend.
+
+---
+
+## Deployment modes
+
+| Mode | Binary | State | Recalc | Transport |
+| --- | --- | --- | --- | --- |
+| **CLI** | `agent-spreadsheet` | Stateless | Yes (Formualizer, default) | stdin → stdout JSON |
+| **MCP (stdio)** | `spreadsheet-mcp` | Stateful (LRU cache) | Optional (`--recalc-enabled`) | MCP over stdio |
+| **MCP (HTTP)** | `spreadsheet-mcp` | Stateful (LRU cache) | Optional (`--recalc-enabled`) | Streamable HTTP `POST /mcp` |
+| **Docker slim** | `spreadsheet-mcp` | Stateful | No | HTTP (default) or stdio |
+| **Docker full** | `spreadsheet-mcp` | Stateful | Yes (LibreOffice) | HTTP (default) or stdio |
+| **WASM** | — | — | — | *Planned* |
+
+---
+
+## Workspace layout
+
+```
+spreadsheet-kit/
+├── crates/
+│   ├── spreadsheet-kit/       # Core shared primitives (types, edit normalization)
+│   ├── spreadsheet-mcp/       # Stateful MCP server + all tool handlers
+│   └── agent-spreadsheet/     # Stateless CLI wrapper
+├── npm/
+│   └── agent-spreadsheet/     # npm binary distribution package
+├── formualizer/               # Formula recalc engine (default backend)
+├── docs/                      # Architecture and design docs
+└── .github/workflows/         # CI, release, Docker builds
+```
+
+| Crate | Role |
+| --- | --- |
+| [`spreadsheet-kit`](crates/spreadsheet-kit/) | Core types (`CellEdit`, `CoreWarning`), edit normalization, session trait |
+| [`spreadsheet-mcp`](crates/spreadsheet-mcp/) | MCP server, tool handlers, workbook cache, region detection, recalc |
+| [`agent-spreadsheet`](crates/agent-spreadsheet/) | Thin CLI binary wrapping `spreadsheet-mcp` tool logic |
+| [`agent-spreadsheet` (npm)](npm/agent-spreadsheet/) | npm wrapper — downloads prebuilt native binary on install |
+
+---
+
+## Region detection
+
+![Region Detection Visualization](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/region_detection_viz.jpeg)
+
+Spreadsheets often contain multiple logical tables, parameter blocks, and output areas on a single sheet. The server detects these automatically:
+
+1. **Gutter detection** — scans for empty rows/columns separating content blocks
+2. **Recursive splitting** — subdivides areas along detected gutters
+3. **Border trimming** — removes sparse edges to tighten bounds
+4. **Header detection** — identifies header rows (including multi-row merged headers)
+5. **Classification** — labels each region: `data`, `parameters`, `outputs`, `calculator`, `metadata`
+6. **Confidence scoring** — higher scores for well-structured regions with clear headers
+
+Regions are cached per sheet. Tools like `read_table` accept a `region_id` to scope reads without manually specifying ranges. See [docs/HEURISTICS.md](docs/HEURISTICS.md) for details.
+
+---
 
 ## Architecture
 
@@ -22,134 +406,127 @@ Dumping a 50,000-row spreadsheet into an LLM context is expensive and usually un
 
 - **LRU cache** keeps recently-accessed workbooks in memory (configurable capacity)
 - **Lazy sheet metrics** computed once per sheet, reused across tools
-- **Region detection on demand** runs for `sheet_overview` and is cached for `region_id` lookups (`find_value`, `read_table`, `table_profile`)
+- **Region detection on demand** runs for `sheet_overview` and is cached for `region_id` lookups
+- **Fork isolation** — write operations work on copies, never mutate originals in-place
+- **Sampling modes** — `distributed` sampling reads evenly across rows without loading everything
+- **Output caps** — truncated by default; use tool params to expand
 
-## Tool Surface
+---
 
-| Tool | Purpose |
-| --- | --- |
-| `list_workbooks`, `describe_workbook`, `list_sheets` | Discover workbooks/sheets and metadata |
-| `workbook_summary`, `sheet_overview` | Orientation + region detection |
-| `read_table`, `table_profile` | Structured reads and lightweight profiling |
-| `range_values`, `sheet_page` | Targeted spot checks / raw paging fallback |
-| `find_value`, `find_formula` | Search values/labels or formulas |
-| `sheet_statistics` | Quick sheet stats (density, nulls, duplicates hints) |
-| `sheet_formula_map`, `formula_trace`, `scan_volatiles` | Formula analysis and tracing |
-| `sheet_styles`, `workbook_style_summary` | Style inspection (sheet-scoped + workbook-wide) |
-| `named_ranges` | List defined names + tables |
-| `vba_project_summary`, `vba_module_source` | Read VBA project metadata + module source (disabled by default; `.xlsm`) |
-| `get_manifest_stub` | Generate manifest scaffold |
-| `close_workbook` | Evict workbook from cache |
+## Configuration reference
 
-## Output Formats and Defaults
+All flags can also be set via environment variables prefixed with `SPREADSHEET_MCP_`.
 
-The server defaults to a token-dense output profile. You can switch to legacy verbose output with:
+| Flag | Env | Default | Description |
+| --- | --- | --- | --- |
+| `--workspace-root <DIR>` | `SPREADSHEET_MCP_WORKSPACE` | cwd | Directory to scan for workbooks |
+| `--cache-capacity <N>` | `SPREADSHEET_MCP_CACHE_CAPACITY` | `5` | LRU workbook cache size |
+| `--extensions <csv>` | `SPREADSHEET_MCP_EXTENSIONS` | `xlsx,xlsm,xls,xlsb` | Allowed file extensions |
+| `--workbook <FILE>` | `SPREADSHEET_MCP_WORKBOOK` | — | Single-workbook mode |
+| `--enabled-tools <csv>` | `SPREADSHEET_MCP_ENABLED_TOOLS` | all | Whitelist exposed tools |
+| `--transport <T>` | `SPREADSHEET_MCP_TRANSPORT` | `http` | `http` or `stdio` |
+| `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | `127.0.0.1:8079` | HTTP bind address |
+| `--output-profile <P>` | `SPREADSHEET_MCP_OUTPUT_PROFILE` | `token-dense` | `token-dense` or `verbose` |
+| `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | `false` | Enable write/recalc tools |
+| `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | `2` | Parallel recalc limit |
+| `--tool-timeout-ms <MS>` | `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | `30000` | Per-tool timeout (0 = disabled) |
+| `--max-response-bytes <N>` | `SPREADSHEET_MCP_MAX_RESPONSE_BYTES` | `1000000` | Max response size (0 = disabled) |
+| `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | `false` | Allow `save_fork` to overwrite originals |
+| `--vba-enabled` | `SPREADSHEET_MCP_VBA_ENABLED` | `false` | Enable VBA inspection tools |
+| `--screenshot-dir <DIR>` | `SPREADSHEET_MCP_SCREENSHOT_DIR` | `<workspace>/screenshots` | Screenshot output directory |
+| `--path-map <MAP>` | `SPREADSHEET_MCP_PATH_MAP` | — | Docker path remapping (`/data=/host/path`) |
 
-- Env: `SPREADSHEET_MCP_OUTPUT_PROFILE=verbose`
-- CLI: `--output-profile verbose`
+---
 
-Default formats (token-dense profile):
+## Docker deployment
 
-- `read_table` → `format=csv` (flat string). Use `format=values` for raw arrays or `format=json` for typed cells.
-- `range_values` → `format=values`. Use `format=csv` or `format=json` as needed.
-- `sheet_page` → `format=compact` with `include_formulas=false`/`include_styles=false`. Use `format=full` for per-cell objects.
-- `table_profile` → `summary_only=true` (no samples). Set `summary_only=false` to include sample rows.
-- `sheet_statistics` → `summary_only=true` (no samples). Set `summary_only=false` to include samples.
-- `sheet_styles` → `summary_only=true` (no descriptors/ranges/examples). Use `include_descriptor/include_ranges/include_example_cells`.
-- `workbook_style_summary` → `summary_only=true` (no theme/conditional formats/descriptors). Use `include_theme/include_conditional_formats/include_descriptor/include_example_cells`.
-- `list_workbooks` → `include_paths=false` (no paths/caps). Set `include_paths=true` to include.
-- `list_sheets` → `include_bounds=false` (no row/column counts). Set `include_bounds=true` to include.
-- `workbook_summary` → `summary_only=true` (no entry points/named ranges). Set `summary_only=false` or `include_entry_points/include_named_ranges`.
+### Image variants
 
-Pagination fields (`next_offset`, `next_start_row`) only appear when more data exists.
+| Image | Size | Recalc | Use case |
+| --- | --- | --- | --- |
+| `ghcr.io/psu3d0/spreadsheet-mcp:latest` | ~15 MB | No | Read-only analysis |
+| `ghcr.io/psu3d0/spreadsheet-mcp:full` | ~800 MB | Yes (LibreOffice) | Write + recalc + screenshots |
 
-## VBA Support (Read-Only)
+### Basic usage
 
-VBA tools are **disabled by default**. When enabled, the server can extract and parse the embedded VBA project from `.xlsm` files and return module source code.
+```bash
+# Read-only
+docker run -v /path/to/workbooks:/data -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:latest
 
-Enable via:
-- CLI: `--vba-enabled`
-- Env: `SPREADSHEET_MCP_VBA_ENABLED=true`
+# With VBA tools
+docker run -v /path/to/workbooks:/data -p 8079:8079 \
+  -e SPREADSHEET_MCP_VBA_ENABLED=true \
+  ghcr.io/psu3d0/spreadsheet-mcp:latest
 
-Tools:
-- `vba_project_summary`: Lists modules + basic project metadata
-- `vba_module_source`: Returns paged source for a single module
+# Write + recalc
+docker run -v /path/to/workbooks:/data -p 8079:8079 \
+  ghcr.io/psu3d0/spreadsheet-mcp:full
+```
 
-Notes:
-- This does **not** execute macros; it only reads and returns text.
-- Responses are size-limited; page through module source.
+### Path mapping
 
-## Write & Recalc Support
+When the server runs in Docker but your agent reads files from the host, configure path mapping so responses include host-visible paths:
 
-Write tools allow "what-if" analysis: fork a workbook, edit cells, recalculate formulas via LibreOffice, and diff the results. For safety, you can create checkpoints for high‑fidelity rollback and apply previewed (staged) changes explicitly.
-
-### Enabling Write Tools
-
-**Always use the `:full` Docker image for write/recalc features:**
 ```bash
 docker run \
   -v /path/to/workbooks:/data \
+  -e SPREADSHEET_MCP_PATH_MAP="/data=/path/to/workbooks" \
   -p 8079:8079 \
   ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
 
-Notes:
-- The `:full` image includes an entrypoint that (by default) drops privileges to the owner of the mounted workspace directory to avoid creating root-owned files on the host.
-- If that doesn't fit your environment, you can override with `SPREADSHEET_MCP_RUN_UID` / `SPREADSHEET_MCP_RUN_GID` or run with `--user`.
+This adds `client_path`, `client_output_path`, and `client_saved_to` fields to tool responses.
 
-The Docker image includes LibreOffice with pre-configured macros required for reliable recalculation. Running outside Docker requires manual LibreOffice setup (macro trust, headless config) and is not recommended.
-
-### Docker Deployment (Recommended)
-
-This is a good default setup when:
-- The MCP server runs in Docker
-- Your agent can also access the host filesystem directly (so you want host-visible paths in tool outputs)
-- You want screenshots written to a separate host directory
+### Separate screenshot output
 
 ```bash
-WORKBOOK_DIR="/absolute/path/to/workbooks"
-SCREENSHOT_DIR="/absolute/path/to/screenshots"
-
 docker run \
-  -v "${WORKBOOK_DIR}:/data" \
-  -v "${SCREENSHOT_DIR}:/screenshots" \
+  -v /path/to/workbooks:/data \
+  -v /path/to/screenshots:/screenshots \
   -e SPREADSHEET_MCP_SCREENSHOT_DIR=/screenshots \
-  -e SPREADSHEET_MCP_PATH_MAP="/data=${WORKBOOK_DIR},/screenshots=${SCREENSHOT_DIR}" \
+  -e SPREADSHEET_MCP_PATH_MAP="/data=/path/to/workbooks,/screenshots=/path/to/screenshots" \
   -p 8079:8079 \
   ghcr.io/psu3d0/spreadsheet-mcp:full
 ```
 
-What you get from this configuration:
-- Write/export paths remain container-internal (`/data/...`) but responses also include `client_*` fields pointing at host paths (useful for agents that can read files directly).
-- `save_fork.target_path` can be a host absolute path (matching the `SPREADSHEET_MCP_PATH_MAP` client prefix) and it will be mapped to the container path automatically.
-- `screenshot_sheet` writes to `/screenshots` (separate from workbook workspace) and includes `client_output_path` when path mapping is configured.
+### Privilege handling
 
-### Write Tools
+The `:full` image entrypoint drops privileges to match the owner of the mounted workspace directory. Override with `SPREADSHEET_MCP_RUN_UID` / `SPREADSHEET_MCP_RUN_GID` or `docker run --user`.
 
-| Tool | Purpose |
-| --- | --- |
-| `create_fork` | Create a temporary editable copy for "what-if" analysis |
-| `checkpoint_fork`, `restore_checkpoint` | High-fidelity snapshot + rollback |
-| `edit_batch` | Apply values or formulas to cells in a fork |
-| `transform_batch` | Range-first clear/fill/replace (prefer for bulk edits) |
-| `style_batch` | Batch style edits (range/region/cells) |
-| `apply_formula_pattern` | Autofill-like formula fill over a target range |
-| `structure_batch` | Batch structural edits (rows/cols/sheets + copy/move ranges) |
-| `column_size_batch` | Set column widths or compute auto-width for columns |
-| `sheet_layout_batch` | Set sheet view/print layout (freeze panes, zoom, print area) |
-| `rules_batch` | Add/replace rules (data validation, conditional formatting) |
-| `recalculate` | Trigger LibreOffice to update formula results |
-| `get_changeset` | Diff the fork against the original (cells, tables, named ranges) |
-| `screenshot_sheet` | Render a sheet range to a cropped PNG screenshot |
-| `save_fork` | Save fork to a new path (or overwrite original with `--allow-overwrite`) |
-| `list_staged_changes`, `apply_staged_change`, `discard_staged_change` | Manage previewed/staged changes |
-| `get_edits`, `list_forks`, `discard_fork` | Inspect / list / discard forks |
+---
 
-### Write Tool v2 Shapes (Canonical) + Shorthands
+## Write & recalc workflows
 
-All write tools accept a canonical v2 shape and a small set of shorthands for ergonomics. Shorthands are normalized into v2 and emit warnings for visibility. These shorthands are supported for one release and will be removed after deprecation.
+Write tools use a **fork-based** model for safety. Edits never mutate the original file — work on a fork, inspect changes, and export when satisfied.
 
-**edit_batch (canonical + shorthand)**
+```
+create_fork → edit_batch / transform_batch → recalculate → get_changeset → save_fork
+                    ↑                                              |
+             checkpoint_fork ←──── restore_checkpoint ←────────────┘
+```
+
+### Edit shorthand
+
+`edit_batch` accepts both canonical objects and shorthand strings:
+
+```json
+{
+  "edits": [
+    { "address": "A1", "value": "Revenue" },
+    { "address": "B2", "formula": "SUM(B3:B10)" },
+    "C1=100",
+    "D1==SUM(A1:A2)"
+  ]
+}
+```
+
+`"A1=100"` sets a value. `"A1==SUM(...)"` sets a formula (double `=`).
+
+<details>
+<summary>Write tool shapes reference</summary>
+
+**edit_batch**
 ```json
 {
   "tool": "edit_batch",
@@ -165,28 +542,8 @@ All write tools accept a canonical v2 shape and a small set of shorthands for er
   }
 }
 ```
-Notes:
-- `formula` is preferred for formulas. `is_formula` is still accepted.
-- Leading `=` is accepted and stripped with a warning (`=SUM(...)` and `==SUM(...)` are equivalent).
 
-**structure_batch (canonical + alias)**
-```json
-{
-  "tool": "structure_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "ops": [
-      { "kind": "create_sheet", "name": "Inputs" },
-      { "op": "add_sheet", "name": "Legacy" }
-    ]
-  }
-}
-```
-Notes:
-- `op` is accepted as an alias for `kind`.
-- `add_sheet` is accepted as an alias for `create_sheet`.
-
-**style_batch (canonical + shorthand)**
+**style_batch**
 ```json
 {
   "tool": "style_batch",
@@ -210,13 +567,23 @@ Notes:
   }
 }
 ```
-Notes:
-- Canonical form uses `target` + `patch`.
-- Shorthand `range` + `style` is accepted and normalized.
-- `number_format` accepts either an explicit Excel format code string (e.g. `"0.00%"`) or a shorthand object (e.g. `{ "kind": "currency" }`).
-- Colors prefer 8-digit ARGB (`AARRGGBB`). 6-digit RGB is accepted, expanded to opaque (`FFRRGGBB`) with a warning.
 
-**column_size_batch (canonical + shorthand)**
+**structure_batch**
+```json
+{
+  "tool": "structure_batch",
+  "arguments": {
+    "fork_id": "fork-123",
+    "ops": [
+      { "kind": "create_sheet", "name": "Inputs" },
+      { "kind": "insert_rows", "sheet_name": "Data", "start": 5, "count": 3 },
+      { "kind": "copy_range", "sheet_name": "Data", "source": "A1:D1", "target": "A5" }
+    ]
+  }
+}
+```
+
+**column_size_batch**
 ```json
 {
   "tool": "column_size_batch",
@@ -225,20 +592,14 @@ Notes:
     "sheet_name": "Accounts",
     "mode": "apply",
     "ops": [
-      {
-        "target": { "kind": "columns", "range": "A:C" },
-        "size": { "kind": "auto", "max_width_chars": 40.0 }
-      },
+      { "target": { "kind": "columns", "range": "A:C" }, "size": { "kind": "auto", "max_width_chars": 40.0 } },
       { "range": "D:D", "size": { "kind": "width", "width_chars": 24.0 } }
     ]
   }
 }
 ```
-Notes:
-- `auto` computes and sets widths immediately (persisted in the file).
-- Autosize uses cached/formatted cell values; formula-only columns with no cached results may size too narrow unless recalculated.
 
-**sheet_layout_batch (canonical)**
+**sheet_layout_batch**
 ```json
 {
   "tool": "sheet_layout_batch",
@@ -255,7 +616,7 @@ Notes:
 }
 ```
 
-**rules_batch (DV + CF)**
+**rules_batch**
 ```json
 {
   "tool": "rules_batch",
@@ -275,108 +636,30 @@ Notes:
         "target_range": "D3:D100",
         "rule": { "kind": "cell_is", "operator": "less_than", "formula": "0" },
         "style": { "fill_color": "#FFE0E0", "font_color": "#8A0000", "bold": true }
-      },
-      { "kind": "clear_conditional_formats", "sheet_name": "Dashboard", "target_range": "D3:D100" }
+      }
     ]
   }
 }
 ```
-Notes:
-- Conditional formatting formulas are written verbatim; structural edits do not rewrite CF formulas (review after insert/delete).
-- Colors accept `#RGB`, `#RRGGBB`, or `#AARRGGBB` and normalize to ARGB.
 
-### Token-Efficient Write Workflows
+</details>
 
-**find_formula paging**
-```json
-{
-  "tool": "find_formula",
-  "arguments": {
-    "workbook_or_fork_id": "wb-23456789ab",
-    "sheet_name": "Calc",
-    "query": "SUM(",
-    "include_context": false,
-    "limit": 20,
-    "offset": 0
-  }
-}
-```
+### Screenshot tool
 
-**get_changeset summary + filters**
-```json
-{
-  "tool": "get_changeset",
-  "arguments": {
-    "fork_id": "fork-23456789abcd",
-    "summary_only": true,
-    "exclude_subtypes": ["recalc_result"],
-    "limit": 200,
-    "offset": 0
-  }
-}
-```
+`screenshot_sheet` renders a range to a cropped PNG via LibreOffice (requires `:full` image or `--recalc-enabled`).
 
-### Docker Paths (Exports + Screenshots)
-
-When running in Docker with `--workspace-root /data` and a host mount like `-v /path/to/workbooks:/data`:
-
-- Fork working files live under `/tmp/mcp-forks` inside the container (not visible on host).
-- `save_fork.target_path` is resolved under `workspace_root` (Docker default: `/data`).
-  Use a relative path like `out.xlsx` (or `exports/out.xlsx`) to write back into the mounted folder on the host.
-- `screenshot_sheet` writes PNGs under `screenshot_dir` (default: `<workspace_root>/screenshots`, so `/data/screenshots/` in the default Docker config).
-
-Optional: separate screenshot output dir
-
-If you want screenshots separate from the workbook workspace, mount a second volume and set `SPREADSHEET_MCP_SCREENSHOT_DIR`:
-
-```bash
-docker run \
-  -v /path/to/workbooks:/data \
-  -v /path/to/screenshots:/screenshots \
-  -e SPREADSHEET_MCP_SCREENSHOT_DIR=/screenshots \
-  -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-Optional: host/client path mapping
-
-When the server runs in Docker, tool outputs often include container paths (e.g. `/data/foo.xlsx`). If your agent also has direct access to the host filesystem, configure path mapping so responses include `client_*` paths:
-
-```bash
-docker run \
-  -v /path/to/workbooks:/data \
-  -e SPREADSHEET_MCP_PATH_MAP=/data=/path/to/workbooks \
-  -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-This adds:
-- `client_path` to `list_workbooks` items (when include_paths=true)
-- `client_path` to `describe_workbook`
-- `client_output_path` to `screenshot_sheet`
-- `client_saved_to` to `save_fork`
-
-### Screenshot Tool
-
-`screenshot_sheet` captures a visual PNG of a rectangular range, rendered headless via LibreOffice in the `:full` image. The PNG is auto‑cropped to remove page whitespace and saved under `screenshot_dir` (default: `<workspace_root>/screenshots`).
-
-Note: the tool returns a `file://` URI on the server filesystem. When running via Docker, this is typically a container path; either locate the file via your volume mount or enable `SPREADSHEET_MCP_PATH_MAP` so the response includes `client_output_path`.
-
-Arguments:
-- `workbook_or_fork_id` (required; accepts a workbook_id or fork_id)
-- `sheet_name` (required)
-- `range` (optional, default `A1:M40`)
-
-Limits and behavior:
-- Max range per screenshot: **100 rows × 30 columns**. If exceeded, the tool fails with suggested tiled sub‑ranges to request instead.
-- After export/crop, a pixel guard rejects images that are too large for reliable agent use (default max **4096px** on a side or **12MP** area). On rejection, the tool returns smaller range suggestions.
-- Override pixel guard via env vars: `SPREADSHEET_MCP_MAX_PNG_DIM_PX`, `SPREADSHEET_MCP_MAX_PNG_AREA_PX`.
+- Max range: **100 rows x 30 columns** per screenshot
+- Pixel guard: **4096 px** per side, **12 MP** area (override via `SPREADSHEET_MCP_MAX_PNG_DIM_PX` / `SPREADSHEET_MCP_MAX_PNG_AREA_PX`)
+- On rejection, the tool returns suggested sub-range splits
 
 See [docs/RECALC.md](docs/RECALC.md) for architecture details.
+
+---
 
 ## Example
 
 **Request:** Profile a detected region
+
 ```json
 {
   "tool": "table_profile",
@@ -391,273 +674,58 @@ See [docs/RECALC.md](docs/RECALC.md) for architecture details.
 ```
 
 **Response:**
+
 ```json
 {
   "sheet_name": "Q1 Actuals",
   "headers": ["Date", "Category", "Amount", "Notes"],
   "column_types": [
-    {"name": "Date", "inferred_type": "date", "nulls": 0, "distinct": 87},
-    {"name": "Category", "inferred_type": "text", "nulls": 2, "distinct": 12, "top_values": ["Payroll", "Marketing", "Infrastructure"]},
-    {"name": "Amount", "inferred_type": "number", "nulls": 0, "min": 150.0, "max": 84500.0, "mean": 12847.32},
-    {"name": "Notes", "inferred_type": "text", "nulls": 45, "distinct": 38}
+    { "name": "Date", "inferred_type": "date", "nulls": 0, "distinct": 87 },
+    { "name": "Category", "inferred_type": "text", "nulls": 2, "distinct": 12, "top_values": ["Payroll", "Marketing", "Infrastructure"] },
+    { "name": "Amount", "inferred_type": "number", "nulls": 0, "min": 150.0, "max": 84500.0, "mean": 12847.32 },
+    { "name": "Notes", "inferred_type": "text", "nulls": 45, "distinct": 38 }
   ],
-  "row_count": 1247,
-  "samples": [...]
+  "row_count": 1247
 }
 ```
 
-The agent now knows column types, cardinality, and value distributions—without reading 1,247 rows.
+The agent now knows column types, cardinality, and value distributions — without reading 1,247 rows.
 
-## Recommended Agent Workflow
+---
 
-![Token Efficiency Workflow](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/token_efficiency.jpeg)
-
-1. `list_workbooks` → `list_sheets` → `workbook_summary` for orientation
-2. `sheet_overview` to get `detected_regions` (ids/bounds/kind/confidence)
-3. `table_profile` → `read_table` with `region_id`, small `limit`, and `sample_mode` (`distributed` preferred)
-4. Use `find_value` (label mode) or `range_values` for targeted pulls
-5. Reserve `sheet_page` for unknown layouts or calculator inspection; prefer `compact`/`values_only`
-6. Keep payloads small; page/filter rather than full-sheet reads
-
-## Region Detection
-
-![Region Detection Visualization](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/region_detection_viz.jpeg)
-
-Spreadsheets often contain multiple logical tables, parameter blocks, and output areas on a single sheet. The server detects these automatically:
-
-1. **Gutter detection** — Scans for empty rows/columns that separate content blocks
-2. **Recursive splitting** — Subdivides large areas along detected gutters
-3. **Border trimming** — Removes sparse edges to tighten bounds
-4. **Header detection** — Identifies header rows (including multi-row merged headers)
-5. **Classification** — Labels each region: `data`, `parameters`, `outputs`, `calculator`, `metadata`
-6. **Confidence scoring** — Higher scores for well-structured regions with clear headers
-
-Regions are cached per sheet. Tools like `read_table` accept a `region_id` to scope reads without manually specifying ranges.
-
-## Quick Start
-
-### Docker (Recommended)
-
-Two image variants are published:
-
-| Image | Size | Write/Recalc |
-| --- | --- | --- |
-| `ghcr.io/psu3d0/spreadsheet-mcp:latest` | ~15MB | No |
-| `ghcr.io/psu3d0/spreadsheet-mcp:latest-full` | ~800MB | Yes (includes LibreOffice) |
+## Development
 
 ```bash
-# Read-only (slim image)
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
-
-# Read-only + VBA tools enabled
-docker run -v /path/to/workbooks:/data -p 8079:8079 -e SPREADSHEET_MCP_VBA_ENABLED=true ghcr.io/psu3d0/spreadsheet-mcp:latest
-
-# With write/recalc support (full image)
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-### Cargo Install
-
-```bash
-# Read-only
-cargo install spreadsheet-mcp
-spreadsheet-mcp --workspace-root /path/to/workbooks
-
-# Enable VBA tools
-SPREADSHEET_MCP_VBA_ENABLED=true spreadsheet-mcp --workspace-root /path/to/workbooks
-```
-
-**Note:** For write/recalc features, use the `:full` Docker image instead of cargo install. The Docker image includes LibreOffice with required macro configuration.
-
-### Build from Source
-
-```bash
-cargo run --release -- --workspace-root /path/to/workbooks
-```
-
-Default transport: HTTP streaming at `127.0.0.1:8079`. Endpoint: `POST /mcp`.
-
-Use `--transport stdio` for CLI pipelines.
-
-## MCP Client Configuration
-
-### Claude Code / Claude Desktop
-
-Add to `~/.claude.json` or project `.mcp.json`:
-
-**Read-only (slim image):**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-**Read-only + VBA tools enabled:**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio", "--vba-enabled"]
-    }
-  }
-}
-```
-
-**With write/recalc (full image):**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
-    }
-  }
-}
-```
-
-**Binary (no Docker):**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "spreadsheet-mcp",
-      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### Cursor / VS Code
-
-**Read-only (slim image):**
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-**With write/recalc (full image):**
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest-full", "--transport", "stdio", "--recalc-enabled"]
-    }
-  }
-}
-```
-
-**Binary (no Docker):**
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "spreadsheet-mcp",
-      "args": ["--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### HTTP Mode
-
-```bash
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
-```
-
-Connect via `POST http://localhost:8079/mcp`.
-
-## Local Development
-
-To test local changes without rebuilding Docker:
-
-```bash
-cargo build --release
-```
-
-Then point your MCP client to the binary:
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "/path/to/spreadsheet-mcp/target/release/spreadsheet-mcp",
-      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-## Configuration
-
-| Flag | Env | Description |
-| --- | --- | --- |
-| `--workspace-root <DIR>` | `SPREADSHEET_MCP_WORKSPACE` | Workspace root to scan (default: cwd) |
-| `--cache-capacity <N>` | `SPREADSHEET_MCP_CACHE_CAPACITY` | Workbook cache size (default: 5) |
-| `--extensions <list>` | `SPREADSHEET_MCP_EXTENSIONS` | Allowed extensions (default: `xlsx,xls,xlsb`) |
-| `--workbook <FILE>` | `SPREADSHEET_MCP_WORKBOOK` | Single-workbook mode |
-| `--enabled-tools <list>` | `SPREADSHEET_MCP_ENABLED_TOOLS` | Whitelist exposed tools |
-| `--transport <http\|stdio>` | `SPREADSHEET_MCP_TRANSPORT` | Transport selection (default: http) |
-| `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | Bind address (default: `127.0.0.1:8079`) |
-| `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | Enable write/recalc tools (default: false) |
-| `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | Parallel recalc limit (default: 2) |
-| `--tool-timeout-ms <MS>` | `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | Tool request timeout in milliseconds (default: 30000; 0 disables) |
-| `--max-response-bytes <BYTES>` | `SPREADSHEET_MCP_MAX_RESPONSE_BYTES` | Max response size in bytes (default: 1000000; 0 disables) |
-| `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | Allow `save_fork` to overwrite original files (default: false) |
-
-## Performance
-
-- **LRU workbook cache** — Recently opened workbooks stay in memory; oldest evicted when capacity exceeded
-- **Lazy metrics** — Sheet metrics computed on first access, cached for subsequent calls
-- **Region detection on demand** — Runs on `sheet_overview` (or `region_id` lookups) and is cached thereafter
-- **Sampling modes** — `distributed` sampling reads evenly across rows without loading everything
-- **Output caps** — `sheet_overview` truncates regions/headers by default; use tool params to request more
-- **Compact formats** — `values_only` and `compact` output modes reduce response size
-
-## Testing
-
-```bash
+# Run tests
 cargo test
+
+# Build all crates
+cargo build --release
+
+# Test local binary with an MCP client
 ```
 
-Covers: region detection, region-scoped tools, `read_table` edge cases (merged headers, filters, large sheets), workbook summary.
-
-### Local MCP Testing
-
-To test local changes with an MCP client (Claude Code, Cursor, etc.), use the helper script that rebuilds the Docker image on each invocation:
+Point your MCP client config at the local binary:
 
 ```json
 {
   "mcpServers": {
     "spreadsheet": {
-      "command": "./scripts/local-docker-mcp.sh"
+      "command": "./target/release/spreadsheet-mcp",
+      "args": ["--workspace-root", "/path/to/workbooks", "--transport", "stdio"]
     }
   }
 }
 ```
 
-Set `WORKSPACE_ROOT` to override the default test directory:
+Or use the Docker rebuild script for live iteration:
+
 ```bash
 WORKSPACE_ROOT=/path/to/workbooks ./scripts/local-docker-mcp.sh
 ```
 
-This ensures you're always testing against your latest code changes without manual image rebuilds.
+---
 
-## Behavior & Limits
+## License
 
-- **Read-only by default**; write/recalc features require `--recalc-enabled` or the `:full` image
-- **XLSX supported for write**; `.xls`/`.xlsb` are read-only
-- Bounded in-memory cache honors `cache_capacity`
-- Prefer region-scoped reads and sampling for token/latency efficiency
-- `screenshot_sheet` requires write/recalc support and is capped to 100×30 cells per image (with split suggestions).
+Apache-2.0

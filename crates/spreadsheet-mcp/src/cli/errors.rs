@@ -1,12 +1,12 @@
 use crate::cli::OutputFormat;
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde::Serialize;
 
 pub fn ensure_output_supported(format: OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Json => Ok(()),
         OutputFormat::Csv => {
-            bail!("csv output is not implemented yet for spreadsheet-cli; use --format json")
+            bail!("csv output is not implemented yet for this CLI; use --format json")
         }
     }
 }
@@ -30,7 +30,7 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             message: format!("sheet '{}' was not found", requested),
             did_you_mean: Some(suggested),
             try_this: Some(
-                "run `spreadsheet-cli list-sheets <file>` to inspect valid names".to_string(),
+                "run `agent-spreadsheet list-sheets <file>` to inspect valid names".to_string(),
             ),
         };
     }
