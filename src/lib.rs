@@ -10,6 +10,7 @@ pub mod formula;
 pub mod model;
 #[cfg(feature = "recalc")]
 pub mod recalc;
+pub mod repository;
 pub mod rules;
 pub mod security;
 pub mod server;

@@ -11,7 +11,8 @@ use crate::model::{
 };
 use crate::tools::filters::WorkbookFilter;
 use crate::utils::{
-    hash_path_metadata, make_short_workbook_id, path_to_forward_slashes, system_time_to_rfc3339,
+    hash_bytes_sha256_hex, hash_file_sha256_hex, hash_path_identity, make_short_workbook_id,
+    path_to_forward_slashes, system_time_to_rfc3339,
 };
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -19,6 +20,7 @@ use parking_lot::RwLock;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -65,6 +67,7 @@ const DETECT_OUTLIER_MIN_CELLS: usize = 50;
 pub struct WorkbookContext {
     pub id: WorkbookId,
     pub short_id: String,
+    pub revision_id: String,
     pub slug: String,
     pub path: PathBuf,
     pub caps: BackendCaps,
@@ -139,6 +142,27 @@ impl SheetCacheEntry {
 
 impl WorkbookContext {
     pub fn load(_config: &Arc<ServerConfig>, path: &Path) -> Result<Self> {
+        fs::metadata(path).with_context(|| format!("unable to read metadata for {:?}", path))?;
+        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let slug = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "workbook".to_string());
+        let id = WorkbookId(hash_path_identity(&canonical));
+        let short_id = make_short_workbook_id(&slug, id.as_str());
+        let revision_id = hash_file_sha256_hex(path)
+            .with_context(|| format!("unable to hash workbook {:?}", path))?;
+
+        Self::load_from_path(_config, path, id, short_id, Some(revision_id))
+    }
+
+    pub fn load_from_path(
+        _config: &Arc<ServerConfig>,
+        path: &Path,
+        stable_id: WorkbookId,
+        short_id: String,
+        revision_id: Option<String>,
+    ) -> Result<Self> {
         let metadata = fs::metadata(path)
             .with_context(|| format!("unable to read metadata for {:?}", path))?;
         let slug = path
@@ -147,19 +171,55 @@ impl WorkbookContext {
             .unwrap_or_else(|| "workbook".to_string());
         let bytes = metadata.len();
         let last_modified = metadata.modified().ok().and_then(system_time_to_rfc3339);
-        let id = WorkbookId(hash_path_metadata(path, &metadata));
+        let revision_id = match revision_id {
+            Some(id) => id,
+            None => hash_file_sha256_hex(path)
+                .with_context(|| format!("unable to hash workbook {:?}", path))?,
+        };
         let spreadsheet =
             xlsx::read(path).with_context(|| format!("failed to parse workbook {:?}", path))?;
-        let short_id = make_short_workbook_id(&slug, id.as_str());
 
         Ok(Self {
-            id,
+            id: stable_id,
             short_id,
+            revision_id,
             slug,
             path: path.to_path_buf(),
             caps: BackendCaps::xlsx(),
             bytes,
             last_modified,
+            spreadsheet: Arc::new(RwLock::new(spreadsheet)),
+            sheet_cache: RwLock::new(HashMap::new()),
+            formula_atlas: Arc::new(FormulaAtlas::default()),
+        })
+    }
+
+    pub fn load_from_bytes(
+        _config: &Arc<ServerConfig>,
+        display_name: &str,
+        bytes: &[u8],
+        stable_id: WorkbookId,
+        short_id: String,
+        revision_id: Option<String>,
+    ) -> Result<Self> {
+        let slug = Path::new(display_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "workbook".to_string());
+        let cursor = Cursor::new(bytes);
+        let spreadsheet = xlsx::read_reader(cursor, true)
+            .with_context(|| format!("failed to parse workbook bytes for {display_name}"))?;
+        let revision_id = revision_id.unwrap_or_else(|| hash_bytes_sha256_hex(bytes));
+
+        Ok(Self {
+            id: stable_id,
+            short_id,
+            revision_id,
+            slug,
+            path: PathBuf::from(format!("virtual/{display_name}")),
+            caps: BackendCaps::xlsx(),
+            bytes: bytes.len() as u64,
+            last_modified: None,
             spreadsheet: Arc::new(RwLock::new(spreadsheet)),
             sheet_cache: RwLock::new(HashMap::new()),
             formula_atlas: Arc::new(FormulaAtlas::default()),
@@ -198,6 +258,7 @@ impl WorkbookContext {
             last_modified: self
                 .last_modified
                 .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            revision_id: Some(self.revision_id.clone()),
             caps: self.caps.clone(),
         }
     }
@@ -1601,7 +1662,8 @@ pub fn build_workbook_list(
     if let Some(single) = config.single_workbook() {
         let metadata = fs::metadata(single)
             .with_context(|| format!("unable to read metadata for {:?}", single))?;
-        let id = WorkbookId(hash_path_metadata(single, &metadata));
+        let canonical = fs::canonicalize(single).unwrap_or_else(|_| single.to_path_buf());
+        let id = WorkbookId(hash_path_identity(&canonical));
         let slug = single
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -1627,6 +1689,7 @@ pub fn build_workbook_list(
                     .ok()
                     .and_then(system_time_to_rfc3339)
                     .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                revision_id: Some(hash_file_sha256_hex(single)?),
                 caps: Some(caps),
             };
             descriptors.push(descriptor);
@@ -1650,7 +1713,8 @@ pub fn build_workbook_list(
             continue;
         }
         let metadata = entry.metadata()?;
-        let id = WorkbookId(hash_path_metadata(path, &metadata));
+        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let id = WorkbookId(hash_path_identity(&canonical));
         let slug = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -1677,6 +1741,7 @@ pub fn build_workbook_list(
                 .ok()
                 .and_then(system_time_to_rfc3339)
                 .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            revision_id: Some(hash_file_sha256_hex(path)?),
             caps: Some(caps),
         };
         descriptors.push(descriptor);
