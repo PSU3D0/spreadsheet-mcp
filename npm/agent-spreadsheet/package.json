@@ -1,0 +1,32 @@
+{
+  "name": "agent-spreadsheet",
+  "version": "0.1.0",
+  "description": "Stateless spreadsheet CLI for AI agents",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PSU3D0/spreadsheet-mcp.git"
+  },
+  "homepage": "https://github.com/PSU3D0/spreadsheet-mcp",
+  "bugs": {
+    "url": "https://github.com/PSU3D0/spreadsheet-mcp/issues"
+  },
+  "bin": {
+    "agent-spreadsheet": "bin/agent-spreadsheet.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
