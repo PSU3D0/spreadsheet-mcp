@@ -34,6 +34,8 @@ pub struct WorkbookDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub caps: Option<BackendCaps>,
 }
 
@@ -58,6 +60,8 @@ pub struct WorkbookDescription {
     pub tables: usize,
     pub macros_present: bool,
     pub last_modified: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
     pub caps: BackendCaps,
 }
 
