@@ -1,5 +1,5 @@
 use crate::cli::OutputFormat;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Serialize;
 
 pub fn ensure_output_supported(format: OutputFormat) -> Result<()> {
