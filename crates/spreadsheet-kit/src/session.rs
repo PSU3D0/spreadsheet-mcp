@@ -1,4 +1,4 @@
-use crate::core::types::CellEdit;
+use crate::types::CellEdit;
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
