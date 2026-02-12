@@ -136,7 +136,9 @@ impl RecalcExecutor for FireAndForgetExecutor {
         Ok(RecalcResult {
             duration_ms: start.elapsed().as_millis() as u64,
             was_warm: false,
-            executor_type: "fire_and_forget",
+            backend_name: "libreoffice",
+            cells_evaluated: None,
+            eval_errors: None,
         })
     }
 

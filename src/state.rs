@@ -1,12 +1,15 @@
+#[cfg(feature = "recalc")]
+use crate::config::RecalcBackendKind;
 use crate::config::ServerConfig;
 #[cfg(feature = "recalc")]
 use crate::fork::{ForkConfig, ForkRegistry};
 use crate::model::{WorkbookId, WorkbookListResponse};
+#[cfg(feature = "recalc-formualizer")]
+use crate::recalc::FormualizerBackend;
 #[cfg(feature = "recalc")]
-use crate::recalc::{
-    GlobalRecalcLock, GlobalScreenshotLock, LibreOfficeBackend, RecalcBackend, RecalcConfig,
-    create_executor,
-};
+use crate::recalc::{GlobalRecalcLock, GlobalScreenshotLock, RecalcBackend};
+#[cfg(feature = "recalc-libreoffice")]
+use crate::recalc::{LibreOfficeBackend, RecalcConfig};
 use crate::repository::{PathWorkspaceRepository, WorkbookRepository};
 use crate::tools::filters::WorkbookFilter;
 use crate::workbook::WorkbookContext;
@@ -25,7 +28,11 @@ pub struct AppState {
     #[cfg(feature = "recalc")]
     fork_registry: Option<Arc<ForkRegistry>>,
     #[cfg(feature = "recalc")]
-    recalc_backend: Option<Arc<dyn RecalcBackend>>,
+    recalc_backend_preference: RecalcBackendKind,
+    #[cfg(feature = "recalc")]
+    formualizer_backend: Option<Arc<dyn RecalcBackend>>,
+    #[cfg(feature = "recalc")]
+    libreoffice_backend: Option<Arc<dyn RecalcBackend>>,
     #[cfg(feature = "recalc")]
     recalc_semaphore: Option<GlobalRecalcLock>,
     #[cfg(feature = "recalc")]
@@ -35,13 +42,12 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         #[cfg(feature = "recalc")]
-        let (fork_registry, recalc_backend, recalc_semaphore, screenshot_semaphore) =
-            init_recalc_components(&config);
+        let components = init_recalc_components(&config);
 
         #[cfg(feature = "recalc")]
         let repository: Arc<dyn WorkbookRepository> = Arc::new(PathWorkspaceRepository::new(
             config.clone(),
-            fork_registry.clone(),
+            components.fork_registry.clone(),
         ));
 
         #[cfg(not(feature = "recalc"))]
@@ -55,13 +61,17 @@ impl AppState {
             repository,
             cache: RwLock::new(LruCache::new(capacity)),
             #[cfg(feature = "recalc")]
-            fork_registry,
+            fork_registry: components.fork_registry,
             #[cfg(feature = "recalc")]
-            recalc_backend,
+            recalc_backend_preference: components.recalc_backend_preference,
             #[cfg(feature = "recalc")]
-            recalc_semaphore,
+            formualizer_backend: components.formualizer_backend,
             #[cfg(feature = "recalc")]
-            screenshot_semaphore,
+            libreoffice_backend: components.libreoffice_backend,
+            #[cfg(feature = "recalc")]
+            recalc_semaphore: components.recalc_semaphore,
+            #[cfg(feature = "recalc")]
+            screenshot_semaphore: components.screenshot_semaphore,
         }
     }
 
@@ -72,21 +82,24 @@ impl AppState {
         let capacity = NonZeroUsize::new(config.cache_capacity.max(1)).unwrap();
 
         #[cfg(feature = "recalc")]
-        let (fork_registry, recalc_backend, recalc_semaphore, screenshot_semaphore) =
-            init_recalc_components(&config);
+        let components = init_recalc_components(&config);
 
         Self {
             config,
             repository,
             cache: RwLock::new(LruCache::new(capacity)),
             #[cfg(feature = "recalc")]
-            fork_registry,
+            fork_registry: components.fork_registry,
             #[cfg(feature = "recalc")]
-            recalc_backend,
+            recalc_backend_preference: components.recalc_backend_preference,
             #[cfg(feature = "recalc")]
-            recalc_semaphore,
+            formualizer_backend: components.formualizer_backend,
             #[cfg(feature = "recalc")]
-            screenshot_semaphore,
+            libreoffice_backend: components.libreoffice_backend,
+            #[cfg(feature = "recalc")]
+            recalc_semaphore: components.recalc_semaphore,
+            #[cfg(feature = "recalc")]
+            screenshot_semaphore: components.screenshot_semaphore,
         }
     }
 
@@ -100,8 +113,19 @@ impl AppState {
     }
 
     #[cfg(feature = "recalc")]
-    pub fn recalc_backend(&self) -> Option<&Arc<dyn RecalcBackend>> {
-        self.recalc_backend.as_ref()
+    pub fn recalc_backend(
+        &self,
+        requested: Option<RecalcBackendKind>,
+    ) -> Option<Arc<dyn RecalcBackend>> {
+        let effective = requested.unwrap_or(self.recalc_backend_preference);
+        match effective {
+            RecalcBackendKind::Formualizer => self.formualizer_backend.clone(),
+            RecalcBackendKind::Libreoffice => self.libreoffice_backend.clone(),
+            RecalcBackendKind::Auto => self
+                .formualizer_backend
+                .clone()
+                .or_else(|| self.libreoffice_backend.clone()),
+        }
     }
 
     #[cfg(feature = "recalc")]
@@ -170,16 +194,26 @@ impl AppState {
 }
 
 #[cfg(feature = "recalc")]
-fn init_recalc_components(
-    config: &Arc<ServerConfig>,
-) -> (
-    Option<Arc<ForkRegistry>>,
-    Option<Arc<dyn RecalcBackend>>,
-    Option<GlobalRecalcLock>,
-    Option<GlobalScreenshotLock>,
-) {
+struct RecalcComponents {
+    fork_registry: Option<Arc<ForkRegistry>>,
+    recalc_backend_preference: RecalcBackendKind,
+    formualizer_backend: Option<Arc<dyn RecalcBackend>>,
+    libreoffice_backend: Option<Arc<dyn RecalcBackend>>,
+    recalc_semaphore: Option<GlobalRecalcLock>,
+    screenshot_semaphore: Option<GlobalScreenshotLock>,
+}
+
+#[cfg(feature = "recalc")]
+fn init_recalc_components(config: &Arc<ServerConfig>) -> RecalcComponents {
     if !config.recalc_enabled {
-        return (None, None, None, None);
+        return RecalcComponents {
+            fork_registry: None,
+            recalc_backend_preference: config.recalc_backend,
+            formualizer_backend: None,
+            libreoffice_backend: None,
+            recalc_semaphore: None,
+            screenshot_semaphore: None,
+        };
     }
 
     let fork_config = ForkConfig::default();
@@ -192,22 +226,56 @@ fn init_recalc_components(
         registry.clone().start_cleanup_task();
     }
 
-    let executor = create_executor(&RecalcConfig::default());
-    let backend: Arc<dyn RecalcBackend> = Arc::new(LibreOfficeBackend::new(executor));
-    let backend = if backend.is_available() {
-        Some(backend)
-    } else {
-        tracing::warn!("recalc backend not available (soffice not found)");
-        None
+    #[cfg(feature = "recalc-formualizer")]
+    let formualizer_backend: Option<Arc<dyn RecalcBackend>> = Some(Arc::new(FormualizerBackend));
+    #[cfg(not(feature = "recalc-formualizer"))]
+    let formualizer_backend: Option<Arc<dyn RecalcBackend>> = None;
+
+    #[cfg(feature = "recalc-libreoffice")]
+    let libreoffice_backend: Option<Arc<dyn RecalcBackend>> = {
+        let backend: Arc<dyn RecalcBackend> =
+            Arc::new(LibreOfficeBackend::new(RecalcConfig::default()));
+        if backend.is_available() {
+            Some(backend)
+        } else {
+            tracing::warn!("libreoffice backend not available (soffice not found)");
+            None
+        }
+    };
+    #[cfg(not(feature = "recalc-libreoffice"))]
+    let libreoffice_backend: Option<Arc<dyn RecalcBackend>> = None;
+
+    let selected = match config.recalc_backend {
+        RecalcBackendKind::Auto => formualizer_backend
+            .as_ref()
+            .or(libreoffice_backend.as_ref())
+            .map(|backend| backend.name()),
+        RecalcBackendKind::Formualizer => {
+            formualizer_backend.as_ref().map(|backend| backend.name())
+        }
+        RecalcBackendKind::Libreoffice => {
+            libreoffice_backend.as_ref().map(|backend| backend.name())
+        }
     };
 
-    let semaphore = GlobalRecalcLock::new(config.max_concurrent_recalcs);
-    let screenshot_semaphore = GlobalScreenshotLock::new();
+    if selected.is_none() {
+        tracing::warn!(
+            preferred = ?config.recalc_backend,
+            "recalc backend not available for current build/runtime"
+        );
+    }
 
-    (
-        registry,
-        backend,
-        Some(semaphore),
-        Some(screenshot_semaphore),
-    )
+    let semaphore = GlobalRecalcLock::new(config.max_concurrent_recalcs);
+    let screenshot_semaphore = libreoffice_backend
+        .as_ref()
+        .map(|_| GlobalScreenshotLock::new());
+
+    RecalcComponents {
+        fork_registry: registry,
+        recalc_backend_preference: config.recalc_backend,
+        formualizer_backend,
+        libreoffice_backend,
+        recalc_semaphore: Some(semaphore),
+        screenshot_semaphore,
+    }
 }

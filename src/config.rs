@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -43,6 +44,17 @@ pub enum OutputProfile {
     Verbose,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, JsonSchema, Default,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum RecalcBackendKind {
+    Formualizer,
+    Libreoffice,
+    #[default]
+    Auto,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub workspace_root: PathBuf,
@@ -58,6 +70,7 @@ pub struct ServerConfig {
     pub transport: TransportKind,
     pub http_bind_address: SocketAddr,
     pub recalc_enabled: bool,
+    pub recalc_backend: RecalcBackendKind,
     pub vba_enabled: bool,
     pub max_concurrent_recalcs: usize,
     pub tool_timeout_ms: Option<u64>,
@@ -110,6 +123,7 @@ impl ServerConfig {
             transport: cli_transport,
             http_bind: cli_http_bind,
             recalc_enabled: cli_recalc_enabled,
+            recalc_backend: cli_recalc_backend,
             vba_enabled: cli_vba_enabled,
             max_concurrent_recalcs: cli_max_concurrent_recalcs,
             tool_timeout_ms: cli_tool_timeout_ms,
@@ -138,6 +152,7 @@ impl ServerConfig {
             transport: file_transport,
             http_bind: file_http_bind,
             recalc_enabled: file_recalc_enabled,
+            recalc_backend: file_recalc_backend,
             vba_enabled: file_vba_enabled,
             max_concurrent_recalcs: file_max_concurrent_recalcs,
             tool_timeout_ms: file_tool_timeout_ms,
@@ -268,6 +283,9 @@ impl ServerConfig {
         });
 
         let recalc_enabled = cli_recalc_enabled || file_recalc_enabled.unwrap_or(false);
+        let recalc_backend = cli_recalc_backend
+            .or(file_recalc_backend)
+            .unwrap_or_default();
         let vba_enabled = cli_vba_enabled || file_vba_enabled.unwrap_or(false);
 
         let max_concurrent_recalcs = cli_max_concurrent_recalcs
@@ -337,6 +355,7 @@ impl ServerConfig {
             transport,
             http_bind_address,
             recalc_enabled,
+            recalc_backend,
             vba_enabled,
             max_concurrent_recalcs,
             tool_timeout_ms,
@@ -565,6 +584,16 @@ pub struct CliArgs {
 
     #[arg(
         long,
+        env = "SPREADSHEET_MCP_RECALC_BACKEND",
+        value_enum,
+        value_name = "KIND",
+        default_value = "auto",
+        help = "Recalc backend preference: auto, formualizer, or libreoffice"
+    )]
+    pub recalc_backend: Option<RecalcBackendKind>,
+
+    #[arg(
+        long,
         env = "SPREADSHEET_MCP_VBA_ENABLED",
         help = "Enable VBA introspection tools (read-only)"
     )]
@@ -651,6 +680,7 @@ struct PartialConfig {
     transport: Option<TransportKind>,
     http_bind: Option<SocketAddr>,
     recalc_enabled: Option<bool>,
+    recalc_backend: Option<RecalcBackendKind>,
     vba_enabled: Option<bool>,
     max_concurrent_recalcs: Option<usize>,
     tool_timeout_ms: Option<u64>,

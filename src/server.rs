@@ -98,7 +98,7 @@ WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
 2) Optional: checkpoint_fork before large edits.
 3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch: Apply edits to the fork.
-4) recalculate: Trigger LibreOffice to recompute all formulas.
+4) recalculate: Trigger the configured recalc backend to recompute all formulas.
 5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
 6) save_fork: Write changes to file.
@@ -886,7 +886,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
 
     #[tool(
         name = "recalculate",
-        description = "Recalculate all formulas in a fork using LibreOffice"
+        description = "Recalculate all formulas in a fork"
     )]
     pub async fn recalculate(
         &self,

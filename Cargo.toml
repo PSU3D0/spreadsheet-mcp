@@ -24,6 +24,7 @@ smallvec = "1.13"
 umya-spreadsheet = "2.3.3"
 ovba = "0.7.1"
 formualizer-parse = { version = "1.0.0" }
+formualizer-workbook = { version = "0.3", default-features = false, features = ["umya"], optional = true }
 walkdir = "2.5"
 globset = "0.4"
 rand = "0.8"
@@ -52,6 +53,8 @@ tempfile = "3.10"
 [features]
 default = []
 recalc = ["async-trait", "uuid", "quick-xml", "xxhash-rust", "image", "base64"]
+recalc-formualizer = ["recalc", "dep:formualizer-workbook"]
+recalc-libreoffice = ["recalc"]
 docker-tests = []
 
 [dev-dependencies]

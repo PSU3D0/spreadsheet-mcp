@@ -1,4 +1,5 @@
 use super::param_enums::{BatchMode, FillDirection, FormulaRelativeMode, ReplaceMatchMode};
+use crate::config::RecalcBackendKind;
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{
@@ -3595,6 +3596,8 @@ pub struct RecalculateParams {
     pub fork_id: String,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+    #[serde(default)]
+    pub backend: Option<RecalcBackendKind>,
 }
 
 fn default_timeout() -> u64 {
@@ -3606,6 +3609,10 @@ pub struct RecalculateResponse {
     pub fork_id: String,
     pub duration_ms: u64,
     pub backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells_evaluated: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval_errors: Option<Vec<String>>,
 }
 
 pub async fn recalculate(
@@ -3613,9 +3620,8 @@ pub async fn recalculate(
     params: RecalculateParams,
 ) -> Result<RecalculateResponse> {
     let backend = state
-        .recalc_backend()
-        .ok_or_else(|| anyhow!("recalc backend not available (soffice not found?)"))?
-        .clone();
+        .recalc_backend(params.backend)
+        .ok_or_else(|| anyhow!("requested recalc backend not available"))?;
 
     recalculate_with_backend(state, params, backend).await
 }
@@ -3641,7 +3647,12 @@ pub async fn recalculate_with_backend(
         .await
         .map_err(|e| anyhow!("failed to acquire recalc permit: {}", e))?;
 
-    let result = backend.recalculate(&fork_ctx.work_path).await?;
+    let timeout_ms = if params.timeout_ms == 0 {
+        None
+    } else {
+        Some(params.timeout_ms)
+    };
+    let result = backend.recalculate(&fork_ctx.work_path, timeout_ms).await?;
 
     registry.with_fork_mut(&params.fork_id, |ctx| {
         ctx.recalc_needed = false;
@@ -3654,7 +3665,9 @@ pub async fn recalculate_with_backend(
     Ok(RecalculateResponse {
         fork_id: params.fork_id,
         duration_ms: result.duration_ms,
-        backend: result.executor_type.to_string(),
+        backend: result.backend_name.to_string(),
+        cells_evaluated: result.cells_evaluated,
+        eval_errors: result.eval_errors,
     })
 }
 
@@ -4264,7 +4277,9 @@ pub async fn discard_staged_change(
 const MAX_SCREENSHOT_ROWS: u32 = 100;
 const MAX_SCREENSHOT_COLS: u32 = 30;
 const DEFAULT_SCREENSHOT_RANGE: &str = "A1:M40";
+#[cfg(feature = "recalc-libreoffice")]
 const DEFAULT_MAX_PNG_DIM_PX: u32 = 4096;
+#[cfg(feature = "recalc-libreoffice")]
 const DEFAULT_MAX_PNG_AREA_PX: u64 = 12_000_000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -4321,29 +4336,43 @@ pub async fn screenshot_sheet(
         .await
         .map_err(|e| anyhow!("failed to acquire screenshot permit: {}", e))?;
 
-    let executor = crate::recalc::ScreenshotExecutor::new(&crate::recalc::RecalcConfig::default());
-    let result = executor
-        .screenshot(
-            &workbook_path,
-            &output_path,
-            &params.sheet_name,
-            Some(range),
-        )
-        .await?;
+    #[cfg(not(feature = "recalc-libreoffice"))]
+    {
+        let _ = workbook_path;
+        let _ = output_path;
+        let _ = bounds;
+        return Err(anyhow!(
+            "screenshot backend unavailable (build without recalc-libreoffice feature)"
+        ));
+    }
 
-    enforce_png_pixel_limits(&result.output_path, range, &bounds).await?;
+    #[cfg(feature = "recalc-libreoffice")]
+    {
+        let executor =
+            crate::recalc::ScreenshotExecutor::new(&crate::recalc::RecalcConfig::default());
+        let result = executor
+            .screenshot(
+                &workbook_path,
+                &output_path,
+                &params.sheet_name,
+                Some(range),
+            )
+            .await?;
 
-    Ok(ScreenshotSheetResponse {
-        workbook_id: params.workbook_or_fork_id.0,
-        sheet_name: params.sheet_name,
-        range: range.to_string(),
-        output_path: format!("file://{}", result.output_path.display()),
-        client_output_path: config
-            .map_path_for_client(&result.output_path)
-            .map(|p| format!("file://{}", p.display())),
-        size_bytes: result.size_bytes,
-        duration_ms: result.duration_ms,
-    })
+        enforce_png_pixel_limits(&result.output_path, range, &bounds).await?;
+
+        return Ok(ScreenshotSheetResponse {
+            workbook_id: params.workbook_or_fork_id.0,
+            sheet_name: params.sheet_name,
+            range: range.to_string(),
+            output_path: format!("file://{}", result.output_path.display()),
+            client_output_path: config
+                .map_path_for_client(&result.output_path)
+                .map(|p| format!("file://{}", p.display())),
+            size_bytes: result.size_bytes,
+            duration_ms: result.duration_ms,
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4475,6 +4504,7 @@ fn suggest_tiled_ranges(
     out
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 fn suggest_split_single_tile(bounds: &ScreenshotBounds) -> Vec<String> {
     use umya_spreadsheet::helper::coordinate::coordinate_from_index;
 
@@ -4497,6 +4527,7 @@ fn suggest_split_single_tile(bounds: &ScreenshotBounds) -> Vec<String> {
     }
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 fn range_from_bounds(bounds: &ScreenshotBounds) -> String {
     use umya_spreadsheet::helper::coordinate::coordinate_from_index;
     let start = coordinate_from_index(&bounds.min_col, &bounds.min_row);
@@ -4504,6 +4535,7 @@ fn range_from_bounds(bounds: &ScreenshotBounds) -> String {
     format!("{start}:{end}")
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 async fn enforce_png_pixel_limits(
     path: &std::path::Path,
     range: &str,
@@ -4521,9 +4553,12 @@ async fn enforce_png_pixel_limits(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_MAX_PNG_AREA_PX);
 
-    let img = ImageReader::open(path)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(|e| anyhow!("failed to read png {}: {}", path.display(), e))?
+    let reader = ImageReader::open(path)
+        .map_err(|e| anyhow!("failed to read png {}: {}", path.display(), e))?;
+    let reader = reader
+        .with_guessed_format()
+        .map_err(|e| anyhow!("failed to sniff png {}: {}", path.display(), e))?;
+    let img = reader
         .decode()
         .map_err(|e| anyhow!("failed to decode png {}: {}", path.display(), e))?;
     let (w, h) = img.dimensions();
