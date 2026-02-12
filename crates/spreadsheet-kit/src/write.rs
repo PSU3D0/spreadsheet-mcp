@@ -1,4 +1,4 @@
-use crate::core::types::{CellEdit, CoreWarning};
+use crate::types::{CellEdit, CoreWarning};
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::Path;
 
