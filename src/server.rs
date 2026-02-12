@@ -8,11 +8,14 @@ use crate::model::{
     WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
     WorkbookSummaryResponse,
 };
+use crate::response_prune::Pruned;
+#[cfg(feature = "recalc")]
+use crate::response_prune::to_pruned_value;
 use crate::state::AppState;
 use crate::tools;
 use anyhow::{Result, anyhow};
 use rmcp::{
-    ErrorData as McpError, Json, ServerHandler, ServiceExt,
+    ErrorData as McpError, Json as McpJson, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
@@ -23,6 +26,12 @@ use std::future::Future;
 use std::sync::Arc;
 use thiserror::Error;
 use {once_cell::sync::Lazy, regex::Regex};
+
+type Json<T> = McpJson<Pruned<T>>;
+
+fn json<T>(value: T) -> Json<T> {
+    McpJson(Pruned(value))
+}
 
 const BASE_INSTRUCTIONS: &str = "\
 Spreadsheet MCP: optimized for spreadsheet analysis.
@@ -292,7 +301,7 @@ impl SpreadsheetServer {
             tools::list_workbooks(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("list_workbooks", e))
     }
 
@@ -308,7 +317,7 @@ impl SpreadsheetServer {
             tools::describe_workbook(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("describe_workbook", e))
     }
 
@@ -327,7 +336,7 @@ impl SpreadsheetServer {
             tools::workbook_summary(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("workbook_summary", e))
     }
 
@@ -343,7 +352,7 @@ impl SpreadsheetServer {
             tools::list_sheets(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("list_sheets", e))
     }
 
@@ -362,7 +371,7 @@ impl SpreadsheetServer {
             tools::sheet_overview(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("sheet_overview", e))
     }
 
@@ -375,7 +384,7 @@ impl SpreadsheetServer {
             .map_err(|e| to_mcp_error_for_tool("sheet_page", e))?;
         self.run_tool_with_timeout("sheet_page", tools::sheet_page(self.state.clone(), params))
             .await
-            .map(Json)
+            .map(json)
             .map_err(|e| to_mcp_error_for_tool("sheet_page", e))
     }
 
@@ -388,7 +397,7 @@ impl SpreadsheetServer {
             .map_err(|e| to_mcp_error_for_tool("find_value", e))?;
         self.run_tool_with_timeout("find_value", tools::find_value(self.state.clone(), params))
             .await
-            .map(Json)
+            .map(json)
             .map_err(|e| to_mcp_error_for_tool("find_value", e))
     }
 
@@ -404,7 +413,7 @@ impl SpreadsheetServer {
             .map_err(|e| to_mcp_error_for_tool("read_table", e))?;
         self.run_tool_with_timeout("read_table", tools::read_table(self.state.clone(), params))
             .await
-            .map(Json)
+            .map(json)
             .map_err(|e| to_mcp_error_for_tool("read_table", e))
     }
 
@@ -420,7 +429,7 @@ impl SpreadsheetServer {
             tools::table_profile(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("table_profile", e))
     }
 
@@ -439,7 +448,7 @@ impl SpreadsheetServer {
             tools::range_values(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("range_values", e))
     }
 
@@ -458,7 +467,7 @@ impl SpreadsheetServer {
             tools::sheet_statistics(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("sheet_statistics", e))
     }
 
@@ -477,7 +486,7 @@ impl SpreadsheetServer {
             tools::sheet_formula_map(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("sheet_formula_map", e))
     }
 
@@ -496,7 +505,7 @@ impl SpreadsheetServer {
             tools::formula_trace(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("formula_trace", e))
     }
 
@@ -512,7 +521,7 @@ impl SpreadsheetServer {
             tools::named_ranges(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("named_ranges", e))
     }
 
@@ -531,7 +540,7 @@ impl SpreadsheetServer {
             tools::find_formula(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("find_formula", e))
     }
 
@@ -547,7 +556,7 @@ impl SpreadsheetServer {
             tools::scan_volatiles(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("scan_volatiles", e))
     }
 
@@ -566,7 +575,7 @@ impl SpreadsheetServer {
             tools::sheet_styles(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("sheet_styles", e))
     }
 
@@ -585,7 +594,7 @@ impl SpreadsheetServer {
             tools::workbook_style_summary(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("workbook_style_summary", e))
     }
 
@@ -604,7 +613,7 @@ impl SpreadsheetServer {
             tools::get_manifest_stub(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("get_manifest_stub", e))
     }
 
@@ -620,7 +629,7 @@ impl SpreadsheetServer {
             tools::close_workbook(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("close_workbook", e))
     }
 }
@@ -642,7 +651,7 @@ impl SpreadsheetServer {
             tools::vba::vba_project_summary(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("vba_project_summary", e))
     }
 
@@ -661,7 +670,7 @@ impl SpreadsheetServer {
             tools::vba::vba_module_source(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("vba_module_source", e))
     }
 }
@@ -684,7 +693,7 @@ impl SpreadsheetServer {
             tools::fork::create_fork(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("create_fork", e))
     }
 
@@ -703,7 +712,7 @@ impl SpreadsheetServer {
             tools::fork::edit_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("edit_batch", e))
     }
 
@@ -723,7 +732,7 @@ Mode: preview or apply (default apply)."
             tools::fork::transform_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("transform_batch", e))
     }
 
@@ -743,7 +752,7 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
             tools::fork::style_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("style_batch", e))
     }
 
@@ -764,7 +773,7 @@ Note: autosize uses cached/formatted cell values; if a column is mostly formulas
             tools::fork::column_size_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("column_size_batch", e))
     }
 
@@ -783,7 +792,7 @@ Note: autosize uses cached/formatted cell values; if a column is mostly formulas
             tools::sheet_layout::sheet_layout_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("sheet_layout_batch", e))
     }
 
@@ -805,7 +814,7 @@ fill_direction: down, right, both (default both)."
             tools::fork::apply_formula_pattern(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("apply_formula_pattern", e))
     }
 
@@ -826,7 +835,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::structure_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("structure_batch", e))
     }
 
@@ -845,7 +854,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::rules_batch::rules_batch(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("rules_batch", e))
     }
 
@@ -861,7 +870,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::get_edits(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("get_edits", e))
     }
 
@@ -880,7 +889,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::get_changeset(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("get_changeset", e))
     }
 
@@ -899,7 +908,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::recalculate(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("recalculate", e))
     }
 
@@ -915,7 +924,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::list_forks(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("list_forks", e))
     }
 
@@ -931,7 +940,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::discard_fork(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("discard_fork", e))
     }
 
@@ -950,7 +959,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::save_fork(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("save_fork", e))
     }
 
@@ -969,7 +978,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::checkpoint_fork(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("checkpoint_fork", e))
     }
 
@@ -985,7 +994,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::list_checkpoints(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("list_checkpoints", e))
     }
 
@@ -1004,7 +1013,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::restore_checkpoint(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("restore_checkpoint", e))
     }
 
@@ -1023,7 +1032,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::delete_checkpoint(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("delete_checkpoint", e))
     }
 
@@ -1042,7 +1051,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::list_staged_changes(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("list_staged_changes", e))
     }
 
@@ -1061,7 +1070,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::apply_staged_change(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("apply_staged_change", e))
     }
 
@@ -1080,7 +1089,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             tools::fork::discard_staged_change(self.state.clone(), params),
         )
         .await
-        .map(Json)
+        .map(json)
         .map_err(|e| to_mcp_error_for_tool("discard_staged_change", e))
     }
 
@@ -1135,7 +1144,7 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
             // Always include a small text hint for clients that ignore structured_content.
             content.push(Content::text(response.output_path.clone()));
 
-            let structured_content = serde_json::to_value(&response)
+            let structured_content = to_pruned_value(&response)
                 .map_err(|e| anyhow!("failed to serialize response: {}", e))?;
 
             Ok(rmcp::model::CallToolResult {
