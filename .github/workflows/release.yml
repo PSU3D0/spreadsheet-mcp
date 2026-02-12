@@ -10,7 +10,7 @@ env:
 
 jobs:
   build:
-    name: Build (${{ matrix.target }})
+    name: Build (${{ matrix.asset_name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,20 +18,52 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            package: spreadsheet-mcp
             artifact_name: spreadsheet-mcp
+            binary_path: spreadsheet-mcp
             asset_name: spreadsheet-mcp-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
+            package: spreadsheet-mcp
             artifact_name: spreadsheet-mcp
+            binary_path: spreadsheet-mcp
             asset_name: spreadsheet-mcp-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
+            package: spreadsheet-mcp
             artifact_name: spreadsheet-mcp
+            binary_path: spreadsheet-mcp
             asset_name: spreadsheet-mcp-macos-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            package: spreadsheet-mcp
             artifact_name: spreadsheet-mcp.exe
+            binary_path: spreadsheet-mcp.exe
             asset_name: spreadsheet-mcp-windows-x86_64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            package: agent-spreadsheet
+            artifact_name: agent-spreadsheet
+            binary_path: agent-spreadsheet
+            asset_name: agent-spreadsheet-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            package: agent-spreadsheet
+            artifact_name: agent-spreadsheet
+            binary_path: agent-spreadsheet
+            asset_name: agent-spreadsheet-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            package: agent-spreadsheet
+            artifact_name: agent-spreadsheet
+            binary_path: agent-spreadsheet
+            asset_name: agent-spreadsheet-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            package: agent-spreadsheet
+            artifact_name: agent-spreadsheet.exe
+            binary_path: agent-spreadsheet.exe
+            asset_name: agent-spreadsheet-windows-x86_64.exe
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -43,13 +75,13 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ${{ matrix.package }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_path }}
           if-no-files-found: error
 
   release:
@@ -103,6 +135,39 @@ jobs:
           toolchain: stable
 
       - name: Publish to crates.io
-        run: cargo publish --locked
+        run: |
+          cargo publish --locked --manifest-path crates/spreadsheet-kit/Cargo.toml
+          sleep 30
+          cargo publish --locked --manifest-path crates/spreadsheet-mcp/Cargo.toml
+          sleep 30
+          cargo publish --locked --manifest-path crates/agent-spreadsheet/Cargo.toml
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-npm:
+    name: Publish npm CLI
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set npm package version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version
+        working-directory: npm/agent-spreadsheet
+
+      - name: Publish npm package
+        run: npm publish --access public
+        working-directory: npm/agent-spreadsheet
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
