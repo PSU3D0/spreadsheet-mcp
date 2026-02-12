@@ -7,6 +7,14 @@ authors = ["Frankie Colson"]
 repository = "https://github.com/PSU3D0/spreadsheet-mcp"
 license = "Apache-2.0"
 
+[[bin]]
+name = "spreadsheet-mcp"
+path = "src/main.rs"
+
+[[bin]]
+name = "spreadsheet-cli"
+path = "src/bin/cli.rs"
+
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
@@ -59,6 +67,7 @@ docker-tests = []
 
 [dev-dependencies]
 assert_matches = "1.5"
+assert_cmd = "2.0"
 serde_json = "1.0"
 testcontainers = "0.23"
 bollard = "0.18"

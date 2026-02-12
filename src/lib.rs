@@ -1,6 +1,8 @@
 pub mod analysis;
 pub mod caps;
+pub mod cli;
 pub mod config;
+pub mod core;
 #[cfg(feature = "recalc")]
 pub mod diff;
 pub mod errors;
@@ -12,6 +14,7 @@ pub mod model;
 pub mod recalc;
 pub mod repository;
 pub mod rules;
+pub mod runtime;
 pub mod security;
 pub mod server;
 pub mod state;

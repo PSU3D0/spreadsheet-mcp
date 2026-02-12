@@ -121,7 +121,17 @@ pub async fn edit_batch(
     tokio::task::spawn_blocking({
         let sheet_name = params.sheet_name.clone();
         let edits = params.edits.clone();
-        move || apply_edits_to_file(&work_path, &sheet_name, &edits)
+        move || {
+            let core_edits = edits
+                .into_iter()
+                .map(|edit| crate::core::types::CellEdit {
+                    address: edit.address,
+                    value: edit.value,
+                    is_formula: edit.is_formula,
+                })
+                .collect::<Vec<_>>();
+            crate::core::write::apply_edits_to_file(&work_path, &sheet_name, &core_edits)
+        }
     })
     .await??;
 
@@ -141,28 +151,6 @@ pub async fn edit_batch(
         recalc_needed: true,
         warnings,
     })
-}
-
-fn apply_edits_to_file(path: &std::path::Path, sheet_name: &str, edits: &[CellEdit]) -> Result<()> {
-    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
-
-    let sheet = book
-        .get_sheet_by_name_mut(sheet_name)
-        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
-
-    for edit in edits {
-        let cell = sheet.get_cell_mut(edit.address.as_str());
-        if edit.is_formula {
-            cell.set_formula(edit.value.clone());
-            cell.get_cell_value_mut()
-                .set_formula_result_default(String::new());
-        } else {
-            cell.set_value(edit.value.clone());
-        }
-    }
-
-    umya_spreadsheet::writer::xlsx::write(&book, path)?;
-    Ok(())
 }
 
 fn default_clear_values() -> bool {
@@ -1587,7 +1575,7 @@ pub async fn structure_batch(
             let base_path = work_path.clone();
             let preview_path = snapshot_path.clone();
             move || {
-                crate::diff::calculate_changeset(&base_path, &preview_path, None)
+                crate::core::diff::calculate_changeset(&base_path, &preview_path, None)
                     .map(|changes| changes.len() as u64)
             }
         })
@@ -3512,7 +3500,9 @@ pub async fn get_changeset(
         let base_path = fork_ctx.base_path.clone();
         let work_path = fork_ctx.work_path.clone();
         let sheet_filter = params.sheet_name.clone();
-        move || crate::diff::calculate_changeset(&base_path, &work_path, sheet_filter.as_deref())
+        move || {
+            crate::core::diff::calculate_changeset(&base_path, &work_path, sheet_filter.as_deref())
+        }
     })
     .await??;
 
@@ -3652,7 +3642,8 @@ pub async fn recalculate_with_backend(
     } else {
         Some(params.timeout_ms)
     };
-    let result = backend.recalculate(&fork_ctx.work_path, timeout_ms).await?;
+    let result =
+        crate::core::recalc::execute_with_backend(&fork_ctx.work_path, timeout_ms, backend).await?;
 
     registry.with_fork_mut(&params.fork_id, |ctx| {
         ctx.recalc_needed = false;
@@ -3665,7 +3656,7 @@ pub async fn recalculate_with_backend(
     Ok(RecalculateResponse {
         fork_id: params.fork_id,
         duration_ms: result.duration_ms,
-        backend: result.backend_name.to_string(),
+        backend: result.backend,
         cells_evaluated: result.cells_evaluated,
         eval_errors: result.eval_errors,
     })
@@ -4078,7 +4069,21 @@ pub async fn apply_staged_change(
                     let sheet_name = payload.sheet_name.clone();
                     let edits = payload.edits.clone();
                     let work_path = work_path.clone();
-                    move || apply_edits_to_file(&work_path, &sheet_name, &edits)
+                    move || {
+                        let core_edits = edits
+                            .into_iter()
+                            .map(|edit| crate::core::types::CellEdit {
+                                address: edit.address,
+                                value: edit.value,
+                                is_formula: edit.is_formula,
+                            })
+                            .collect::<Vec<_>>();
+                        crate::core::write::apply_edits_to_file(
+                            &work_path,
+                            &sheet_name,
+                            &core_edits,
+                        )
+                    }
                 })
                 .await??;
 
