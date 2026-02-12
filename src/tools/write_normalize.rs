@@ -1,3 +1,4 @@
+use crate::core::write::{normalize_object_edit, normalize_shorthand_edit};
 use crate::errors::InvalidParamsError;
 use crate::model::Warning;
 use crate::tools::fork::{CellEdit, EditBatchParams};
@@ -39,97 +40,42 @@ pub fn normalize_edit_batch(
     for (idx, edit) in params.edits.into_iter().enumerate() {
         match edit {
             CellEditInput::Shorthand(entry) => {
-                let Some((address_raw, rhs_raw)) = entry.split_once('=') else {
-                    return Err(InvalidParamsError::new(
-                        "edit_batch",
-                        format!(
-                            "invalid shorthand edit: '{entry}' (expected like 'A1=100' or 'B2==SUM(A1:A2)')"
-                        ),
-                    )
-                    .with_path(format!("edits[{idx}]"))
-                    .into());
-                };
-
-                let address = address_raw.trim();
-                if address.is_empty() {
-                    return Err(InvalidParamsError::new(
-                        "edit_batch",
-                        format!(
-                            "invalid shorthand edit: '{entry}' (missing cell address before '=')"
-                        ),
-                    )
-                    .with_path(format!("edits[{idx}]"))
-                    .into());
-                }
-
-                let mut value = rhs_raw.to_string();
-                let mut is_formula = false;
-
-                warnings.push(Warning {
-                    code: "WARN_SHORTHAND_EDIT".to_string(),
-                    message: format!("Parsed shorthand edit '{}'", entry),
-                });
-
-                let rhs_trimmed = rhs_raw.trim_start();
-                if let Some(stripped) = rhs_trimmed.strip_prefix('=') {
-                    value = stripped.to_string();
-                    is_formula = true;
-                    warnings.push(Warning {
-                        code: "WARN_FORMULA_PREFIX".to_string(),
-                        message: format!("Stripped leading '=' for formula '{}'", entry),
-                    });
-                }
-
+                let (normalized, core_warnings) =
+                    normalize_shorthand_edit(&entry).map_err(|err| {
+                        InvalidParamsError::new("edit_batch", err.to_string())
+                            .with_path(format!("edits[{idx}]"))
+                    })?;
                 edits.push(CellEdit {
-                    address: address.to_string(),
-                    value,
-                    is_formula,
+                    address: normalized.address,
+                    value: normalized.value,
+                    is_formula: normalized.is_formula,
                 });
+                warnings.extend(core_warnings.into_iter().map(|warning| Warning {
+                    code: warning.code,
+                    message: warning.message,
+                }));
             }
             CellEditInput::Object(obj) => {
-                let address = obj.address.trim();
-                if address.is_empty() {
-                    return Err(
-                        InvalidParamsError::new("edit_batch", "edit address is required")
-                            .with_path(format!("edits[{idx}].address"))
-                            .into(),
-                    );
-                }
-
-                let (value, is_formula) = if let Some(formula) = obj.formula {
-                    if let Some(stripped) = formula.strip_prefix('=') {
-                        warnings.push(Warning {
-                            code: "WARN_FORMULA_PREFIX".to_string(),
-                            message: format!("Stripped leading '=' for formula at {}", address),
-                        });
-                        (stripped.to_string(), true)
-                    } else {
-                        (formula, true)
-                    }
-                } else if let Some(value) = obj.value {
-                    if let Some(stripped) = value.strip_prefix('=') {
-                        warnings.push(Warning {
-                            code: "WARN_FORMULA_PREFIX".to_string(),
-                            message: format!("Stripped leading '=' for formula at {}", address),
-                        });
-                        (stripped.to_string(), true)
-                    } else {
-                        (value, obj.is_formula.unwrap_or(false))
-                    }
-                } else {
-                    return Err(InvalidParamsError::new(
-                        "edit_batch",
-                        format!("edit value or formula is required for {address}"),
-                    )
-                    .with_path(format!("edits[{idx}]"))
-                    .into());
-                };
+                let normalized =
+                    normalize_object_edit(&obj.address, obj.value, obj.formula, obj.is_formula)
+                        .map_err(|err| {
+                            let path = if err.to_string().contains("address") {
+                                format!("edits[{idx}].address")
+                            } else {
+                                format!("edits[{idx}]")
+                            };
+                            InvalidParamsError::new("edit_batch", err.to_string()).with_path(path)
+                        })?;
 
                 edits.push(CellEdit {
-                    address: address.to_string(),
-                    value,
-                    is_formula,
+                    address: normalized.0.address,
+                    value: normalized.0.value,
+                    is_formula: normalized.0.is_formula,
                 });
+                warnings.extend(normalized.1.into_iter().map(|warning| Warning {
+                    code: warning.code,
+                    message: warning.message,
+                }));
             }
         }
     }
