@@ -1,34 +1,50 @@
-use super::executor::{RecalcExecutor, RecalcResult};
+use super::executor::RecalcResult;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
-use std::sync::Arc;
 
 #[async_trait]
 pub trait RecalcBackend: Send + Sync {
-    async fn recalculate(&self, fork_work_path: &Path) -> Result<RecalcResult>;
+    async fn recalculate(
+        &self,
+        fork_work_path: &Path,
+        timeout_ms: Option<u64>,
+    ) -> Result<RecalcResult>;
     fn is_available(&self) -> bool;
     fn name(&self) -> &'static str;
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 pub struct LibreOfficeBackend {
-    executor: Arc<dyn RecalcExecutor>,
+    config: super::RecalcConfig,
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 impl LibreOfficeBackend {
-    pub fn new(executor: Arc<dyn RecalcExecutor>) -> Self {
-        Self { executor }
+    pub fn new(config: super::RecalcConfig) -> Self {
+        Self { config }
     }
 }
 
+#[cfg(feature = "recalc-libreoffice")]
 #[async_trait]
 impl RecalcBackend for LibreOfficeBackend {
-    async fn recalculate(&self, fork_work_path: &Path) -> Result<RecalcResult> {
-        self.executor.recalculate(fork_work_path).await
+    async fn recalculate(
+        &self,
+        fork_work_path: &Path,
+        timeout_ms: Option<u64>,
+    ) -> Result<RecalcResult> {
+        let mut config = self.config.clone();
+        if let Some(timeout_ms) = timeout_ms {
+            config.timeout_ms = Some(timeout_ms);
+        }
+        super::create_executor(&config)
+            .recalculate(fork_work_path)
+            .await
     }
 
     fn is_available(&self) -> bool {
-        self.executor.is_available()
+        super::create_executor(&self.config).is_available()
     }
 
     fn name(&self) -> &'static str {

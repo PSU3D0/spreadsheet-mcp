@@ -92,6 +92,7 @@ impl TestWorkspace {
             transport: TransportKind::Http,
             http_bind_address: "127.0.0.1:8079".parse().unwrap(),
             recalc_enabled: false,
+            recalc_backend: spreadsheet_mcp::config::RecalcBackendKind::Auto,
             vba_enabled: false,
             max_concurrent_recalcs: 2,
             tool_timeout_ms: Some(30_000),

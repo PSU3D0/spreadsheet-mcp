@@ -1,7 +1,7 @@
 use std::fs;
 
 use clap::Parser;
-use spreadsheet_mcp::{CliArgs, OutputProfile, ServerConfig, TransportKind};
+use spreadsheet_mcp::{CliArgs, OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 
 #[test]
 fn merges_config_file_and_cli_overrides() {
@@ -62,6 +62,7 @@ fn empty_extensions_is_error() {
         transport: None,
         http_bind: None,
         recalc_enabled: false,
+        recalc_backend: None,
         vba_enabled: false,
         max_concurrent_recalcs: None,
         tool_timeout_ms: None,
@@ -89,6 +90,7 @@ fn ensure_workspace_root_errors_for_missing_dir() {
         transport: TransportKind::Http,
         http_bind_address: "127.0.0.1:8079".parse().unwrap(),
         recalc_enabled: false,
+        recalc_backend: RecalcBackendKind::Auto,
         vba_enabled: false,
         max_concurrent_recalcs: 2,
         tool_timeout_ms: Some(30_000),
@@ -168,4 +170,21 @@ fn http_bind_override_from_cli() {
     let config = ServerConfig::from_args(args).expect("config");
 
     assert_eq!(config.http_bind_address, "127.0.0.1:0".parse().unwrap());
+}
+
+#[test]
+fn recalc_backend_override_from_cli() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let args = CliArgs::parse_from([
+        "gridbench-mcp",
+        "--workspace-root",
+        workspace.path().to_str().unwrap(),
+        "--recalc-enabled",
+        "--recalc-backend",
+        "formualizer",
+    ]);
+    let config = ServerConfig::from_args(args).expect("config");
+
+    assert!(config.recalc_enabled);
+    assert_eq!(config.recalc_backend, RecalcBackendKind::Formualizer);
 }

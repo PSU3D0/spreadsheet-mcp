@@ -2,22 +2,30 @@
 mod backend;
 #[cfg(feature = "recalc")]
 mod executor;
-#[cfg(feature = "recalc")]
+#[cfg(feature = "recalc-libreoffice")]
 mod fire_and_forget;
+#[cfg(feature = "recalc-formualizer")]
+mod formualizer_backend;
 #[cfg(feature = "recalc")]
 pub mod macro_uri;
-#[cfg(feature = "recalc")]
+#[cfg(feature = "recalc-libreoffice")]
 mod pooled;
-#[cfg(feature = "recalc")]
+#[cfg(feature = "recalc-libreoffice")]
 mod screenshot;
 
+#[cfg(feature = "recalc-libreoffice")]
+pub use backend::LibreOfficeBackend;
 #[cfg(feature = "recalc")]
-pub use backend::{LibreOfficeBackend, RecalcBackend};
+pub use backend::RecalcBackend;
+#[cfg(feature = "recalc-libreoffice")]
+pub use executor::RecalcExecutor;
 #[cfg(feature = "recalc")]
-pub use executor::{RecalcExecutor, RecalcResult};
-#[cfg(feature = "recalc")]
+pub use executor::RecalcResult;
+#[cfg(feature = "recalc-libreoffice")]
 pub use fire_and_forget::FireAndForgetExecutor;
-#[cfg(feature = "recalc")]
+#[cfg(feature = "recalc-formualizer")]
+pub use formualizer_backend::FormualizerBackend;
+#[cfg(feature = "recalc-libreoffice")]
 pub use screenshot::{ScreenshotExecutor, ScreenshotResult};
 
 use std::path::PathBuf;
@@ -79,7 +87,7 @@ impl Default for RecalcConfig {
     }
 }
 
-#[cfg(feature = "recalc")]
+#[cfg(feature = "recalc-libreoffice")]
 pub fn create_executor(config: &RecalcConfig) -> Arc<dyn RecalcExecutor> {
     match config.strategy {
         ExecutorStrategy::FireAndForget => Arc::new(FireAndForgetExecutor::new(config)),

@@ -22,11 +22,17 @@ struct TestRecalcBackend;
 
 #[async_trait]
 impl RecalcBackend for TestRecalcBackend {
-    async fn recalculate(&self, _fork_work_path: &Path) -> Result<RecalcResult> {
+    async fn recalculate(
+        &self,
+        _fork_work_path: &Path,
+        _timeout_ms: Option<u64>,
+    ) -> Result<RecalcResult> {
         Ok(RecalcResult {
             duration_ms: 1,
             was_warm: true,
-            executor_type: "test",
+            backend_name: "test",
+            cells_evaluated: None,
+            eval_errors: None,
         })
     }
 
@@ -140,6 +146,7 @@ async fn recalculate_clears_recalc_needed() -> Result<()> {
         RecalculateParams {
             fork_id: fork.fork_id.clone(),
             timeout_ms: 1000,
+            backend: None,
         },
         Arc::new(TestRecalcBackend),
     )
