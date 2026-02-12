@@ -1,4 +1,5 @@
 use crate::cli::OutputFormat;
+use crate::response_prune::prune_non_structural_empties;
 use anyhow::{Result, bail};
 use serde_json::Value;
 
@@ -7,12 +8,15 @@ pub fn emit_value(value: &Value, format: OutputFormat, compact: bool, quiet: boo
         bail!("csv output is not implemented yet for spreadsheet-cli")
     }
 
+    let mut value = value.clone();
+    prune_non_structural_empties(&mut value);
+
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     if compact || quiet {
-        serde_json::to_writer(&mut handle, value)?;
+        serde_json::to_writer(&mut handle, &value)?;
     } else {
-        serde_json::to_writer_pretty(&mut handle, value)?;
+        serde_json::to_writer_pretty(&mut handle, &value)?;
     }
     use std::io::Write;
     handle.write_all(b"\n")?;
