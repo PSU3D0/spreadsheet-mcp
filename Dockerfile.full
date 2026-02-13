@@ -15,8 +15,9 @@ COPY crates/spreadsheet-kit/Cargo.toml crates/spreadsheet-kit/Cargo.toml
 COPY crates/agent-spreadsheet/Cargo.toml crates/agent-spreadsheet/Cargo.toml
 
 # Create dummy src to build deps
-RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src crates/agent-spreadsheet/src \
+RUN mkdir -p crates/spreadsheet-mcp/src/bin crates/spreadsheet-kit/src crates/agent-spreadsheet/src \
     && echo "fn main() {}" > crates/spreadsheet-mcp/src/main.rs \
+    && echo "fn main() {}" > crates/spreadsheet-mcp/src/bin/cli.rs \
     && echo "" > crates/spreadsheet-kit/src/lib.rs \
     && echo "fn main() {}" > crates/agent-spreadsheet/src/main.rs
 
@@ -31,7 +32,7 @@ COPY crates ./crates
 # Build the real binary
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    touch crates/spreadsheet-mcp/src/main.rs && \
+    touch crates/spreadsheet-mcp/src/main.rs crates/spreadsheet-kit/src/lib.rs crates/agent-spreadsheet/src/main.rs && \
     cargo build --release --locked --no-default-features --features recalc-libreoffice -p spreadsheet-mcp && \
     cp target/release/spreadsheet-mcp /usr/local/bin/spreadsheet-mcp
 
