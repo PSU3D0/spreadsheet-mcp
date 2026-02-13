@@ -1,6 +1,6 @@
 [package]
 name = "agent-spreadsheet"
-version = "0.1.0"
+version = "0.10.0"
 edition = "2024"
 description = "Stateless spreadsheet CLI for AI agents — read, profile, edit, and diff .xlsx workbooks from the command line"
 authors = ["Frankie Colson"]
@@ -16,4 +16,4 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt"] }
-spreadsheet-mcp = { version = "0.9.0", path = "../spreadsheet-mcp" }
+spreadsheet-mcp = { version = "0.10.0", path = "../spreadsheet-mcp" }
