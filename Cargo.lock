@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "agent-spreadsheet"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3202,7 +3202,7 @@ dependencies = [
 
 [[package]]
 name = "spreadsheet-kit"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "spreadsheet-mcp"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "ahash",
  "anyhow",
