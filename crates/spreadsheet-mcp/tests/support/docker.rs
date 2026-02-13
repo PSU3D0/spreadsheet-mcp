@@ -13,8 +13,12 @@ pub fn image_tag() -> String {
 }
 
 async fn build_image(tag: &str) -> Result<()> {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let dockerfile_path = Path::new(manifest_dir).join("Dockerfile.full");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root is two levels above crate manifest");
+    let dockerfile_path = workspace_root.join("Dockerfile.full");
 
     let output = Command::new("docker")
         .args([
@@ -24,7 +28,7 @@ async fn build_image(tag: &str) -> Result<()> {
             "-t",
             tag,
             "-q",
-            manifest_dir,
+            workspace_root.to_str().unwrap(),
         ])
         .output()
         .await
