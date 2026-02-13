@@ -7,7 +7,7 @@
 mod support;
 
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 use support::mcp::{
     McpTestClient, call_tool, cell_error_type, cell_is_error, cell_value, cell_value_f64,
@@ -1895,12 +1895,22 @@ async fn test_save_fork_drop_fork_false_keeps_fork() -> Result<()> {
         "200"
     );
 
-    let forks = extract_json(&client.call_tool(call_tool("list_forks", json!({}))).await?)?;
-    let has_fork = forks["forks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|f| f["fork_id"] == fork_id);
+    let list_forks_response = client.call_tool(call_tool("list_forks", json!({}))).await?;
+    assert!(
+        list_forks_response.is_error != Some(true),
+        "list_forks returned an error: {list_forks_response:?}"
+    );
+    let forks = extract_json(&list_forks_response)?;
+    let fork_list = if let Some(array) = forks.get("forks").and_then(Value::as_array) {
+        array.to_owned()
+    } else if let Some(array) = forks.as_array() {
+        array.to_owned()
+    } else if forks.as_object().is_some_and(|map| map.is_empty()) {
+        Vec::new()
+    } else {
+        panic!("list_forks response has unsupported shape: {forks:?}");
+    };
+    let has_fork = fork_list.iter().any(|f| f["fork_id"] == fork_id);
     assert!(!has_fork, "fork should be dropped after second save");
 
     client.cancel().await?;
