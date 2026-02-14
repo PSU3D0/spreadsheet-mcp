@@ -15,10 +15,6 @@ categories = ["command-line-utilities", "development-tools"]
 name = "spreadsheet-mcp"
 path = "src/main.rs"
 
-[[bin]]
-name = "spreadsheet-cli"
-path = "src/bin/cli.rs"
-
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"

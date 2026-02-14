@@ -7,6 +7,8 @@ Core shared primitives for the [spreadsheet-kit](https://github.com/PSU3D0/sprea
 
 ## What's in this crate
 
+- **Shared engine modules** — workbook model, repository layer, tools, diff/recalc pipelines
+- **`agent-spreadsheet` CLI binary** — stateless command surface for reads/edits/diff/recalc
 - **`CellEdit`** — canonical cell edit type (address + value + is_formula)
 - **`CoreWarning`** — structured warning type (code + message)
 - **`BasicDiffChange` / `BasicDiffResponse`** — diff result types
@@ -18,9 +20,7 @@ Core shared primitives for the [spreadsheet-kit](https://github.com/PSU3D0/sprea
 ## What's intentionally not here
 
 - **MCP server logic** — see [`spreadsheet-mcp`](../spreadsheet-mcp/)
-- **CLI surface** — see [`agent-spreadsheet`](../agent-spreadsheet/)
-- **Region detection, caching, formula analysis** — all in `spreadsheet-mcp`
-- **Recalc backends** — Formualizer and LibreOffice integration lives in `spreadsheet-mcp` behind feature flags
+- **MCP transport adapter** — lives in `spreadsheet-mcp`
 
 This crate is kept minimal so both the MCP server and the CLI can depend on it without pulling in server-specific dependencies.
 
@@ -49,8 +49,8 @@ assert!(formula.is_formula);
 
 | Crate | Role |
 | --- | --- |
-| [`spreadsheet-mcp`](../spreadsheet-mcp/) | Stateful MCP server |
-| [`agent-spreadsheet`](../agent-spreadsheet/) | Stateless CLI |
+| [`spreadsheet-mcp`](../spreadsheet-mcp/) | Stateful MCP server adapter |
+| [`spreadsheet-kit`](./) | Shared engine + `agent-spreadsheet` CLI |
 
 ## License
 
