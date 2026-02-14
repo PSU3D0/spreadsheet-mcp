@@ -2,6 +2,5 @@
 members = [
     "crates/spreadsheet-kit",
     "crates/spreadsheet-mcp",
-    "crates/agent-spreadsheet",
 ]
 resolver = "2"

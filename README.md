@@ -364,9 +364,8 @@ If recalc is disabled, all read, edit, and diff operations still work — only `
 ```
 spreadsheet-kit/
 ├── crates/
-│   ├── spreadsheet-kit/       # Core shared primitives (types, edit normalization)
-│   ├── spreadsheet-mcp/       # Stateful MCP server + all tool handlers
-│   └── agent-spreadsheet/     # Stateless CLI wrapper
+│   ├── spreadsheet-kit/       # Shared engine + agent-spreadsheet CLI binary
+│   └── spreadsheet-mcp/       # Stateful MCP server adapter
 ├── npm/
 │   └── agent-spreadsheet/     # npm binary distribution package
 ├── formualizer/               # Formula recalc engine (default backend)
@@ -376,9 +375,8 @@ spreadsheet-kit/
 
 | Crate | Role |
 | --- | --- |
-| [`spreadsheet-kit`](crates/spreadsheet-kit/) | Core types (`CellEdit`, `CoreWarning`), edit normalization, session trait |
-| [`spreadsheet-mcp`](crates/spreadsheet-mcp/) | MCP server, tool handlers, workbook cache, region detection, recalc |
-| [`agent-spreadsheet`](crates/agent-spreadsheet/) | Thin CLI binary wrapping `spreadsheet-mcp` tool logic |
+| [`spreadsheet-kit`](crates/spreadsheet-kit/) | Shared engine + `agent-spreadsheet` CLI binary |
+| [`spreadsheet-mcp`](crates/spreadsheet-mcp/) | MCP server adapter + transport layer |
 | [`agent-spreadsheet` (npm)](npm/agent-spreadsheet/) | npm wrapper — downloads prebuilt native binary on install |
 
 ---

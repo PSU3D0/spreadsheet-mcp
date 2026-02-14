@@ -72,7 +72,6 @@ docker run -v /path/to/workbooks:/data -p 8079:8079 \
 | Binary | Purpose |
 | --- | --- |
 | `spreadsheet-mcp` | MCP server (primary) |
-| `spreadsheet-cli` | Compatibility CLI entrypoint (same implementation as `agent-spreadsheet`) |
 
 ## Configuration
 
@@ -94,7 +93,6 @@ See the [full configuration reference](https://github.com/PSU3D0/spreadsheet-mcp
 | Crate | Role |
 | --- | --- |
 | [`spreadsheet-kit`](../spreadsheet-kit/) | Shared core primitives |
-| [`agent-spreadsheet`](../agent-spreadsheet/) | Stateless CLI wrapper |
 
 ## Full documentation
 

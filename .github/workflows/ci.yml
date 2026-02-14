@@ -48,7 +48,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build release binaries
-        run: cargo build --release --locked -p spreadsheet-mcp -p agent-spreadsheet
+        run: cargo build --release --locked -p spreadsheet-mcp -p spreadsheet-kit
 
       - name: Upload MCP artifact
         if: success()

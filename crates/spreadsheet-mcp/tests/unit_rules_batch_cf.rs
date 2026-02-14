@@ -373,10 +373,7 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
 
         let st = rule.get_style().expect("expected dxf-backed style");
         let desc = spreadsheet_mcp::styles::descriptor_from_style(st);
-        assert_eq!(
-            desc.font.as_ref().and_then(|f| f.bold).unwrap_or(false),
-            false
-        );
+        assert!(!desc.font.as_ref().and_then(|f| f.bold).unwrap_or(false));
         assert_eq!(
             desc.font.as_ref().and_then(|f| f.color.as_deref()),
             Some("FF123456")

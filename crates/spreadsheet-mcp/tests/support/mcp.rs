@@ -186,7 +186,7 @@ pub fn cell_error_type(page: &Value, row: usize, col: usize) -> Option<String> {
     None
 }
 
-fn sheet_page_value_node<'a>(page: &'a Value, row: usize, col: usize) -> Option<&'a Value> {
+fn sheet_page_value_node(page: &Value, row: usize, col: usize) -> Option<&Value> {
     // Full format: rows[].cells[].value
     if page.get("rows").and_then(|v| v.as_array()).is_some() {
         let cell = &page["rows"][row]["cells"][col];
