@@ -34,7 +34,10 @@ agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 
 All commands output JSON to stdout.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
-Compact shape flattens single-range `range-values` responses while preserving `workbook_id`.
+For `range-values`, shape policy is:
+- **Canonical (default/omitted):** return `values: [...]` when entries are present.
+- **Compact (single range):** flatten that entry to top-level fields (`range`, payload, optional `next_start_row`).
+- **Compact (multiple ranges):** keep `values: [...]` with per-entry `range`.
 Use `--compact` to minimize whitespace.
 For CSV, use command-specific options such as `read-table --table-format csv`.
 

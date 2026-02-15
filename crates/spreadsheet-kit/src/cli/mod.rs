@@ -66,7 +66,7 @@ pub struct Cli {
         value_enum,
         default_value_t = OutputShape::Canonical,
         global = true,
-        help = "Output shape (canonical keeps the full schema; compact reduces tokens by flattening single-range range-values responses)"
+        help = "Output shape (canonical default keeps full schema; compact only flattens single-range range-values responses and preserves continuation fields like next_start_row)"
     )]
     pub shape: OutputShape,
 
@@ -103,7 +103,7 @@ pub enum Commands {
     },
     #[command(
         about = "Read raw values for one or more A1 ranges",
-        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"
+        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range."
     )]
     RangeValues {
         #[arg(value_name = "FILE", help = "Path to the workbook")]

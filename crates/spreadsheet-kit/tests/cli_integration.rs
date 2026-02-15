@@ -243,13 +243,13 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     let canonical_payload = parse_stdout_json(&canonical);
     assert!(canonical_payload.get("workbook_id").is_some());
     assert!(canonical_payload.get("workbook_short_id").is_none());
-    assert_eq!(
-        canonical_payload
-            .get("values")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
+    let canonical_values = canonical_payload["values"]
+        .as_array()
+        .expect("canonical single-range values");
+    assert_eq!(canonical_values.len(), 1);
+    let canonical_entry = canonical_values.first().expect("single range entry");
+    assert_eq!(canonical_entry["range"], "A1:C4");
+    assert!(canonical_entry.get("rows").is_some());
 
     let compact = run_cli(&[
         "--shape",
@@ -353,6 +353,9 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         .as_array()
         .expect("canonical multi-range values");
     assert_eq!(canonical_values.len(), 2);
+    assert!(canonical_values.iter().all(|entry| {
+        entry.get("range").and_then(Value::as_str).is_some() && entry.get("rows").is_some()
+    }));
 
     let compact = run_cli(&[
         "--shape",
@@ -367,6 +370,7 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
     let compact_payload = parse_stdout_json(&compact);
     assert!(compact_payload.get("workbook_id").is_some());
     assert!(compact_payload.get("workbook_short_id").is_none());
+    assert!(compact_payload.get("range").is_none());
     let compact_values = compact_payload["values"]
         .as_array()
         .expect("compact multi-range values");
@@ -375,6 +379,77 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         compact_values
             .iter()
             .all(|entry| entry.get("range").and_then(Value::as_str).is_some())
+    );
+}
+
+#[test]
+fn cli_range_values_shape_default_matches_explicit_canonical() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-default-canonical.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let default_shape = run_cli(&["range-values", file, "Sheet1", "A1:C4", "B1:B2"]);
+    assert!(
+        default_shape.status.success(),
+        "stderr: {:?}",
+        default_shape.stderr
+    );
+
+    let explicit_canonical = run_cli(&[
+        "--shape",
+        "canonical",
+        "range-values",
+        file,
+        "Sheet1",
+        "A1:C4",
+        "B1:B2",
+    ]);
+    assert!(
+        explicit_canonical.status.success(),
+        "stderr: {:?}",
+        explicit_canonical.stderr
+    );
+
+    let default_payload = parse_stdout_json(&default_shape);
+    let canonical_payload = parse_stdout_json(&explicit_canonical);
+    assert_eq!(default_payload, canonical_payload);
+}
+
+#[test]
+fn cli_range_values_shape_compact_multi_range_preserves_next_start_row_without_flattening() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-multi-continuation.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "range-values",
+        file,
+        "Sheet1",
+        "A1:XFD1",
+        "B1:B2",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+    assert!(compact_payload.get("range").is_none());
+
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact multi-range continuation values");
+    assert_eq!(compact_values.len(), 2);
+
+    let paged_entry = compact_values
+        .iter()
+        .find(|entry| entry.get("range").and_then(Value::as_str) == Some("A1:XFD1"))
+        .expect("paged entry present");
+    assert_eq!(paged_entry["next_start_row"].as_u64(), Some(1));
+    assert!(
+        compact_values
+            .iter()
+            .any(|entry| entry.get("range").and_then(Value::as_str) == Some("B1:B2"))
     );
 }
 
