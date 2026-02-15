@@ -876,6 +876,15 @@ pub struct TableProfileResponse {
     pub notes: Vec<String>,
 }
 
+/// Canonical `range-values` response contract.
+///
+/// CLI `--shape canonical` uses a `values: Vec<RangeValuesEntry>` envelope whenever
+/// at least one range entry is emitted. Because CLI output pruning removes empty arrays,
+/// `values` may be omitted when no valid entries remain (for example, fully invalid
+/// or unparseable range inputs).
+///
+/// CLI `--shape compact` may project a single entry to top-level for token efficiency,
+/// but this struct remains the source-of-truth schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesResponse {
     pub workbook_id: WorkbookId,
@@ -885,6 +894,12 @@ pub struct RangeValuesResponse {
     pub values: Vec<RangeValuesEntry>,
 }
 
+/// Per-range payload for `range-values`.
+///
+/// `range` is the mandatory correlation key in both canonical and compact shapes.
+/// `next_start_row` is an optional continuation cursor when output is truncated; it
+/// must stay representable both inside `values[]` (canonical) and after compact
+/// single-entry flattening.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesEntry {
     pub range: String,

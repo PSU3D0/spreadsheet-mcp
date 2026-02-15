@@ -269,6 +269,75 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
 }
 
 #[test]
+fn cli_range_values_shape_continuation_representable_canonical_and_compact() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-continuation.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // `A1:XFD1` is wider than the CLI max-cells cap (10_000), so the response keeps
+    // a continuation cursor but no materialized row payload after pruning.
+    let canonical = run_cli(&["range-values", file, "Sheet1", "A1:XFD1"]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+    assert!(canonical_payload.get("workbook_id").is_some());
+    assert!(canonical_payload.get("workbook_short_id").is_none());
+    let canonical_values = canonical_payload["values"]
+        .as_array()
+        .expect("canonical continuation values");
+    assert_eq!(canonical_values.len(), 1);
+    let canonical_entry = canonical_values.first().expect("single continuation entry");
+    assert_eq!(canonical_entry["range"], "A1:XFD1");
+    assert_eq!(canonical_entry["next_start_row"].as_u64(), Some(1));
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "range-values",
+        file,
+        "Sheet1",
+        "A1:XFD1",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+    assert!(compact_payload.get("workbook_id").is_some());
+    assert!(compact_payload.get("workbook_short_id").is_none());
+    assert!(compact_payload.get("values").is_none());
+    assert_eq!(compact_payload["range"], "A1:XFD1");
+    assert_eq!(compact_payload["next_start_row"].as_u64(), Some(1));
+}
+
+#[test]
+fn cli_range_values_invalid_range_omits_values_in_both_shapes() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-invalid-range.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&["range-values", file, "Sheet1", "NOT_A_RANGE"]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+    assert!(canonical_payload.get("workbook_id").is_some());
+    assert!(canonical_payload.get("sheet_name").is_some());
+    assert!(canonical_payload.get("values").is_none());
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "range-values",
+        file,
+        "Sheet1",
+        "NOT_A_RANGE",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+    assert!(compact_payload.get("workbook_id").is_some());
+    assert!(compact_payload.get("sheet_name").is_some());
+    assert!(compact_payload.get("values").is_none());
+    assert!(compact_payload.get("range").is_none());
+}
+
+#[test]
 fn cli_range_values_shape_multi_range_canonical_vs_compact() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("shape-multi.xlsx");

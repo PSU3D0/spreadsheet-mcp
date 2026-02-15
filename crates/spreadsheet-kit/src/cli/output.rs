@@ -35,6 +35,11 @@ fn apply_shape(value: &mut Value, shape: OutputShape) {
         return;
     }
 
+    // Policy (ticket 3104): compact mode only changes projection for range-values.
+    // Single-entry responses flatten `values[0]` into top-level fields; multi-entry
+    // responses retain the `values` array. Flattening is keyed by entry count and
+    // mandatory `range`, so continuation-only entries (`next_start_row`) remain
+    // representable even if payload branches were pruned.
     remove_workbook_short_id(value);
     flatten_single_range_values(value);
 }
@@ -61,6 +66,13 @@ fn flatten_single_range_values(value: &mut Value) {
         return;
     };
 
+    let looks_like_range_values_response = obj.get("workbook_id").is_some()
+        && obj.get("sheet_name").is_some()
+        && obj.get("values").is_some();
+    if !looks_like_range_values_response {
+        return;
+    }
+
     let Some(Value::Array(entries)) = obj.get("values") else {
         return;
     };
@@ -73,11 +85,7 @@ fn flatten_single_range_values(value: &mut Value) {
         return;
     };
 
-    let looks_like_range_values_entry = entry.get("range").is_some()
-        && (entry.contains_key("rows")
-            || entry.contains_key("values")
-            || entry.contains_key("csv"));
-    if !looks_like_range_values_entry {
+    if entry.get("range").is_none() {
         return;
     }
 
