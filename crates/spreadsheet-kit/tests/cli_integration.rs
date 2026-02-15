@@ -35,6 +35,23 @@ fn write_fixture(path: &Path) {
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
 }
 
+fn write_trace_pagination_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value_number(1.0);
+        for row in 1..=18 {
+            let address = format!("B{row}");
+            let formula = format!("A1+{row}");
+            sheet.get_cell_mut(address.as_str()).set_formula(formula);
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
 fn run_cli(args: &[&str]) -> std::process::Output {
     Command::new(assert_cmd::cargo::cargo_bin!("agent-spreadsheet"))
         .args(args)
@@ -54,6 +71,20 @@ fn parse_stderr_json(output: &std::process::Output) -> Value {
 
 fn parse_stdout_text(output: &std::process::Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout utf8")
+}
+
+fn assert_invalid_argument(args: &[&str]) -> Value {
+    let output = run_cli(args);
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded for args: {args:?}"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(
+        err["code"], "INVALID_ARGUMENT",
+        "unexpected error envelope: {err}"
+    );
+    err
 }
 
 #[test]
@@ -229,6 +260,423 @@ fn cli_read_commands_cover_ticket_surface() {
             .unwrap_or(0)
             >= 3
     );
+}
+
+#[test]
+fn cli_read_table_pagination_round_trips_next_offset_with_sample_mode_first() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("read-table-pagination.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let mut offset = 0u32;
+    let mut saw_continuation = false;
+    let mut saw_terminal = false;
+
+    for _ in 0..10 {
+        let offset_arg = offset.to_string();
+        let page = run_cli(&[
+            "read-table",
+            file,
+            "--sheet",
+            "Sheet1",
+            "--range",
+            "A1:C4",
+            "--table-format",
+            "json",
+            "--sample-mode",
+            "first",
+            "--limit",
+            "1",
+            "--offset",
+            offset_arg.as_str(),
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+
+        let payload = parse_stdout_json(&page);
+        assert!(payload["rows"].is_array());
+
+        if let Some(next_offset) = payload["next_offset"].as_u64() {
+            saw_continuation = true;
+            assert!(
+                next_offset > offset as u64,
+                "next_offset must strictly increase for sample-mode=first"
+            );
+            offset = next_offset as u32;
+        } else {
+            saw_terminal = true;
+            break;
+        }
+    }
+
+    assert!(saw_continuation, "expected at least one continuation page");
+    assert!(saw_terminal, "pagination did not reach a terminal page");
+}
+
+#[test]
+fn cli_formula_trace_pagination_round_trips_next_cursor_until_terminal() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-trace-pagination.xlsx");
+    write_trace_pagination_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let first_page = run_cli(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        first_page.status.success(),
+        "stderr: {:?}",
+        first_page.stderr
+    );
+    let first_payload = parse_stdout_json(&first_page);
+    let first_cursor = first_payload["next_cursor"]
+        .as_object()
+        .expect("expected next_cursor on first trace page");
+    let mut cursor_depth = first_cursor["depth"].as_u64().expect("cursor depth") as u32;
+    let mut cursor_offset = first_cursor["offset"].as_u64().expect("cursor offset") as usize;
+
+    let mut saw_terminal = false;
+    for _ in 0..10 {
+        let depth_arg = cursor_depth.to_string();
+        let offset_arg = cursor_offset.to_string();
+        let page = run_cli(&[
+            "formula-trace",
+            file,
+            "Sheet1",
+            "A1",
+            "dependents",
+            "--depth",
+            "1",
+            "--page-size",
+            "5",
+            "--cursor-depth",
+            depth_arg.as_str(),
+            "--cursor-offset",
+            offset_arg.as_str(),
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+
+        let payload = parse_stdout_json(&page);
+        if let Some(next_cursor) = payload["next_cursor"].as_object() {
+            let next_depth = next_cursor["depth"].as_u64().expect("next depth");
+            let next_offset = next_cursor["offset"].as_u64().expect("next offset");
+            assert_eq!(
+                next_depth, cursor_depth as u64,
+                "cursor depth should round-trip unchanged"
+            );
+            assert!(
+                next_offset > cursor_offset as u64,
+                "cursor offset should strictly increase while paginating"
+            );
+            cursor_depth = next_depth as u32;
+            cursor_offset = next_offset as usize;
+        } else {
+            saw_terminal = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_terminal,
+        "formula-trace pagination did not reach a terminal page"
+    );
+}
+
+#[test]
+fn cli_read_table_filters_support_unfiltered_json_and_file_inputs() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("read-table-filters.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let unfiltered = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+    ]);
+    assert!(
+        unfiltered.status.success(),
+        "stderr: {:?}",
+        unfiltered.stderr
+    );
+    let unfiltered_payload = parse_stdout_json(&unfiltered);
+    assert_eq!(unfiltered_payload["rows"].as_array().map(Vec::len), Some(3));
+
+    let filters_json = r#"[{"column":"Name","op":"eq","value":"Alice"}]"#;
+    let filtered_json = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--filters-json",
+        filters_json,
+    ]);
+    assert!(
+        filtered_json.status.success(),
+        "stderr: {:?}",
+        filtered_json.stderr
+    );
+    let filtered_json_payload = parse_stdout_json(&filtered_json);
+    assert_eq!(
+        filtered_json_payload["rows"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let filters_file = tmp.path().join("filters.json");
+    std::fs::write(&filters_file, filters_json).expect("write filters file");
+    let filters_file_path = filters_file.to_str().expect("filters path utf8");
+    let filtered_file = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--filters-file",
+        filters_file_path,
+    ]);
+    assert!(
+        filtered_file.status.success(),
+        "stderr: {:?}",
+        filtered_file.stderr
+    );
+    let filtered_file_payload = parse_stdout_json(&filtered_file);
+    assert_eq!(
+        filtered_file_payload["rows"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+#[test]
+fn cli_read_table_allows_last_and_distributed_sampling_at_zero_offset() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("read-table-sample-modes.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let last = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "last",
+        "--offset",
+        "0",
+        "--limit",
+        "2",
+    ]);
+    assert!(last.status.success(), "stderr: {:?}", last.stderr);
+    let last_payload = parse_stdout_json(&last);
+    assert!(last_payload["rows"].is_array());
+
+    let distributed = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "distributed",
+        "--offset",
+        "0",
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        distributed.status.success(),
+        "stderr: {:?}",
+        distributed.stderr
+    );
+    let distributed_payload = parse_stdout_json(&distributed);
+    assert!(distributed_payload["rows"].is_array());
+}
+
+#[test]
+fn cli_pagination_surface_validation_failures_use_invalid_argument() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("validation.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let filter_file = tmp.path().join("filters.json");
+    let filter_json = r#"[{"column":"Name","op":"eq","value":"Alice"}]"#;
+    std::fs::write(&filter_file, filter_json).expect("write filters file");
+    let filter_file_path = filter_file.to_str().expect("path utf8");
+
+    let malformed_filter_file = tmp.path().join("bad-filters.json");
+    std::fs::write(&malformed_filter_file, "{not-json").expect("write malformed filter file");
+    let malformed_filter_file_path = malformed_filter_file.to_str().expect("path utf8");
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--filters-json",
+        filter_json,
+        "--filters-file",
+        filter_file_path,
+    ]);
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--filters-json",
+        "{",
+    ]);
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--filters-file",
+        malformed_filter_file_path,
+    ]);
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--limit",
+        "0",
+    ]);
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--sample-mode",
+        "last",
+        "--offset",
+        "1",
+    ]);
+
+    assert_invalid_argument(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--sample-mode",
+        "distributed",
+        "--offset",
+        "1",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--cursor-depth",
+        "1",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--cursor-offset",
+        "1",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--depth",
+        "0",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--depth",
+        "6",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--page-size",
+        "4",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--page-size",
+        "201",
+    ]);
+
+    assert_invalid_argument(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C2",
+        "precedents",
+        "--cursor-depth",
+        "0",
+        "--cursor-offset",
+        "0",
+    ]);
 }
 
 #[test]
