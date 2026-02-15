@@ -227,7 +227,6 @@ pub async fn list_sheets(
 
     let response = SheetListResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheets: summaries,
         next_offset,
     };
@@ -375,7 +374,6 @@ fn build_workbook_summary(
 
     Ok(WorkbookSummaryResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         slug: workbook.slug.clone(),
         sheet_count: sheet_names.len(),
         total_cells,
@@ -1046,7 +1044,6 @@ pub async fn sheet_formula_map(
         let group_limit = cap_rows_by_payload_bytes(groups.len(), Some(max_bytes), |count| {
             let response = SheetFormulaMapResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 sheet_name: params.sheet_name.clone(),
                 groups: groups[..count].to_vec(),
                 next_offset: None,
@@ -1069,7 +1066,6 @@ pub async fn sheet_formula_map(
 
     let response = SheetFormulaMapResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name.clone(),
         groups,
         next_offset,
@@ -1124,7 +1120,6 @@ pub async fn formula_trace(
 
     let response = FormulaTraceResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name.clone(),
         origin,
         direction: params.direction.clone(),
@@ -1165,7 +1160,6 @@ pub async fn named_ranges(
 
     let response = NamedRangesResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         items,
     };
     Ok(response)
@@ -1713,7 +1707,6 @@ fn build_sheet_page_response(
 
     SheetPageResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: sheet_name.to_string(),
         rows: rows_payload,
         next_start_row,
@@ -1813,7 +1806,6 @@ pub async fn sheet_statistics(
         let response_size = |numeric: &Vec<ColumnSummary>, text: &Vec<ColumnSummary>| {
             let response = SheetStatisticsResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 sheet_name: params.sheet_name.clone(),
                 row_count: sheet_metrics.metrics.row_count,
                 column_count: sheet_metrics.metrics.column_count,
@@ -1852,7 +1844,6 @@ pub async fn sheet_statistics(
 
     Ok(SheetStatisticsResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name,
         row_count: sheet_metrics.metrics.row_count,
         column_count: sheet_metrics.metrics.column_count,
@@ -2714,7 +2705,6 @@ pub async fn find_formula(
 
     let response = FindFormulaResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         matches,
         next_offset,
     };
@@ -2807,7 +2797,6 @@ pub async fn scan_volatiles(
         let item_limit = cap_rows_by_payload_bytes(items.len(), Some(max_bytes), |count| {
             let response = VolatileScanResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 items: items[..count].to_vec(),
                 next_offset: None,
             };
@@ -2829,7 +2818,6 @@ pub async fn scan_volatiles(
 
     let response = VolatileScanResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         items,
         next_offset,
     };
@@ -3122,7 +3110,6 @@ pub async fn workbook_style_summary(
         let style_limit = cap_rows_by_payload_bytes(styles.len(), Some(max_bytes), |count| {
             let response = WorkbookStyleSummaryResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 theme: theme.clone(),
                 inferred_default_style_id: inferred_default_style_id.clone(),
                 inferred_default_font: inferred_default_font.clone(),
@@ -3149,7 +3136,6 @@ pub async fn workbook_style_summary(
                 cap_rows_by_payload_bytes(conditional_formats.len(), Some(max_bytes), |count| {
                     let response = WorkbookStyleSummaryResponse {
                         workbook_id: workbook.id.clone(),
-                        workbook_short_id: workbook.short_id.clone(),
                         theme: theme.clone(),
                         inferred_default_style_id: inferred_default_style_id.clone(),
                         inferred_default_font: inferred_default_font.clone(),
@@ -3175,7 +3161,6 @@ pub async fn workbook_style_summary(
 
     Ok(WorkbookStyleSummaryResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         theme,
         inferred_default_style_id,
         inferred_default_font,
@@ -3393,7 +3378,6 @@ pub async fn sheet_styles(
         let row_limit = cap_rows_by_payload_bytes(styles.len(), Some(max_bytes), |count| {
             let response = SheetStylesResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 sheet_name: params.sheet_name.clone(),
                 styles: styles[..count].to_vec(),
                 conditional_rules: Vec::new(),
@@ -3412,7 +3396,6 @@ pub async fn sheet_styles(
 
     Ok(SheetStylesResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name.clone(),
         styles,
         conditional_rules: Vec::new(),
@@ -3585,7 +3568,6 @@ pub async fn range_values(
 
     Ok(RangeValuesResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: params.sheet_name,
         warnings,
         values,
@@ -3662,7 +3644,6 @@ pub async fn find_value(
 
     Ok(FindValueResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         matches,
         next_offset,
     })
@@ -3749,7 +3730,6 @@ pub async fn read_table(
             );
             let response = ReadTableResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 sheet_name: resolved.sheet_name.clone(),
                 table_name: resolved.table_name.clone(),
                 warnings: warnings.clone(),
@@ -3778,7 +3758,6 @@ pub async fn read_table(
 
     Ok(ReadTableResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: resolved.sheet_name,
         table_name: resolved.table_name,
         warnings,
@@ -3871,7 +3850,6 @@ pub async fn table_profile(
             let sample_limit = cap_rows_by_payload_bytes(samples.len(), Some(max_bytes), |count| {
                 let response = TableProfileResponse {
                     workbook_id: workbook.id.clone(),
-                    workbook_short_id: workbook.short_id.clone(),
                     sheet_name: resolved.sheet_name.clone(),
                     table_name: resolved.table_name.clone(),
                     headers: headers.clone(),
@@ -3890,7 +3868,6 @@ pub async fn table_profile(
 
             let response = TableProfileResponse {
                 workbook_id: workbook.id.clone(),
-                workbook_short_id: workbook.short_id.clone(),
                 sheet_name: resolved.sheet_name.clone(),
                 table_name: resolved.table_name.clone(),
                 headers: headers.clone(),
@@ -3914,7 +3891,6 @@ pub async fn table_profile(
                             .collect::<Vec<_>>();
                         let response = TableProfileResponse {
                             workbook_id: workbook.id.clone(),
-                            workbook_short_id: workbook.short_id.clone(),
                             sheet_name: resolved.sheet_name.clone(),
                             table_name: resolved.table_name.clone(),
                             headers: headers_slice,
@@ -3942,7 +3918,6 @@ pub async fn table_profile(
 
     Ok(TableProfileResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         sheet_name: resolved.sheet_name,
         table_name: resolved.table_name,
         headers,
@@ -3986,7 +3961,6 @@ pub async fn get_manifest_stub(
 
     let response = ManifestStubResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         slug: workbook.slug.clone(),
         sheets,
     };

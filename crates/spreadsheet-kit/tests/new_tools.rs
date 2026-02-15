@@ -41,6 +41,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         },
     )
     .await?;
+    let sheets_json = serde_json::to_value(&sheets)?;
+    assert!(sheets_json.get("workbook_short_id").is_none());
     let target_summary = sheets
         .sheets
         .iter()
@@ -123,6 +125,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         },
     )
     .await?;
+    let table_json = serde_json::to_value(&table)?;
+    assert!(table_json.get("workbook_short_id").is_none());
     assert_eq!(table.headers, vec!["Date", "Revenue", "Cost"]);
     assert_eq!(table.total_rows, 3);
     assert_eq!(table.rows.len(), 3);
@@ -153,6 +157,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         },
     )
     .await?;
+    let ranges_json = serde_json::to_value(&ranges)?;
+    assert!(ranges_json.get("workbook_short_id").is_none());
     assert_eq!(ranges.values.len(), 2);
 
     let values_only = sheet_page(

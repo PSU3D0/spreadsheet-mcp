@@ -68,7 +68,6 @@ pub struct WorkbookDescription {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkbookSummaryResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub slug: String,
     pub sheet_count: usize,
     pub total_cells: u64,
@@ -141,7 +140,6 @@ pub enum SheetClassification {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetListResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheets: Vec<SheetSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
@@ -150,7 +148,6 @@ pub struct SheetListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetOverviewResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub narrative: String,
     pub regions: Vec<SheetRegion>,
@@ -209,7 +206,6 @@ pub struct DetectedRegion {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetPageResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<RowSnapshot>,
@@ -301,7 +297,6 @@ pub struct SheetPageValues {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetStatisticsResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub row_count: u32,
     pub column_count: u32,
@@ -328,7 +323,6 @@ pub struct ColumnSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetFormulaMapResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub groups: Vec<FormulaGroup>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -351,7 +345,6 @@ pub struct FormulaGroup {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FormulaTraceResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub origin: String,
     pub direction: TraceDirection,
@@ -467,7 +460,6 @@ pub enum NamedItemKind {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NamedRangesResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub items: Vec<NamedRangeDescriptor>,
 }
 
@@ -483,7 +475,6 @@ pub struct FindFormulaMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindFormulaResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub matches: Vec<FindFormulaMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
@@ -500,7 +491,6 @@ pub struct VolatileScanEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VolatileScanResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub items: Vec<VolatileScanEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
@@ -691,7 +681,6 @@ pub struct AlignmentPatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SheetStylesResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub styles: Vec<StyleSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -716,7 +705,6 @@ pub struct StyleSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkbookStyleSummaryResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -772,7 +760,6 @@ pub struct ConditionalFormatSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestStubResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub slug: String,
     pub sheets: Vec<ManifestSheetStub>,
 }
@@ -834,7 +821,6 @@ pub struct LabelHit {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindValueResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub matches: Vec<FindValueMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
@@ -845,7 +831,6 @@ pub type TableRow = BTreeMap<String, Option<CellValue>>;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadTableResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub table_name: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -880,7 +865,6 @@ pub struct ColumnTypeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TableProfileResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     pub table_name: Option<String>,
     pub headers: Vec<String>,
@@ -895,7 +879,6 @@ pub struct TableProfileResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub sheet_name: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
@@ -924,7 +907,6 @@ pub struct CloseWorkbookResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VbaProjectSummaryResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub has_vba: bool,
     pub code_page: Option<u16>,
     pub sys_kind: Option<String>,
@@ -956,7 +938,6 @@ pub struct VbaReferenceDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VbaModuleSourceResponse {
     pub workbook_id: WorkbookId,
-    pub workbook_short_id: String,
     pub module_name: String,
     pub offset_lines: u32,
     pub limit_lines: u32,

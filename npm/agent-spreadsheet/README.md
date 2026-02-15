@@ -32,7 +32,10 @@ agent-spreadsheet edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
 agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 ```
 
-All commands output JSON to stdout. Use `--compact` to minimize whitespace.
+All commands output JSON to stdout.
+Use `--shape canonical|compact` (default: `canonical`) to control response shape.
+Compact shape flattens single-range `range-values` responses while preserving `workbook_id`.
+Use `--compact` to minimize whitespace.
 For CSV, use command-specific options such as `read-table --table-format csv`.
 
 ## Platform support

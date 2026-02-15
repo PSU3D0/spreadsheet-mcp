@@ -8,3 +8,4 @@ private_planning/
 .worktrees/
 tickets/
 .venv/
+.pi

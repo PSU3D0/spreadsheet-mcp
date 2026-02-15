@@ -417,7 +417,6 @@ impl WorkbookContext {
 
         Ok(SheetOverviewResponse {
             workbook_id: self.id.clone(),
-            workbook_short_id: self.short_id.clone(),
             sheet_name: sheet_name.to_string(),
             narrative,
             regions,

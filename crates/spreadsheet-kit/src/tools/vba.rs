@@ -40,7 +40,6 @@ pub async fn vba_project_summary(
     if raw.is_none() {
         return Ok(VbaProjectSummaryResponse {
             workbook_id: workbook.id.clone(),
-            workbook_short_id: workbook.short_id.clone(),
             has_vba: false,
             code_page: None,
             sys_kind: None,
@@ -106,7 +105,6 @@ pub async fn vba_project_summary(
 
     Ok(VbaProjectSummaryResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         has_vba: true,
         code_page: Some(project.information.code_page),
         sys_kind,
@@ -179,7 +177,6 @@ pub async fn vba_module_source(
 
     Ok(VbaModuleSourceResponse {
         workbook_id: workbook.id.clone(),
-        workbook_short_id: workbook.short_id.clone(),
         module_name: params.module_name,
         offset_lines: offset,
         limit_lines: limit,

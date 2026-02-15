@@ -55,6 +55,8 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
         },
     )
     .await?;
+    let description_json = serde_json::to_value(&description)?;
+    assert!(description_json.get("workbook_short_id").is_none());
     assert_eq!(description.sheet_count, 2);
     assert!(description.bytes > 0);
     assert!(description.caps.supports_formula_graph);
@@ -69,6 +71,8 @@ async fn describe_and_overview_suite(state: Arc<AppState>, workbook_id: Workbook
         },
     )
     .await?;
+    let sheets_json = serde_json::to_value(&sheets)?;
+    assert!(sheets_json.get("workbook_short_id").is_none());
     assert_eq!(sheets.sheets.len(), 2);
     let data_sheet = sheets
         .sheets
@@ -222,6 +226,8 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
         },
     )
     .await?;
+    let trace_json = serde_json::to_value(&trace)?;
+    assert!(trace_json.get("workbook_short_id").is_none());
     assert_eq!(trace.origin, "E21");
     if !matches!(trace.direction, TraceDirection::Precedents) {
         panic!("expected precedents trace");
