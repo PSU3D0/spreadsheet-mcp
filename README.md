@@ -90,7 +90,10 @@ agent-spreadsheet recalculate /tmp/draft.xlsx
 agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 ```
 
-All output is JSON by default. Use `--compact` to minimize whitespace or `--quiet` to suppress warnings.
+All output is JSON by default.
+Use `--shape canonical|compact` (default: `canonical`) to control response shape.
+Compact shape flattens single-range `range-values` responses while preserving `workbook_id`.
+Use `--compact` to minimize whitespace and `--quiet` to suppress warnings.
 For CSV, use command-specific options such as `read-table --table-format csv`.
 
 ### CLI command reference

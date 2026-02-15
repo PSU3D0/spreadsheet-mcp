@@ -52,6 +52,71 @@ fn parse_stderr_json(output: &std::process::Output) -> Value {
     serde_json::from_str(&stderr).expect("valid json error")
 }
 
+fn parse_stdout_text(output: &std::process::Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout utf8")
+}
+
+#[test]
+fn cli_help_surfaces_include_descriptions_and_examples() {
+    let root_help = run_cli(&["--help"]);
+    assert!(root_help.status.success(), "stderr: {:?}", root_help.stderr);
+    let root = parse_stdout_text(&root_help);
+    assert!(root.contains("Stateless spreadsheet CLI for AI and automation workflows"));
+    assert!(root.contains("Common workflows:"));
+    assert!(root.contains("global --format csv is currently unsupported"));
+    assert!(root.contains("find-value"));
+    assert!(root.contains("Find cells matching a text query by value or label"));
+
+    let find_help = run_cli(&["find-value", "--help"]);
+    assert!(find_help.status.success(), "stderr: {:?}", find_help.stderr);
+    let find = parse_stdout_text(&find_help);
+    assert!(find.contains("Find cells matching a text query by value or label"));
+    assert!(find.contains("Examples:"));
+    assert!(
+        find.contains("find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label")
+    );
+
+    let formula_help = run_cli(&["formula-map", "--help"]);
+    assert!(
+        formula_help.status.success(),
+        "stderr: {:?}",
+        formula_help.stderr
+    );
+    let formula = parse_stdout_text(&formula_help);
+    assert!(formula.contains("Summarize formulas on a sheet by complexity or frequency"));
+    assert!(formula.contains("Examples:"));
+    assert!(formula.contains("formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25"));
+
+    let table_help = run_cli(&["table-profile", "--help"]);
+    assert!(
+        table_help.status.success(),
+        "stderr: {:?}",
+        table_help.stderr
+    );
+    let table = parse_stdout_text(&table_help);
+    assert!(table.contains("Profile table headers, types, and column distributions"));
+    assert!(table.contains("Examples:"));
+    assert!(table.contains("table-profile data.xlsx --sheet \"Q1 Actuals\""));
+
+    let diff_help = run_cli(&["diff", "--help"]);
+    assert!(diff_help.status.success(), "stderr: {:?}", diff_help.stderr);
+    let diff = parse_stdout_text(&diff_help);
+    assert!(diff.contains("Diff two workbook versions and report changed cells"));
+    assert!(diff.contains("Examples:"));
+    assert!(diff.contains("diff baseline.xlsx candidate.xlsx"));
+
+    let range_help = run_cli(&["range-values", "--help"]);
+    assert!(
+        range_help.status.success(),
+        "stderr: {:?}",
+        range_help.stderr
+    );
+    let range = parse_stdout_text(&range_help);
+    assert!(range.contains("Read raw values for one or more A1 ranges"));
+    assert!(range.contains("Examples:"));
+    assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
+}
+
 #[test]
 fn cli_read_commands_cover_ticket_surface() {
     let tmp = tempdir().expect("tempdir");
@@ -101,6 +166,8 @@ fn cli_read_commands_cover_ticket_surface() {
         range_values.stderr
     );
     let range_values_payload = parse_stdout_json(&range_values);
+    assert!(range_values_payload.get("workbook_id").is_some());
+    assert!(range_values_payload.get("workbook_short_id").is_none());
     let entries = range_values_payload["values"]
         .as_array()
         .expect("range values entries");
@@ -161,6 +228,84 @@ fn cli_read_commands_cover_ticket_surface() {
             .map(Vec::len)
             .unwrap_or(0)
             >= 3
+    );
+}
+
+#[test]
+fn cli_range_values_shape_single_range_canonical_vs_compact() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-single.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&["range-values", file, "Sheet1", "A1:C4"]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+    assert!(canonical_payload.get("workbook_id").is_some());
+    assert!(canonical_payload.get("workbook_short_id").is_none());
+    assert_eq!(
+        canonical_payload
+            .get("values")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "range-values",
+        file,
+        "Sheet1",
+        "A1:C4",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+    assert!(compact_payload.get("workbook_id").is_some());
+    assert!(compact_payload.get("workbook_short_id").is_none());
+    assert!(compact_payload.get("values").is_none());
+    assert_eq!(compact_payload["range"], "A1:C4");
+    assert!(compact_payload.get("rows").is_some());
+}
+
+#[test]
+fn cli_range_values_shape_multi_range_canonical_vs_compact() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-multi.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&["range-values", file, "Sheet1", "A1:A2", "B1:B2"]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+    assert!(canonical_payload.get("workbook_id").is_some());
+    assert!(canonical_payload.get("workbook_short_id").is_none());
+    let canonical_values = canonical_payload["values"]
+        .as_array()
+        .expect("canonical multi-range values");
+    assert_eq!(canonical_values.len(), 2);
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "range-values",
+        file,
+        "Sheet1",
+        "A1:A2",
+        "B1:B2",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+    assert!(compact_payload.get("workbook_id").is_some());
+    assert!(compact_payload.get("workbook_short_id").is_none());
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact multi-range values");
+    assert_eq!(compact_values.len(), 2);
+    assert!(
+        compact_values
+            .iter()
+            .all(|entry| entry.get("range").and_then(Value::as_str).is_some())
     );
 }
 
