@@ -1320,11 +1320,18 @@ fn resolve_columns_with_headers(
     columns_by_header: Option<&Vec<String>>,
     max_column: u32,
 ) -> Vec<u32> {
+    use std::collections::BTreeSet;
+
     if columns_by_header.is_none() {
         return resolve_columns(columns, max_column);
     }
 
-    let mut selected = Vec::new();
+    let mut selected: BTreeSet<u32> = if columns.is_some() {
+        resolve_columns(columns, max_column).into_iter().collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut matched_header = false;
     let header_targets: Vec<String> = columns_by_header
         .unwrap()
         .iter()
@@ -1339,14 +1346,15 @@ fn resolve_columns_with_headers(
         if let Some(hval) = header_value
             && header_targets.iter().any(|target| target == &hval)
         {
-            selected.push(col_idx);
+            selected.insert(col_idx);
+            matched_header = true;
         }
     }
 
-    if selected.is_empty() {
-        resolve_columns(columns, max_column)
+    if !matched_header && columns.is_none() {
+        resolve_columns(None, max_column)
     } else {
-        selected
+        selected.into_iter().collect()
     }
 }
 

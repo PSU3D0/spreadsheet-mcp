@@ -6,7 +6,7 @@ pub fn ensure_output_supported(format: OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Json => Ok(()),
         OutputFormat::Csv => {
-            bail!("csv output is not implemented yet for this CLI; use --format json")
+            bail!("csv output is not implemented yet for this CLI; use --output-format json")
         }
     }
 }
@@ -87,7 +87,7 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             code: "OUTPUT_FORMAT_UNSUPPORTED".to_string(),
             message,
             did_you_mean: Some("json".to_string()),
-            try_this: Some("re-run with `--format json`".to_string()),
+            try_this: Some("re-run with `--output-format json`".to_string()),
         };
     }
 
