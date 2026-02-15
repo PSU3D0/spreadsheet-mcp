@@ -5,6 +5,7 @@ pub mod output;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::Value;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -18,6 +19,16 @@ pub enum TableReadFormat {
     Json,
     Values,
     Csv,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SheetPageFormatArg {
+    #[value(name = "full")]
+    Full,
+    #[value(name = "compact")]
+    Compact,
+    #[value(name = "values_only")]
+    ValuesOnly,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -56,17 +67,17 @@ pub enum TraceDirectionArg {
     name = "agent-spreadsheet",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Find labels or values: find-value --mode label|value\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --format csv is currently unsupported and returns an error. Use --format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Find labels or values: find-value --mode label|value\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(
-        long,
+        long = "output-format",
         value_enum,
         default_value_t = OutputFormat::Json,
         global = true,
         help = "Output format (csv is currently unsupported globally; use json or command-specific CSV options like read-table --table-format csv)"
     )]
-    pub format: OutputFormat,
+    pub output_format: OutputFormat,
 
     #[arg(
         long,
@@ -122,6 +133,67 @@ pub enum Commands {
             help = "One or more A1 ranges (for example A1:C10)"
         )]
         ranges: Vec<String>,
+    },
+    #[command(about = "Read one sheet page with deterministic continuation")]
+    SheetPage {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet to page through")]
+        sheet: String,
+        #[arg(long, value_name = "ROW", help = "1-based starting row")]
+        start_row: Option<u32>,
+        #[arg(
+            long = "page-size",
+            value_name = "N",
+            help = "Rows per page (must be at least 1)"
+        )]
+        page_size: Option<u32>,
+        #[arg(
+            long,
+            value_name = "COLUMNS",
+            value_delimiter = ',',
+            help = "Column selectors by letter/range, e.g. A,C,E:G"
+        )]
+        columns: Option<Vec<String>>,
+        #[arg(
+            long = "columns-by-header",
+            value_name = "HEADERS",
+            value_delimiter = ',',
+            help = "Column selectors by header text (case-insensitive)"
+        )]
+        columns_by_header: Option<Vec<String>>,
+        #[arg(
+            long = "include-formulas",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include formulas (default true)"
+        )]
+        include_formulas: Option<bool>,
+        #[arg(
+            long = "include-styles",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include style metadata (default false)"
+        )]
+        include_styles: Option<bool>,
+        #[arg(
+            long = "include-header",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include header row (default true)"
+        )]
+        include_header: Option<bool>,
+        #[arg(
+            long,
+            value_enum,
+            value_name = "FORMAT",
+            required = true,
+            help = "Page output format: full, compact, or values_only"
+        )]
+        format: SheetPageFormatArg,
     },
     #[command(about = "Read a table-like region as json, values, or csv")]
     ReadTable {
@@ -308,6 +380,32 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             ranges,
         } => commands::read::range_values(file, sheet, ranges).await,
+        Commands::SheetPage {
+            file,
+            sheet,
+            start_row,
+            page_size,
+            columns,
+            columns_by_header,
+            include_formulas,
+            include_styles,
+            include_header,
+            format,
+        } => {
+            commands::read::sheet_page(
+                file,
+                sheet,
+                start_row,
+                page_size,
+                columns,
+                columns_by_header,
+                include_formulas,
+                include_styles,
+                include_header,
+                format,
+            )
+            .await
+        }
         Commands::ReadTable {
             file,
             sheet,
@@ -379,9 +477,107 @@ pub async fn run_command(command: Commands) -> Result<Value> {
     }
 }
 
+fn first_subcommand_index(argv: &[OsString]) -> Option<usize> {
+    let mut expect_global_value = false;
+
+    for (index, arg) in argv.iter().enumerate().skip(1) {
+        let token = arg.to_string_lossy();
+
+        if expect_global_value {
+            expect_global_value = false;
+            continue;
+        }
+
+        match token.as_ref() {
+            "--output-format" | "--shape" | "--format" => {
+                expect_global_value = true;
+                continue;
+            }
+            "--compact" | "--quiet" => continue,
+            _ => {}
+        }
+
+        if token.starts_with("--output-format=")
+            || token.starts_with("--shape=")
+            || token.starts_with("--format=")
+        {
+            continue;
+        }
+
+        if token.starts_with('-') {
+            continue;
+        }
+
+        return Some(index);
+    }
+
+    None
+}
+
+fn is_legacy_output_format(value: &str) -> bool {
+    matches!(value, "json" | "csv")
+}
+
+fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
+    if argv.len() <= 1 {
+        return argv;
+    }
+
+    let first_subcommand_index = first_subcommand_index(&argv);
+    let first_subcommand_name = first_subcommand_index
+        .map(|index| argv[index].to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let preserve_sheet_page_format = first_subcommand_name == "sheet-page";
+
+    let mut normalized = Vec::with_capacity(argv.len());
+    normalized.push(argv[0].clone());
+
+    let mut index = 1usize;
+    while index < argv.len() {
+        let token = argv[index].to_string_lossy();
+        let can_rewrite_here = !preserve_sheet_page_format
+            || first_subcommand_index
+                .map(|subcommand_index| index < subcommand_index)
+                .unwrap_or(true);
+
+        if can_rewrite_here && token == "--format" && index + 1 < argv.len() {
+            let value = argv[index + 1].to_string_lossy();
+            if is_legacy_output_format(value.as_ref()) {
+                normalized.push(OsString::from("--output-format"));
+                normalized.push(argv[index + 1].clone());
+                index += 2;
+                continue;
+            }
+        }
+
+        if can_rewrite_here {
+            if let Some(value) = token.strip_prefix("--format=") {
+                if is_legacy_output_format(value) {
+                    normalized.push(OsString::from(format!("--output-format={value}")));
+                    index += 1;
+                    continue;
+                }
+            }
+        }
+
+        normalized.push(argv[index].clone());
+        index += 1;
+    }
+
+    normalized
+}
+
 pub async fn run() -> Result<()> {
-    let cli = Cli::parse();
-    run_with_options(cli.command, cli.format, cli.shape, cli.compact, cli.quiet).await
+    let argv = normalize_legacy_global_format_argv(std::env::args_os().collect());
+    let cli = Cli::parse_from(argv);
+    run_with_options(
+        cli.command,
+        cli.output_format,
+        cli.shape,
+        cli.compact,
+        cli.quiet,
+    )
+    .await
 }
 
 pub async fn run_with_options(
@@ -427,7 +623,7 @@ mod tests {
     fn parses_global_flags_and_read_table() {
         let cli = Cli::try_parse_from([
             "agent-spreadsheet",
-            "--format",
+            "--output-format",
             "json",
             "--shape",
             "compact",
@@ -535,5 +731,162 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_sheet_page_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheet-page",
+            "workbook.xlsx",
+            "Sheet1",
+            "--start-row",
+            "2",
+            "--page-size",
+            "5",
+            "--columns",
+            "A,C:E",
+            "--columns-by-header",
+            "Name,Total",
+            "--include-formulas",
+            "--include-styles",
+            "--include-header",
+            "--format",
+            "compact",
+        ])
+        .expect("parse command");
+
+        match cli.command {
+            Commands::SheetPage {
+                file,
+                sheet,
+                start_row,
+                page_size,
+                columns,
+                columns_by_header,
+                include_formulas,
+                include_styles,
+                include_header,
+                format,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(start_row, Some(2));
+                assert_eq!(page_size, Some(5));
+                assert_eq!(columns, Some(vec!["A".to_string(), "C:E".to_string()]));
+                assert_eq!(
+                    columns_by_header,
+                    Some(vec!["Name".to_string(), "Total".to_string()])
+                );
+                assert_eq!(include_formulas, Some(true));
+                assert_eq!(include_styles, Some(true));
+                assert_eq!(include_header, Some(true));
+                assert!(matches!(format, SheetPageFormatArg::Compact));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_sheet_page_all_required_formats() {
+        for (raw, expected) in [
+            ("full", SheetPageFormatArg::Full),
+            ("compact", SheetPageFormatArg::Compact),
+            ("values_only", SheetPageFormatArg::ValuesOnly),
+        ] {
+            let cli = Cli::try_parse_from([
+                "agent-spreadsheet",
+                "sheet-page",
+                "workbook.xlsx",
+                "Sheet1",
+                "--format",
+                raw,
+            ])
+            .expect("parse format value");
+
+            match cli.command {
+                Commands::SheetPage { format, .. } => {
+                    assert!(
+                        matches!(
+                            (format, expected),
+                            (SheetPageFormatArg::Full, SheetPageFormatArg::Full)
+                                | (SheetPageFormatArg::Compact, SheetPageFormatArg::Compact)
+                                | (
+                                    SheetPageFormatArg::ValuesOnly,
+                                    SheetPageFormatArg::ValuesOnly
+                                )
+                        ),
+                        "format mismatch for {raw}"
+                    );
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn normalizes_legacy_global_format_for_non_sheet_page_commands() {
+        let normalized = normalize_legacy_global_format_argv(
+            [
+                "agent-spreadsheet",
+                "list-sheets",
+                "workbook.xlsx",
+                "--format",
+                "json",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        );
+
+        let tokens = normalized
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tokens,
+            vec![
+                "agent-spreadsheet",
+                "list-sheets",
+                "workbook.xlsx",
+                "--output-format",
+                "json"
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_sheet_page_local_format_flag() {
+        let normalized = normalize_legacy_global_format_argv(
+            [
+                "agent-spreadsheet",
+                "sheet-page",
+                "workbook.xlsx",
+                "Sheet1",
+                "--format",
+                "compact",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        );
+
+        let tokens = normalized
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tokens,
+            vec![
+                "agent-spreadsheet",
+                "sheet-page",
+                "workbook.xlsx",
+                "Sheet1",
+                "--format",
+                "compact"
+            ]
+        );
     }
 }

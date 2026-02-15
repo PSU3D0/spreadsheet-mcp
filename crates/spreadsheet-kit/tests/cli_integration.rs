@@ -94,7 +94,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let root = parse_stdout_text(&root_help);
     assert!(root.contains("Stateless spreadsheet CLI for AI and automation workflows"));
     assert!(root.contains("Common workflows:"));
-    assert!(root.contains("global --format csv is currently unsupported"));
+    assert!(root.contains("global --output-format csv is currently unsupported"));
     assert!(root.contains("find-value"));
     assert!(root.contains("Find cells matching a text query by value or label"));
 
@@ -387,6 +387,371 @@ fn cli_formula_trace_pagination_round_trips_next_cursor_until_terminal() {
     assert!(
         saw_terminal,
         "formula-trace pagination did not reach a terminal page"
+    );
+}
+
+#[test]
+fn cli_sheet_page_first_page_emits_next_start_row() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-first.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let page = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(page.status.success(), "stderr: {:?}", page.stderr);
+
+    let payload = parse_stdout_json(&page);
+    assert_eq!(payload["format"], "full");
+    assert_eq!(payload["rows"].as_array().map(Vec::len), Some(1));
+    assert_eq!(payload["rows"][0]["row_index"].as_u64(), Some(2));
+    assert_eq!(payload["next_start_row"].as_u64(), Some(3));
+}
+
+#[test]
+fn cli_sheet_page_continuation_round_trips_deterministically() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-continuation.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let first = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+    let next_start_row = first_payload["next_start_row"]
+        .as_u64()
+        .expect("next_start_row present")
+        .to_string();
+
+    let continuation = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        next_start_row.as_str(),
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(
+        continuation.status.success(),
+        "stderr: {:?}",
+        continuation.stderr
+    );
+    let continuation_payload = parse_stdout_json(&continuation);
+
+    let direct = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "3",
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(direct.status.success(), "stderr: {:?}", direct.stderr);
+    let direct_payload = parse_stdout_json(&direct);
+
+    assert_eq!(continuation_payload, direct_payload);
+}
+
+#[test]
+fn cli_sheet_page_terminal_page_omits_next_start_row() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-terminal.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let terminal = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "4",
+        "--page-size",
+        "2",
+        "--format",
+        "full",
+    ]);
+    assert!(terminal.status.success(), "stderr: {:?}", terminal.stderr);
+
+    let payload = parse_stdout_json(&terminal);
+    assert_eq!(payload["rows"][0]["row_index"].as_u64(), Some(4));
+    assert!(payload.get("next_start_row").is_none());
+}
+
+#[test]
+fn cli_sheet_page_column_filters_support_union_and_sheet_order() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-columns.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let columns_only = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--columns",
+        "C:A",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        columns_only.status.success(),
+        "stderr: {:?}",
+        columns_only.stderr
+    );
+    let columns_only_payload = parse_stdout_json(&columns_only);
+    let columns_only_headers = columns_only_payload["compact"]["headers"]
+        .as_array()
+        .expect("compact headers")
+        .iter()
+        .map(|v| v.as_str().expect("header string"))
+        .collect::<Vec<_>>();
+    assert_eq!(columns_only_headers, vec!["Row", "Name", "Amount", "Total"]);
+
+    let header_only = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--columns-by-header",
+        "Total,Name",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        header_only.status.success(),
+        "stderr: {:?}",
+        header_only.stderr
+    );
+    let header_only_payload = parse_stdout_json(&header_only);
+    let header_only_headers = header_only_payload["compact"]["headers"]
+        .as_array()
+        .expect("compact headers")
+        .iter()
+        .map(|v| v.as_str().expect("header string"))
+        .collect::<Vec<_>>();
+    assert_eq!(header_only_headers, vec!["Row", "Name", "Total"]);
+
+    let combined = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--columns",
+        "B",
+        "--columns-by-header",
+        "Amount,Name,Total",
+        "--format",
+        "compact",
+    ]);
+    assert!(combined.status.success(), "stderr: {:?}", combined.stderr);
+    let combined_payload = parse_stdout_json(&combined);
+    let combined_headers = combined_payload["compact"]["headers"]
+        .as_array()
+        .expect("compact headers")
+        .iter()
+        .map(|v| v.as_str().expect("header string"))
+        .collect::<Vec<_>>();
+    assert_eq!(combined_headers, vec!["Row", "Name", "Amount", "Total"]);
+}
+
+#[test]
+fn cli_sheet_page_accepts_all_formats_and_sets_expected_payload_branch() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-formats.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    for format in ["full", "compact", "values_only"] {
+        let page = run_cli(&[
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--start-row",
+            "2",
+            "--page-size",
+            "1",
+            "--format",
+            format,
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+        let payload = parse_stdout_json(&page);
+
+        assert_eq!(payload["format"], format);
+        match format {
+            "full" => {
+                assert!(payload["rows"].is_array());
+                assert!(payload.get("compact").is_none());
+                assert!(payload.get("values_only").is_none());
+            }
+            "compact" => {
+                assert!(payload["compact"].is_object());
+                assert!(payload.get("rows").is_none());
+                assert!(payload.get("values_only").is_none());
+            }
+            "values_only" => {
+                assert!(payload["values_only"].is_object());
+                assert!(payload.get("rows").is_none());
+                assert!(payload.get("compact").is_none());
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn cli_sheet_page_preserves_next_start_row_in_canonical_and_compact_shapes() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-shape-next-start-row.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+
+    let compact_shape = run_cli(&[
+        "--shape",
+        "compact",
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        compact_shape.status.success(),
+        "stderr: {:?}",
+        compact_shape.stderr
+    );
+    let compact_shape_payload = parse_stdout_json(&compact_shape);
+
+    assert_eq!(canonical_payload["next_start_row"].as_u64(), Some(3));
+    assert_eq!(compact_shape_payload["next_start_row"].as_u64(), Some(3));
+    assert_eq!(
+        canonical_payload["next_start_row"],
+        compact_shape_payload["next_start_row"]
+    );
+}
+
+#[test]
+fn cli_sheet_page_page_size_zero_returns_invalid_argument() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-page-size-zero.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    assert_invalid_argument(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--page-size",
+        "0",
+        "--format",
+        "full",
+    ]);
+}
+
+#[test]
+fn cli_sheet_page_invalid_column_spec_returns_invalid_argument() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-invalid-column.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    assert_invalid_argument(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--columns",
+        "A,NOT$",
+        "--format",
+        "full",
+    ]);
+}
+
+#[test]
+fn cli_sheet_page_unknown_sheet_returns_sheet_not_found() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-sheet-not-found.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["sheet-page", file, "Shet1", "--format", "full"]);
+    assert!(!output.status.success(), "command unexpectedly succeeded");
+
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "SHEET_NOT_FOUND");
+    assert_eq!(err["did_you_mean"], "Sheet1");
+}
+
+#[test]
+fn cli_sheet_page_unknown_format_value_fails_clap_parse() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("sheet-page-unknown-format.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["sheet-page", file, "Sheet1", "--format", "bogus"]);
+    assert!(!output.status.success(), "command unexpectedly succeeded");
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("invalid value 'bogus'"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("--format <FORMAT>"),
+        "expected clap parse error for --format, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("full") && stderr.contains("compact") && stderr.contains("values_only"),
+        "expected sheet-page format choices in error, got: {stderr}"
     );
 }
 
@@ -977,6 +1342,40 @@ fn cli_errors_use_machine_envelope() {
             .unwrap_or_default()
             .contains("list-sheets")
     );
+}
+
+#[test]
+fn cli_legacy_global_format_csv_returns_output_format_unsupported_envelope() {
+    let output = run_cli(&[
+        "--format",
+        "csv",
+        "list-sheets",
+        "/tmp/does-not-exist.xlsx",
+    ]);
+    assert!(!output.status.success(), "command unexpectedly succeeded");
+
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "OUTPUT_FORMAT_UNSUPPORTED");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("csv output is not implemented")
+    );
+}
+
+#[test]
+fn cli_legacy_global_format_json_is_accepted_for_existing_commands() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("legacy-format-json.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["--format", "json", "list-sheets", file]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["sheets"].as_array().map(Vec::len), Some(2));
 }
 
 #[cfg(feature = "recalc-formualizer")]

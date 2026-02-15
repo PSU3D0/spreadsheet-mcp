@@ -3,21 +3,28 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::cli::{
-    FindValueMode, FormulaSort, TableReadFormat, TableSampleModeArg, TraceDirectionArg,
+    FindValueMode, FormulaSort, SheetPageFormatArg, TableReadFormat, TableSampleModeArg,
+    TraceDirectionArg,
 };
-use crate::model::{FindMode, TableOutputFormat, TraceCursor, TraceDirection};
+use crate::model::{FindMode, SheetPageFormat, TableOutputFormat, TraceCursor, TraceDirection};
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
     DescribeWorkbookParams, FindValueParams, FormulaSortBy, FormulaTraceParams, ListSheetsParams,
     RangeValuesParams, ReadTableParams, SampleMode, SheetFormulaMapParams, SheetOverviewParams,
-    TableFilter, TableProfileParams,
+    SheetPageParams, TableFilter, TableProfileParams,
 };
 
 const TRACE_DEPTH_MIN: u32 = 1;
 const TRACE_DEPTH_MAX: u32 = 5;
 const TRACE_PAGE_SIZE_MIN: usize = 5;
 const TRACE_PAGE_SIZE_MAX: usize = 200;
+
+const SHEET_PAGE_DEFAULT_START_ROW: u32 = 1;
+const SHEET_PAGE_DEFAULT_PAGE_SIZE: u32 = 50;
+const SHEET_PAGE_DEFAULT_INCLUDE_FORMULAS: bool = true;
+const SHEET_PAGE_DEFAULT_INCLUDE_STYLES: bool = false;
+const SHEET_PAGE_DEFAULT_INCLUDE_HEADER: bool = true;
 
 pub async fn list_sheets(file: PathBuf) -> Result<Value> {
     let runtime = StatelessRuntime;
@@ -69,6 +76,42 @@ pub async fn range_values(file: PathBuf, sheet: String, ranges: Vec<String>) -> 
             include_headers: None,
             format: Some(TableOutputFormat::Json),
             page_size: None,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn sheet_page(
+    file: PathBuf,
+    sheet: String,
+    start_row: Option<u32>,
+    page_size: Option<u32>,
+    columns: Option<Vec<String>>,
+    columns_by_header: Option<Vec<String>>,
+    include_formulas: Option<bool>,
+    include_styles: Option<bool>,
+    include_header: Option<bool>,
+    format: SheetPageFormatArg,
+) -> Result<Value> {
+    validate_sheet_page_arguments(page_size, columns.as_ref())?;
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+    let response = tools::sheet_page(
+        state,
+        SheetPageParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: sheet,
+            start_row: start_row.unwrap_or(SHEET_PAGE_DEFAULT_START_ROW),
+            page_size: page_size.unwrap_or(SHEET_PAGE_DEFAULT_PAGE_SIZE),
+            columns,
+            columns_by_header,
+            include_formulas: include_formulas.unwrap_or(SHEET_PAGE_DEFAULT_INCLUDE_FORMULAS),
+            include_styles: include_styles.unwrap_or(SHEET_PAGE_DEFAULT_INCLUDE_STYLES),
+            include_header: include_header.unwrap_or(SHEET_PAGE_DEFAULT_INCLUDE_HEADER),
+            format: Some(map_sheet_page_format(format)),
         },
     )
     .await?;
@@ -251,6 +294,14 @@ fn map_table_read_format(format: TableReadFormat) -> TableOutputFormat {
     }
 }
 
+fn map_sheet_page_format(format: SheetPageFormatArg) -> SheetPageFormat {
+    match format {
+        SheetPageFormatArg::Full => SheetPageFormat::Full,
+        SheetPageFormatArg::Compact => SheetPageFormat::Compact,
+        SheetPageFormatArg::ValuesOnly => SheetPageFormat::ValuesOnly,
+    }
+}
+
 fn map_table_sample_mode(mode: TableSampleModeArg) -> SampleMode {
     match mode {
         TableSampleModeArg::First => SampleMode::First,
@@ -278,6 +329,53 @@ fn map_trace_direction(direction: TraceDirectionArg) -> TraceDirection {
         TraceDirectionArg::Precedents => TraceDirection::Precedents,
         TraceDirectionArg::Dependents => TraceDirection::Dependents,
     }
+}
+
+fn validate_sheet_page_arguments(
+    page_size: Option<u32>,
+    columns: Option<&Vec<String>>,
+) -> Result<()> {
+    if matches!(page_size, Some(0)) {
+        return Err(invalid_argument("--page-size must be at least 1"));
+    }
+
+    validate_sheet_page_columns(columns)?;
+    Ok(())
+}
+
+fn validate_sheet_page_columns(columns: Option<&Vec<String>>) -> Result<()> {
+    let Some(columns) = columns else {
+        return Ok(());
+    };
+
+    for raw_spec in columns {
+        let spec = raw_spec.trim();
+        if spec.is_empty() {
+            return Err(invalid_argument("invalid column spec: ''"));
+        }
+
+        let (start, end) = spec.split_once(':').unwrap_or((spec, spec));
+        if !is_valid_column_token(start) || !is_valid_column_token(end) {
+            return Err(invalid_argument(format!(
+                "invalid column spec: '{raw_spec}'"
+            )));
+        }
+
+        let start_idx = umya_spreadsheet::helper::coordinate::column_index_from_string(start);
+        let end_idx = umya_spreadsheet::helper::coordinate::column_index_from_string(end);
+        if start_idx == 0 || end_idx == 0 {
+            return Err(invalid_argument(format!(
+                "invalid column spec: '{raw_spec}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_valid_column_token(token: &str) -> bool {
+    let token = token.trim();
+    !token.is_empty() && token.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
 fn validate_read_table_arguments(
