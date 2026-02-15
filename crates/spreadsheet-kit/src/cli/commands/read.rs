@@ -1,16 +1,23 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 use std::path::PathBuf;
 
-use crate::cli::{FindValueMode, FormulaSort, TableReadFormat, TraceDirectionArg};
-use crate::model::{FindMode, TableOutputFormat, TraceDirection};
+use crate::cli::{
+    FindValueMode, FormulaSort, TableReadFormat, TableSampleModeArg, TraceDirectionArg,
+};
+use crate::model::{FindMode, TableOutputFormat, TraceCursor, TraceDirection};
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
     DescribeWorkbookParams, FindValueParams, FormulaSortBy, FormulaTraceParams, ListSheetsParams,
-    RangeValuesParams, ReadTableParams, SheetFormulaMapParams, SheetOverviewParams,
-    TableProfileParams,
+    RangeValuesParams, ReadTableParams, SampleMode, SheetFormulaMapParams, SheetOverviewParams,
+    TableFilter, TableProfileParams,
 };
+
+const TRACE_DEPTH_MIN: u32 = 1;
+const TRACE_DEPTH_MAX: u32 = 5;
+const TRACE_PAGE_SIZE_MIN: usize = 5;
+const TRACE_PAGE_SIZE_MAX: usize = 200;
 
 pub async fn list_sheets(file: PathBuf) -> Result<Value> {
     let runtime = StatelessRuntime;
@@ -85,8 +92,18 @@ pub async fn read_table(
     file: PathBuf,
     sheet: Option<String>,
     range: Option<String>,
+    table_name: Option<String>,
+    region_id: Option<u32>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+    sample_mode: Option<TableSampleModeArg>,
+    filters_json: Option<String>,
+    filters_file: Option<PathBuf>,
     format: Option<TableReadFormat>,
 ) -> Result<Value> {
+    validate_read_table_arguments(limit, offset, sample_mode)?;
+    let filters = parse_table_filters(filters_json, filters_file)?;
+
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
     let sheet_name = match sheet {
@@ -98,16 +115,16 @@ pub async fn read_table(
         ReadTableParams {
             workbook_or_fork_id: workbook_id,
             sheet_name,
-            table_name: None,
-            region_id: None,
+            table_name,
+            region_id,
             range,
             header_row: None,
             header_rows: None,
             columns: None,
-            filters: None,
-            sample_mode: None,
-            limit: None,
-            offset: None,
+            filters,
+            sample_mode: sample_mode.map(map_table_sample_mode),
+            limit,
+            offset,
             format: format.map(map_table_read_format),
             include_headers: None,
             include_types: None,
@@ -175,7 +192,14 @@ pub async fn formula_trace(
     sheet: String,
     cell: String,
     direction: TraceDirectionArg,
+    depth: Option<u32>,
+    page_size: Option<usize>,
+    cursor_depth: Option<u32>,
+    cursor_offset: Option<usize>,
 ) -> Result<Value> {
+    validate_formula_trace_arguments(depth, page_size)?;
+    let cursor = build_trace_cursor(cursor_depth, cursor_offset)?;
+
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
     let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
@@ -186,10 +210,10 @@ pub async fn formula_trace(
             sheet_name: sheet,
             cell_address: cell,
             direction: map_trace_direction(direction),
-            depth: None,
+            depth,
             limit: None,
-            page_size: None,
-            cursor: None,
+            page_size,
+            cursor,
         },
     )
     .await?;
@@ -227,6 +251,14 @@ fn map_table_read_format(format: TableReadFormat) -> TableOutputFormat {
     }
 }
 
+fn map_table_sample_mode(mode: TableSampleModeArg) -> SampleMode {
+    match mode {
+        TableSampleModeArg::First => SampleMode::First,
+        TableSampleModeArg::Last => SampleMode::Last,
+        TableSampleModeArg::Distributed => SampleMode::Distributed,
+    }
+}
+
 fn map_find_value_mode(mode: FindValueMode) -> FindMode {
     match mode {
         FindValueMode::Value => FindMode::Value,
@@ -246,6 +278,99 @@ fn map_trace_direction(direction: TraceDirectionArg) -> TraceDirection {
         TraceDirectionArg::Precedents => TraceDirection::Precedents,
         TraceDirectionArg::Dependents => TraceDirection::Dependents,
     }
+}
+
+fn validate_read_table_arguments(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    sample_mode: Option<TableSampleModeArg>,
+) -> Result<()> {
+    if matches!(limit, Some(0)) {
+        return Err(invalid_argument("--limit must be at least 1"));
+    }
+
+    if offset.unwrap_or(0) > 0 {
+        if let Some(TableSampleModeArg::Last | TableSampleModeArg::Distributed) = sample_mode {
+            return Err(invalid_argument(
+                "--offset greater than 0 requires --sample-mode first",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_table_filters(
+    filters_json: Option<String>,
+    filters_file: Option<PathBuf>,
+) -> Result<Option<Vec<TableFilter>>> {
+    match (filters_json, filters_file) {
+        (Some(_), Some(_)) => Err(invalid_argument(
+            "--filters-json and --filters-file are mutually exclusive",
+        )),
+        (Some(raw), None) => parse_table_filters_payload(&raw, "--filters-json").map(Some),
+        (None, Some(path)) => {
+            let raw = std::fs::read_to_string(&path).map_err(|err| {
+                invalid_argument(format!(
+                    "failed to read --filters-file '{}': {}",
+                    path.display(),
+                    err
+                ))
+            })?;
+            parse_table_filters_payload(&raw, "--filters-file").map(Some)
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+fn parse_table_filters_payload(raw: &str, source: &str) -> Result<Vec<TableFilter>> {
+    serde_json::from_str(raw).map_err(|err| {
+        invalid_argument(format!(
+            "{source} must be a valid JSON array of filters: {err}"
+        ))
+    })
+}
+
+fn validate_formula_trace_arguments(depth: Option<u32>, page_size: Option<usize>) -> Result<()> {
+    if let Some(depth) = depth
+        && !(TRACE_DEPTH_MIN..=TRACE_DEPTH_MAX).contains(&depth)
+    {
+        return Err(invalid_argument(format!(
+            "--depth must be between {TRACE_DEPTH_MIN} and {TRACE_DEPTH_MAX}"
+        )));
+    }
+
+    if let Some(page_size) = page_size
+        && !(TRACE_PAGE_SIZE_MIN..=TRACE_PAGE_SIZE_MAX).contains(&page_size)
+    {
+        return Err(invalid_argument(format!(
+            "--page-size must be between {TRACE_PAGE_SIZE_MIN} and {TRACE_PAGE_SIZE_MAX}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn build_trace_cursor(
+    cursor_depth: Option<u32>,
+    cursor_offset: Option<usize>,
+) -> Result<Option<TraceCursor>> {
+    match (cursor_depth, cursor_offset) {
+        (None, None) => Ok(None),
+        (Some(depth), Some(offset)) => {
+            if depth < 1 {
+                return Err(invalid_argument("--cursor-depth must be at least 1"));
+            }
+            Ok(Some(TraceCursor { depth, offset }))
+        }
+        (Some(_), None) | (None, Some(_)) => Err(invalid_argument(
+            "--cursor-depth and --cursor-offset must be provided together",
+        )),
+    }
+}
+
+fn invalid_argument(message: impl Into<String>) -> anyhow::Error {
+    anyhow!("invalid argument: {}", message.into())
 }
 
 async fn resolve_sheet_name(

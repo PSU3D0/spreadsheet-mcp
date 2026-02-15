@@ -35,6 +35,15 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
         };
     }
 
+    if let Some(detail) = message.strip_prefix("invalid argument: ") {
+        return ErrorEnvelope {
+            code: "INVALID_ARGUMENT".to_string(),
+            message: detail.to_string(),
+            did_you_mean: None,
+            try_this: Some("run the command with --help to inspect valid arguments".to_string()),
+        };
+    }
+
     if message.contains("does not exist") {
         return ErrorEnvelope {
             code: "FILE_NOT_FOUND".to_string(),

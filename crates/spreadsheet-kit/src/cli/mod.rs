@@ -21,6 +21,13 @@ pub enum TableReadFormat {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TableSampleModeArg {
+    First,
+    Last,
+    Distributed,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum OutputShape {
     Canonical,
     Compact,
@@ -124,6 +131,37 @@ pub enum Commands {
         sheet: Option<String>,
         #[arg(long, value_name = "RANGE", help = "Optional A1 range override")]
         range: Option<String>,
+        #[arg(long, value_name = "NAME", help = "Read from a named Excel table")]
+        table_name: Option<String>,
+        #[arg(long, value_name = "ID", help = "Read from a detected region id")]
+        region_id: Option<u32>,
+        #[arg(
+            long,
+            value_name = "LIMIT",
+            help = "Maximum rows to return (must be at least 1)"
+        )]
+        limit: Option<u32>,
+        #[arg(long, value_name = "OFFSET", help = "Row offset for pagination")]
+        offset: Option<u32>,
+        #[arg(
+            long = "sample-mode",
+            value_enum,
+            value_name = "MODE",
+            help = "Sampling mode: first, last, or distributed"
+        )]
+        sample_mode: Option<TableSampleModeArg>,
+        #[arg(
+            long = "filters-json",
+            value_name = "JSON",
+            help = "Inline JSON array of filters (mutually exclusive with --filters-file)"
+        )]
+        filters_json: Option<String>,
+        #[arg(
+            long = "filters-file",
+            value_name = "PATH",
+            help = "Path to JSON array of filters (mutually exclusive with --filters-json)"
+        )]
+        filters_file: Option<PathBuf>,
         #[arg(
             long = "table-format",
             value_enum,
@@ -183,6 +221,30 @@ pub enum Commands {
             help = "Trace direction: precedents or dependents"
         )]
         direction: TraceDirectionArg,
+        #[arg(
+            long,
+            value_name = "DEPTH",
+            help = "Trace depth (must be between 1 and 5)"
+        )]
+        depth: Option<u32>,
+        #[arg(
+            long = "page-size",
+            value_name = "N",
+            help = "Page size for trace edges (must be between 5 and 200)"
+        )]
+        page_size: Option<usize>,
+        #[arg(
+            long = "cursor-depth",
+            value_name = "DEPTH",
+            help = "Continuation cursor depth (must be paired with --cursor-offset)"
+        )]
+        cursor_depth: Option<u32>,
+        #[arg(
+            long = "cursor-offset",
+            value_name = "OFFSET",
+            help = "Continuation cursor offset (must be paired with --cursor-depth)"
+        )]
+        cursor_offset: Option<usize>,
     },
     #[command(about = "Describe workbook-level metadata and sheet counts")]
     Describe {
@@ -250,8 +312,30 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             file,
             sheet,
             range,
+            table_name,
+            region_id,
+            limit,
+            offset,
+            sample_mode,
+            filters_json,
+            filters_file,
             table_format,
-        } => commands::read::read_table(file, sheet, range, table_format).await,
+        } => {
+            commands::read::read_table(
+                file,
+                sheet,
+                range,
+                table_name,
+                region_id,
+                limit,
+                offset,
+                sample_mode,
+                filters_json,
+                filters_file,
+                table_format,
+            )
+            .await
+        }
         Commands::FindValue {
             file,
             query,
@@ -269,7 +353,23 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             cell,
             direction,
-        } => commands::read::formula_trace(file, sheet, cell, direction).await,
+            depth,
+            page_size,
+            cursor_depth,
+            cursor_offset,
+        } => {
+            commands::read::formula_trace(
+                file,
+                sheet,
+                cell,
+                direction,
+                depth,
+                page_size,
+                cursor_depth,
+                cursor_offset,
+            )
+            .await
+        }
         Commands::Describe { file } => commands::read::describe(file).await,
         Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
         Commands::Copy { source, dest } => commands::write::copy(source, dest).await,
@@ -339,6 +439,18 @@ mod tests {
             "Sheet1",
             "--range",
             "A1:B10",
+            "--table-name",
+            "SalesTable",
+            "--region-id",
+            "7",
+            "--limit",
+            "10",
+            "--offset",
+            "2",
+            "--sample-mode",
+            "first",
+            "--filters-json",
+            r#"[{"column":"Name","op":"eq","value":"Alice"}]"#,
             "--table-format",
             "values",
         ])
@@ -352,11 +464,28 @@ mod tests {
                 file,
                 sheet,
                 range,
+                table_name,
+                region_id,
+                limit,
+                offset,
+                sample_mode,
+                filters_json,
+                filters_file,
                 table_format,
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
                 assert_eq!(range.as_deref(), Some("A1:B10"));
+                assert_eq!(table_name.as_deref(), Some("SalesTable"));
+                assert_eq!(region_id, Some(7));
+                assert_eq!(limit, Some(10));
+                assert_eq!(offset, Some(2));
+                assert!(matches!(sample_mode, Some(TableSampleModeArg::First)));
+                assert_eq!(
+                    filters_json.as_deref(),
+                    Some(r#"[{"column":"Name","op":"eq","value":"Alice"}]"#)
+                );
+                assert!(filters_file.is_none());
                 assert!(matches!(table_format, Some(TableReadFormat::Values)));
             }
             other => panic!("unexpected command: {other:?}"),
@@ -372,6 +501,14 @@ mod tests {
             "Sheet1",
             "C3",
             "dependents",
+            "--depth",
+            "2",
+            "--page-size",
+            "15",
+            "--cursor-depth",
+            "2",
+            "--cursor-offset",
+            "5",
         ])
         .expect("parse command");
 
@@ -382,10 +519,18 @@ mod tests {
                 direction,
                 cell,
                 sheet,
+                depth,
+                page_size,
+                cursor_depth,
+                cursor_offset,
                 ..
             } => {
                 assert_eq!(cell, "C3");
                 assert_eq!(sheet, "Sheet1");
+                assert_eq!(depth, Some(2));
+                assert_eq!(page_size, Some(15));
+                assert_eq!(cursor_depth, Some(2));
+                assert_eq!(cursor_offset, Some(5));
                 assert!(matches!(direction, TraceDirectionArg::Dependents));
             }
             other => panic!("unexpected command: {other:?}"),
