@@ -10,9 +10,10 @@ use crate::model::{FindMode, SheetPageFormat, TableOutputFormat, TraceCursor, Tr
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
-    DescribeWorkbookParams, FindValueParams, FormulaSortBy, FormulaTraceParams, ListSheetsParams,
-    RangeValuesParams, ReadTableParams, SampleMode, SheetFormulaMapParams, SheetOverviewParams,
-    SheetPageParams, TableFilter, TableProfileParams,
+    DescribeWorkbookParams, FindFormulaParams, FindValueParams, FormulaSortBy, FormulaTraceParams,
+    ListSheetsParams, NamedRangesParams, RangeValuesParams, ReadTableParams, SampleMode,
+    ScanVolatilesParams, SheetFormulaMapParams, SheetOverviewParams, SheetPageParams,
+    SheetStatisticsParams, TableFilter, TableProfileParams,
 };
 
 const TRACE_DEPTH_MIN: u32 = 1;
@@ -203,6 +204,113 @@ pub async fn find_value(
     Ok(serde_json::to_value(response)?)
 }
 
+pub async fn named_ranges(
+    file: PathBuf,
+    sheet: Option<String>,
+    name_prefix: Option<String>,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet_name = match sheet {
+        Some(name) => Some(resolve_sheet_name(&state, &workbook_id, &name).await?),
+        None => None,
+    };
+
+    let response = tools::named_ranges(
+        state,
+        NamedRangesParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name,
+            name_prefix,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn find_formula(
+    file: PathBuf,
+    query: String,
+    sheet: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Value> {
+    validate_positive_limit(limit, "--limit")?;
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet_name = match sheet {
+        Some(name) => Some(resolve_sheet_name(&state, &workbook_id, &name).await?),
+        None => None,
+    };
+
+    let response = tools::find_formula(
+        state,
+        FindFormulaParams {
+            workbook_or_fork_id: workbook_id,
+            query,
+            sheet_name,
+            case_sensitive: false,
+            include_context: false,
+            limit: limit.unwrap_or(50),
+            offset: offset.unwrap_or(0),
+            context_rows: None,
+            context_cols: None,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn scan_volatiles(
+    file: PathBuf,
+    sheet: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Value> {
+    validate_positive_limit(limit, "--limit")?;
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet_name = match sheet {
+        Some(name) => Some(resolve_sheet_name(&state, &workbook_id, &name).await?),
+        None => None,
+    };
+
+    let response = tools::scan_volatiles(
+        state,
+        ScanVolatilesParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name,
+            summary_only: None,
+            include_addresses: None,
+            addresses_limit: None,
+            limit,
+            offset,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn sheet_statistics(file: PathBuf, sheet: String) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet_name = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+
+    let response = tools::sheet_statistics(
+        state,
+        SheetStatisticsParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name,
+            sample_rows: None,
+            summary_only: None,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
 pub async fn formula_map(
     file: PathBuf,
     sheet: String,
@@ -378,14 +486,19 @@ fn is_valid_column_token(token: &str) -> bool {
     !token.is_empty() && token.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
+fn validate_positive_limit(limit: Option<u32>, flag_name: &'static str) -> Result<()> {
+    if matches!(limit, Some(0)) {
+        return Err(invalid_argument(format!("{flag_name} must be at least 1")));
+    }
+    Ok(())
+}
+
 fn validate_read_table_arguments(
     limit: Option<u32>,
     offset: Option<u32>,
     sample_mode: Option<TableSampleModeArg>,
 ) -> Result<()> {
-    if matches!(limit, Some(0)) {
-        return Err(invalid_argument("--limit must be at least 1"));
-    }
+    validate_positive_limit(limit, "--limit")?;
 
     if offset.unwrap_or(0) > 0 {
         if let Some(TableSampleModeArg::Last | TableSampleModeArg::Distributed) = sample_mode {

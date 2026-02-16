@@ -262,6 +262,70 @@ pub enum Commands {
         mode: Option<FindValueMode>,
     },
     #[command(
+        about = "List workbook named ranges and table/formula named items",
+        after_long_help = "Examples:\n  agent-spreadsheet named-ranges data.xlsx\n  agent-spreadsheet named-ranges data.xlsx --sheet \"Q1 Actuals\" --name-prefix Sales"
+    )]
+    NamedRanges {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(long, value_name = "SHEET", help = "Optional sheet name filter")]
+        sheet: Option<String>,
+        #[arg(
+            long = "name-prefix",
+            value_name = "PREFIX",
+            help = "Optional case-insensitive prefix filter for item names"
+        )]
+        name_prefix: Option<String>,
+    },
+    #[command(
+        about = "Find formulas containing a text query with pagination",
+        after_long_help = "Examples:\n  agent-spreadsheet find-formula data.xlsx SUM(\n  agent-spreadsheet find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50"
+    )]
+    FindFormula {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "QUERY", help = "Text to search for within formulas")]
+        query: String,
+        #[arg(long, value_name = "SHEET", help = "Optional sheet name filter")]
+        sheet: Option<String>,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Maximum matches to return (must be at least 1)"
+        )]
+        limit: Option<u32>,
+        #[arg(long, value_name = "N", help = "Match offset for continuation")]
+        offset: Option<u32>,
+    },
+    #[command(
+        about = "Scan workbook formulas for volatile functions",
+        after_long_help = "Examples:\n  agent-spreadsheet scan-volatiles data.xlsx\n  agent-spreadsheet scan-volatiles data.xlsx --sheet \"Q1 Actuals\" --limit 10 --offset 10"
+    )]
+    ScanVolatiles {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(long, value_name = "SHEET", help = "Optional sheet name filter")]
+        sheet: Option<String>,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Maximum entries to return (must be at least 1)"
+        )]
+        limit: Option<u32>,
+        #[arg(long, value_name = "N", help = "Entry offset for continuation")]
+        offset: Option<u32>,
+    },
+    #[command(
+        about = "Compute per-sheet statistics for density and column types",
+        after_long_help = "Examples:\n  agent-spreadsheet sheet-statistics data.xlsx Sheet1\n  agent-spreadsheet sheet-statistics data.xlsx \"Q1 Actuals\""
+    )]
+    SheetStatistics {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet to summarize")]
+        sheet: String,
+    },
+    #[command(
         about = "Summarize formulas on a sheet by complexity or frequency",
         after_long_help = "Examples:\n  agent-spreadsheet formula-map data.xlsx Sheet1\n  agent-spreadsheet formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25"
     )]
@@ -440,6 +504,27 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             mode,
         } => commands::read::find_value(file, query, sheet, mode).await,
+        Commands::NamedRanges {
+            file,
+            sheet,
+            name_prefix,
+        } => commands::read::named_ranges(file, sheet, name_prefix).await,
+        Commands::FindFormula {
+            file,
+            query,
+            sheet,
+            limit,
+            offset,
+        } => commands::read::find_formula(file, query, sheet, limit, offset).await,
+        Commands::ScanVolatiles {
+            file,
+            sheet,
+            limit,
+            offset,
+        } => commands::read::scan_volatiles(file, sheet, limit, offset).await,
+        Commands::SheetStatistics { file, sheet } => {
+            commands::read::sheet_statistics(file, sheet).await
+        }
         Commands::FormulaMap {
             file,
             sheet,
@@ -785,6 +870,116 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_named_ranges_and_scan_volatiles_arguments() {
+        let named = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "named-ranges",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--name-prefix",
+            "Sales",
+        ])
+        .expect("parse named-ranges");
+
+        match named.command {
+            Commands::NamedRanges {
+                file,
+                sheet,
+                name_prefix,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert_eq!(name_prefix.as_deref(), Some("Sales"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let volatiles = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "scan-volatiles",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--limit",
+            "10",
+            "--offset",
+            "5",
+        ])
+        .expect("parse scan-volatiles");
+
+        match volatiles.command {
+            Commands::ScanVolatiles {
+                file,
+                sheet,
+                limit,
+                offset,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert_eq!(limit, Some(10));
+                assert_eq!(offset, Some(5));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_find_formula_and_sheet_statistics_arguments() {
+        let find = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "find-formula",
+            "workbook.xlsx",
+            "SUM(",
+            "--sheet",
+            "Sheet1",
+            "--limit",
+            "25",
+            "--offset",
+            "50",
+        ])
+        .expect("parse find-formula");
+
+        match find.command {
+            Commands::FindFormula {
+                file,
+                query,
+                sheet,
+                limit,
+                offset,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(query, "SUM(");
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert_eq!(limit, Some(25));
+                assert_eq!(offset, Some(50));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let stats = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheet-statistics",
+            "workbook.xlsx",
+            "Summary",
+        ])
+        .expect("parse sheet-statistics");
+
+        match stats.command {
+            Commands::SheetStatistics { file, sheet } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Summary");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        assert!(
+            Cli::try_parse_from(["agent-spreadsheet", "find-formula", "workbook.xlsx"]).is_err(),
+            "missing QUERY should fail clap parsing"
+        );
     }
 
     #[test]
