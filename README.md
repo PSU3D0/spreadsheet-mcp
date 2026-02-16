@@ -74,11 +74,26 @@ agent-spreadsheet sheet-overview data.xlsx "Sheet1"
 # Read a table as structured data
 agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
 
-# Search for a value
+# Read one or more raw ranges
+agent-spreadsheet range-values data.xlsx Sheet1 A1:C20
+
+# Search for labels/values
 agent-spreadsheet find-value data.xlsx "Revenue" --mode label
 
 # Describe workbook metadata
 agent-spreadsheet describe data.xlsx
+```
+
+### Deterministic pagination loops
+
+```bash
+# sheet-page continuation
+agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200
+agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201
+
+# read-table continuation
+agent-spreadsheet read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 0
+agent-spreadsheet read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
 ```
 
 ### Edit → recalculate → diff
@@ -90,20 +105,31 @@ agent-spreadsheet recalculate /tmp/draft.xlsx
 agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 ```
 
+### Stateless batch writes (`--ops @...`)
+
+```bash
+agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run
+agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run
+agent-spreadsheet apply-formula-pattern data.xlsx --ops @formula_ops.json --in-place
+agent-spreadsheet structure-batch data.xlsx --ops @structure_ops.json --dry-run
+agent-spreadsheet column-size-batch data.xlsx --ops @column_size_ops.json --output resized.xlsx
+agent-spreadsheet sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
+agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
+```
+
 All output is JSON by default.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
 
-For `range-values`, shape policy is:
-- **Canonical:** use `values: [...]` when one or more entries are returned; if no entries remain after pruning (for example, invalid ranges), `values` may be omitted.
-- **Compact (single entry):** flatten that entry to top-level fields (`range`, payload, and optional `next_start_row`).
-- **Compact (multiple entries):** keep `values: [...]` with per-entry `range` for correlation.
-
-Continuation stays representable in both shapes:
-- Canonical: `{ "values": [{ "range": "A1:XFD1", "next_start_row": 1 }] }`
-- Compact (single entry): `{ "range": "A1:XFD1", "next_start_row": 1 }`
+Shape policy:
+- **Canonical (default/omitted):** preserve the full response schema.
+- **range-values canonical:** return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).
+- **Compact (single range):** flatten that entry to top-level fields (`range`, payload, and optional `next_start_row`).
+- **Compact (multiple ranges):** keep `values: [...]` with per-entry `range` for correlation.
+- **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
+- **formula-trace compact:** omits per-layer `highlights` while preserving `layers` and `next_cursor`.
 
 Use `--compact` to minimize whitespace and `--quiet` to suppress warnings.
-For CSV, use command-specific options such as `read-table --table-format csv`.
+Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.
 
 ### CLI command reference
 
@@ -112,14 +138,26 @@ For CSV, use command-specific options such as `read-table --table-format csv`.
 | `list-sheets <file>` | List sheets with summaries |
 | `sheet-overview <file> <sheet>` | Region detection + orientation |
 | `describe <file>` | Workbook metadata |
-| `read-table <file> [--sheet S] [--range R]` | Structured table read (`--table-format json\|values\|csv`) |
-| `range-values <file> <sheet> [ranges...]` | Raw cell values for specific ranges |
+| `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
+| `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
+| `range-values <file> <sheet> <range> [range...]` | Raw cell values for one or more ranges |
+| `find-value <file> <query> [--sheet S] [--mode value\|label]` | Search cell values (`value`) or labels (`label`) |
+| `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
+| `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
+| `scan-volatiles <file> [--sheet S] [--limit N] [--offset N]` | Scan formulas for volatile functions |
+| `sheet-statistics <file> <sheet>` | Per-sheet density and type stats |
+| `formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N]` | Formula inventory summary |
+| `formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N]` | Trace formula dependencies with cursor continuation |
 | `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
-| `find-value <file> <query> [--sheet S] [--mode M]` | Search cell values (`value`) or labels (`label`) |
-| `formula-map <file> <sheet>` | Formula inventory (`--sort-by complexity\|count`) |
-| `formula-trace <file> <sheet> <cell> <dir>` | Trace formula `precedents` or `dependents` |
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
 | `edit <file> <sheet> <edits...>` | Apply cell edits (`A1=42`, `B2==SUM(...)`) |
+| `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless transform batch pipeline |
+| `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
+| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations |
+| `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations (sheet rows/columns) |
+| `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
+| `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
+| `rules-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless validation/conditional-format operations |
 | `recalculate <file>` | Recalculate formulas via backend |
 | `diff <original> <modified>` | Diff two workbook versions |
 

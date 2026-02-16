@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -173,6 +173,15 @@ fn write_ops_payload(path: &Path, payload: &str) {
     fs::write(path, payload).expect("write ops payload");
 }
 
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_repo_doc(relative_path: &str) -> String {
+    fs::read_to_string(repo_root().join(relative_path))
+        .unwrap_or_else(|err| panic!("read {relative_path}: {err}"))
+}
+
 fn assert_batch_mode_matrix(command: &str, file: &str, ops_ref: &str) {
     assert_invalid_argument(&[command, file, "--ops", ops_ref]);
     assert_invalid_argument(&[command, file, "--ops", ops_ref, "--dry-run", "--in-place"]);
@@ -205,6 +214,22 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let root = parse_stdout_text(&root_help);
     assert!(root.contains("Stateless spreadsheet CLI for AI and automation workflows"));
     assert!(root.contains("Common workflows:"));
+    assert!(
+        root.contains("Inspect a workbook: list-sheets → sheet-overview → table-profile"),
+        "missing inspect workflow anchor: {root}"
+    );
+    assert!(
+        root.contains(
+            "Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)"
+        ),
+        "missing pagination workflow anchor: {root}"
+    );
+    assert!(
+        root.contains(
+            "Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)"
+        ),
+        "missing batch workflow anchor: {root}"
+    );
     assert!(root.contains("global --output-format csv is currently unsupported"));
     assert!(root.contains("find-value"));
     assert!(root.contains("named-ranges"));
@@ -318,6 +343,245 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(range.contains("Read raw values for one or more A1 ranges"));
     assert!(range.contains("Examples:"));
     assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
+
+    let sheet_page_help = run_cli(&["sheet-page", "--help"]);
+    assert!(
+        sheet_page_help.status.success(),
+        "stderr: {:?}",
+        sheet_page_help.stderr
+    );
+    let sheet_page = parse_stdout_text(&sheet_page_help);
+    assert!(sheet_page.contains("Read one sheet page with deterministic continuation"));
+    assert!(sheet_page.contains("Examples:"));
+    assert!(sheet_page.contains("sheet-page data.xlsx Sheet1 --format compact --page-size 200"));
+    assert!(
+        sheet_page.contains(
+            "sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201"
+        )
+    );
+    assert!(sheet_page.contains("Pagination loop:"));
+
+    let read_table_help = run_cli(&["read-table", "--help"]);
+    assert!(
+        read_table_help.status.success(),
+        "stderr: {:?}",
+        read_table_help.stderr
+    );
+    let read_table = parse_stdout_text(&read_table_help);
+    assert!(read_table.contains("Read a table-like region as json, values, or csv"));
+    assert!(read_table.contains("Examples:"));
+    assert!(
+        read_table.contains(
+            "read-table data.xlsx --sheet Sheet1 --table-format csv --limit 50 --offset 0"
+        )
+    );
+    assert!(read_table.contains(
+        "read-table data.xlsx --table-name SalesTable --sample-mode distributed --limit 20"
+    ));
+    assert!(read_table.contains("Repeat with --offset set to next_offset"));
+
+    let formula_trace_help = run_cli(&["formula-trace", "--help"]);
+    assert!(
+        formula_trace_help.status.success(),
+        "stderr: {:?}",
+        formula_trace_help.stderr
+    );
+    let formula_trace = parse_stdout_text(&formula_trace_help);
+    assert!(formula_trace.contains("Trace formula precedents or dependents from one origin cell"));
+    assert!(formula_trace.contains("Examples:"));
+    assert!(formula_trace.contains("formula-trace data.xlsx Sheet1 C2 precedents --depth 2"));
+    assert!(formula_trace.contains(
+        "formula-trace data.xlsx Sheet1 C2 precedents --cursor-depth 1 --cursor-offset 25"
+    ));
+    assert!(
+        formula_trace.contains(
+            "Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset"
+        )
+    );
+
+    let transform_help = run_cli(&["transform-batch", "--help"]);
+    assert!(
+        transform_help.status.success(),
+        "stderr: {:?}",
+        transform_help.stderr
+    );
+    let transform = parse_stdout_text(&transform_help);
+    assert!(transform.contains("Apply stateless transform operations from an @ops payload"));
+    assert!(transform.contains("Examples:"));
+    assert!(transform.contains("transform-batch workbook.xlsx --ops @ops.json --dry-run"));
+    assert!(transform.contains(
+        "transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force"
+    ));
+    assert!(transform.contains("Choose exactly one of --dry-run, --in-place, or --output <PATH>"),);
+}
+
+#[test]
+fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
+    let readme = read_repo_doc("README.md");
+    for anchor in [
+        "agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200",
+        "agent-spreadsheet read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
+        "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
+        "agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run",
+        "`sheet-page <file> <sheet> --format <full|compact|values_only>",
+        "`range-values <file> <sheet> <range> [range...]`",
+        "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
+        "Compact (single range):** flatten that entry to top-level fields",
+        "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
+        "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
+    ] {
+        assert!(
+            readme.contains(anchor),
+            "missing README CLI anchor: {anchor}\n--- README excerpt check failed ---"
+        );
+    }
+    assert!(
+        !readme.contains("workbook_short_id"),
+        "README should not advertise obsolete workbook_short_id fields"
+    );
+
+    let tmp = tempdir().expect("tempdir");
+    let data_path = tmp.path().join("data.xlsx");
+    let draft_path = tmp.path().join("draft.xlsx");
+    let transform_ops_path = tmp.path().join("ops.json");
+    let style_ops_path = tmp.path().join("style_ops.json");
+
+    write_fixture(&data_path);
+    write_ops_payload(
+        &transform_ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"77"}]}"#,
+    );
+    write_ops_payload(
+        &style_ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"bold":true}}}]}"#,
+    );
+
+    let file = data_path.to_str().expect("data path utf8");
+    let draft = draft_path.to_str().expect("draft path utf8");
+    let transform_ops_ref = format!("@{}", transform_ops_path.to_str().expect("ops utf8"));
+    let style_ops_ref = format!("@{}", style_ops_path.to_str().expect("style ops utf8"));
+
+    for args in [
+        vec!["list-sheets", file],
+        vec!["sheet-overview", file, "Sheet1"],
+        vec![
+            "read-table",
+            file,
+            "--sheet",
+            "Sheet1",
+            "--table-format",
+            "values",
+        ],
+        vec![
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--format",
+            "compact",
+            "--page-size",
+            "2",
+        ],
+        vec![
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--format",
+            "compact",
+            "--page-size",
+            "2",
+            "--start-row",
+            "3",
+        ],
+        vec!["range-values", file, "Sheet1", "A1:C4"],
+        vec![
+            "transform-batch",
+            file,
+            "--ops",
+            transform_ops_ref.as_str(),
+            "--dry-run",
+        ],
+        vec![
+            "style-batch",
+            file,
+            "--ops",
+            style_ops_ref.as_str(),
+            "--dry-run",
+        ],
+        vec!["copy", file, draft],
+        vec!["edit", draft, "Sheet1", "B2=500", "C2==B2*1.1"],
+        vec!["recalculate", draft],
+        vec!["diff", file, draft],
+    ] {
+        let output = run_cli(args.as_slice());
+        assert!(
+            output.status.success(),
+            "args={args:?}, stderr={:?}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
+fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
+    let readme = read_repo_doc("npm/agent-spreadsheet/README.md");
+    for anchor in [
+        "agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200",
+        "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
+        "`sheet-page <file> <sheet> --format <full|compact|values_only>",
+        "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
+        "Canonical (default/omitted): return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).",
+        "Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.",
+    ] {
+        assert!(
+            readme.contains(anchor),
+            "missing npm README CLI anchor: {anchor}\n--- npm README excerpt check failed ---"
+        );
+    }
+    assert!(
+        !readme.contains("workbook_short_id"),
+        "npm README should not advertise obsolete workbook_short_id fields"
+    );
+
+    let tmp = tempdir().expect("tempdir");
+    let data_path = tmp.path().join("data.xlsx");
+    let transform_ops_path = tmp.path().join("ops.json");
+    write_fixture(&data_path);
+    write_ops_payload(
+        &transform_ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"88"}]}"#,
+    );
+
+    let file = data_path.to_str().expect("data path utf8");
+    let transform_ops_ref = format!("@{}", transform_ops_path.to_str().expect("ops utf8"));
+
+    for args in [
+        vec!["list-sheets", file],
+        vec!["read-table", file, "--sheet", "Sheet1"],
+        vec![
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--format",
+            "compact",
+            "--page-size",
+            "2",
+        ],
+        vec!["table-profile", file, "--sheet", "Sheet1"],
+        vec![
+            "transform-batch",
+            file,
+            "--ops",
+            transform_ops_ref.as_str(),
+            "--dry-run",
+        ],
+    ] {
+        let output = run_cli(args.as_slice());
+        assert!(
+            output.status.success(),
+            "args={args:?}, stderr={:?}",
+            output.stderr
+        );
+    }
 }
 
 #[test]

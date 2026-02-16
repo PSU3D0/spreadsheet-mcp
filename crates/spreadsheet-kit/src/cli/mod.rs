@@ -67,7 +67,7 @@ pub enum TraceDirectionArg {
     name = "agent-spreadsheet",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Find labels or values: find-value --mode label|value\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(
@@ -134,7 +134,10 @@ pub enum Commands {
         )]
         ranges: Vec<String>,
     },
-    #[command(about = "Read one sheet page with deterministic continuation")]
+    #[command(
+        about = "Read one sheet page with deterministic continuation",
+        after_long_help = "Examples:\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format full --columns A,C:E --include-styles\n\nPagination loop:\n  1) Run without --start-row.\n  2) If next_start_row is present, pass it to --start-row for the next request.\n  3) Stop when next_start_row is omitted."
+    )]
     SheetPage {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
@@ -195,7 +198,10 @@ pub enum Commands {
         )]
         format: SheetPageFormatArg,
     },
-    #[command(about = "Read a table-like region as json, values, or csv")]
+    #[command(
+        about = "Read a table-like region as json, values, or csv",
+        after_long_help = "Examples:\n  agent-spreadsheet read-table data.xlsx --sheet Sheet1 --table-format values\n  agent-spreadsheet read-table data.xlsx --sheet Sheet1 --table-format csv --limit 50 --offset 0\n  agent-spreadsheet read-table data.xlsx --table-name SalesTable --sample-mode distributed --limit 20\n\nPagination loop:\n  Repeat with --offset set to next_offset until next_offset is omitted."
+    )]
     ReadTable {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
@@ -344,7 +350,10 @@ pub enum Commands {
         )]
         sort_by: Option<FormulaSort>,
     },
-    #[command(about = "Trace formula precedents or dependents from one origin cell")]
+    #[command(
+        about = "Trace formula precedents or dependents from one origin cell",
+        after_long_help = "Examples:\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --depth 2\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 dependents --page-size 25\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --cursor-depth 1 --cursor-offset 25\n\nContinuation:\n  Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset to continue paged traces."
+    )]
     FormulaTrace {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
@@ -416,7 +425,10 @@ pub enum Commands {
         )]
         edits: Vec<String>,
     },
-    #[command(about = "Apply stateless transform operations from an @ops payload")]
+    #[command(
+        about = "Apply stateless transform operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --in-place\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force\n\nMode selection:\n  Choose exactly one of --dry-run, --in-place, or --output <PATH>."
+    )]
     TransformBatch {
         #[arg(value_name = "FILE", help = "Workbook path to transform")]
         file: PathBuf,
