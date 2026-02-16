@@ -44,6 +44,33 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
         };
     }
 
+    if let Some(detail) = message.strip_prefix("invalid ops payload: ") {
+        return ErrorEnvelope {
+            code: "INVALID_OPS_PAYLOAD".to_string(),
+            message: detail.to_string(),
+            did_you_mean: None,
+            try_this: Some("pass --ops @<path-to-json> with payload {\"ops\":[...]}".to_string()),
+        };
+    }
+
+    if let Some(detail) = message.strip_prefix("output exists: ") {
+        return ErrorEnvelope {
+            code: "OUTPUT_EXISTS".to_string(),
+            message: detail.to_string(),
+            did_you_mean: None,
+            try_this: Some("choose a new --output path or re-run with --force".to_string()),
+        };
+    }
+
+    if let Some(detail) = message.strip_prefix("write failed: ") {
+        return ErrorEnvelope {
+            code: "WRITE_FAILED".to_string(),
+            message: detail.to_string(),
+            did_you_mean: None,
+            try_this: Some("check destination permissions and available disk space".to_string()),
+        };
+    }
+
     if message.contains("does not exist") {
         return ErrorEnvelope {
             code: "FILE_NOT_FOUND".to_string(),
