@@ -23,8 +23,14 @@ agent-spreadsheet list-sheets data.xlsx
 # Read a table as structured JSON
 agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
 
+# Deterministic row paging
+agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200
+
 # Profile column types and cardinality
 agent-spreadsheet table-profile data.xlsx --sheet "Sheet1"
+
+# Stateless transform dry-run
+agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run
 
 # Edit → diff workflow
 agent-spreadsheet copy data.xlsx /tmp/draft.xlsx
@@ -34,12 +40,30 @@ agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 
 All commands output JSON to stdout.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
+
 For `range-values`, shape policy is:
-- **Canonical (default/omitted):** return `values: [...]` when entries are present.
+- **Canonical (default/omitted): return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).**
 - **Compact (single range):** flatten that entry to top-level fields (`range`, payload, optional `next_start_row`).
 - **Compact (multiple ranges):** keep `values: [...]` with per-entry `range`.
+
+For other high-traffic commands:
+- `read-table` and `sheet-page` compact mode preserves active response branches and continuation fields (`next_offset`, `next_start_row`).
+- `formula-trace` compact mode omits per-layer highlights but preserves `layers` and `next_cursor`.
+
 Use `--compact` to minimize whitespace.
-For CSV, use command-specific options such as `read-table --table-format csv`.
+Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.
+
+### CLI command reference (high-traffic)
+
+| Command | Description |
+| --- | --- |
+| `read-table <file> [--sheet S] [--range R] [--table-format json\|values\|csv] [--limit N] [--offset N]` | Structured table read with deterministic offset pagination |
+| `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic sheet paging with `next_start_row` continuation |
+| `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
+| `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless batch writes |
+| `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
+| `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations |
+| `rules-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless validation/conditional-format operations |
 
 ## Platform support
 
