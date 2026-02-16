@@ -173,6 +173,31 @@ fn write_ops_payload(path: &Path, payload: &str) {
     fs::write(path, payload).expect("write ops payload");
 }
 
+fn assert_batch_mode_matrix(command: &str, file: &str, ops_ref: &str) {
+    assert_invalid_argument(&[command, file, "--ops", ops_ref]);
+    assert_invalid_argument(&[command, file, "--ops", ops_ref, "--dry-run", "--in-place"]);
+    assert_invalid_argument(&[
+        command,
+        file,
+        "--ops",
+        ops_ref,
+        "--dry-run",
+        "--output",
+        "out.xlsx",
+    ]);
+    assert_invalid_argument(&[
+        command,
+        file,
+        "--ops",
+        ops_ref,
+        "--in-place",
+        "--output",
+        "out.xlsx",
+    ]);
+    assert_invalid_argument(&[command, file, "--ops", ops_ref, "--force"]);
+    assert_invalid_argument(&[command, file, "--ops", ops_ref, "--output", file]);
+}
+
 #[test]
 fn cli_help_surfaces_include_descriptions_and_examples() {
     let root_help = run_cli(&["--help"]);
@@ -2913,6 +2938,1485 @@ fn cli_transform_batch_maps_write_failures_and_preserves_source() {
                 .as_str()
                 .unwrap_or_default()
                 .contains("Permission denied")
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[test]
+fn phase_a_help_examples_for_style_and_formula_commands() {
+    let style_help = run_cli(&["style-batch", "--help"]);
+    assert!(
+        style_help.status.success(),
+        "stderr: {:?}",
+        style_help.stderr
+    );
+    let style = parse_stdout_text(&style_help);
+    assert!(style.contains("Examples:"));
+    assert!(style.contains("style-batch workbook.xlsx --ops @style_ops.json --dry-run"));
+    assert!(
+        style.contains(
+            "style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
+        )
+    );
+
+    let formula_help = run_cli(&["apply-formula-pattern", "--help"]);
+    assert!(
+        formula_help.status.success(),
+        "stderr: {:?}",
+        formula_help.stderr
+    );
+    let formula = parse_stdout_text(&formula_help);
+    assert!(formula.contains("Examples:"));
+    assert!(
+        formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place")
+    );
+    assert!(
+        formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run")
+    );
+}
+
+#[test]
+fn phase_a_style_batch_positive_dry_run_and_output_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-style-source.xlsx");
+    let output_path = tmp.path().join("phase-a-style-output.xlsx");
+    let ops_path = tmp.path().join("style-ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"bold":true}}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before dry-run");
+    let dry_run = run_cli(&[
+        "style-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert_eq!(dry_payload["op_count"].as_u64(), Some(1));
+    assert_eq!(dry_payload["validated_count"].as_u64(), Some(1));
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+
+    let after_dry = fs::read(&source_path).expect("read source after dry-run");
+    assert_eq!(before, after_dry, "dry-run mutated source file");
+
+    let output_run = run_cli(&[
+        "style-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(
+        output_run.status.success(),
+        "stderr: {:?}",
+        output_run.stderr
+    );
+    let output_payload = parse_stdout_json(&output_run);
+    assert_eq!(output_payload["target_path"].as_str(), Some(output));
+    assert_eq!(output_payload["source_path"].as_str(), Some(source));
+    assert!(output_payload["changed"].as_bool().unwrap_or(false));
+
+    let source_after = fs::read(&source_path).expect("read source after output mode");
+    let output_after = fs::read(&output_path).expect("read output after output mode");
+    assert_eq!(before, source_after, "source changed during --output mode");
+    assert_ne!(source_after, output_after, "output file did not change");
+}
+
+#[test]
+fn phase_a_style_batch_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-style-force-source.xlsx");
+    let output_path = tmp.path().join("phase-a-style-force-output.xlsx");
+    let ops_first_path = tmp.path().join("style-ops-first.json");
+    let ops_second_path = tmp.path().join("style-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"bold":true}}}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"italic":true}}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "style-batch",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_bytes = fs::read(&output_path).expect("read first output bytes");
+
+    assert_error_code(
+        &[
+            "style-batch",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+    let after_failed_bytes = fs::read(&output_path).expect("read output after failed overwrite");
+    assert_eq!(first_bytes, after_failed_bytes);
+
+    let forced = run_cli(&[
+        "style-batch",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let forced_bytes = fs::read(&output_path).expect("read forced output bytes");
+    assert_ne!(
+        first_bytes, forced_bytes,
+        "force overwrite did not update output"
+    );
+}
+
+#[test]
+fn phase_a_apply_formula_pattern_positive_dry_run_and_output_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-formula-source.xlsx");
+    let output_path = tmp.path().join("phase-a-formula-output.xlsx");
+    let ops_path = tmp.path().join("formula-ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down","relative_mode":"excel"}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before dry-run");
+    let dry_run = run_cli(&[
+        "apply-formula-pattern",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert_eq!(dry_payload["op_count"].as_u64(), Some(1));
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+    let after_dry = fs::read(&source_path).expect("read source after dry-run");
+    assert_eq!(before, after_dry, "dry-run mutated source file");
+
+    let output_run = run_cli(&[
+        "apply-formula-pattern",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(
+        output_run.status.success(),
+        "stderr: {:?}",
+        output_run.stderr
+    );
+    let output_payload = parse_stdout_json(&output_run);
+    assert!(output_payload["changed"].as_bool().unwrap_or(false));
+
+    let source_book =
+        umya_spreadsheet::reader::xlsx::read(&source_path).expect("read source workbook");
+    let source_sheet = source_book
+        .get_sheet_by_name("Sheet1")
+        .expect("source sheet");
+    assert_eq!(
+        source_sheet
+            .get_cell("C2")
+            .expect("C2 source")
+            .get_formula(),
+        "B2*2"
+    );
+
+    let output_book =
+        umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("output sheet");
+    assert_eq!(
+        output_sheet
+            .get_cell("C2")
+            .expect("C2 output")
+            .get_formula()
+            .replace(' ', ""),
+        "B2*3"
+    );
+    assert_eq!(
+        output_sheet
+            .get_cell("C3")
+            .expect("C3 output")
+            .get_formula()
+            .replace(' ', ""),
+        "B3*3"
+    );
+    assert_eq!(
+        output_sheet
+            .get_cell("C4")
+            .expect("C4 output")
+            .get_formula()
+            .replace(' ', ""),
+        "B4*3"
+    );
+}
+
+#[test]
+fn phase_a_apply_formula_pattern_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-force-source.xlsx");
+    let output_path = tmp.path().join("phase-a-force-output.xlsx");
+    let ops_first_path = tmp.path().join("formula-ops-first.json");
+    let ops_second_path = tmp.path().join("formula-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C2","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down"}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C2","anchor_cell":"C2","base_formula":"B2*5","fill_direction":"down"}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "apply-formula-pattern",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    assert_error_code(
+        &[
+            "apply-formula-pattern",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let forced = run_cli(&[
+        "apply-formula-pattern",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    assert_eq!(
+        output_sheet
+            .get_cell("C2")
+            .expect("C2 output")
+            .get_formula()
+            .replace(' ', ""),
+        "B2*5"
+    );
+}
+
+#[test]
+fn phase_a_negative_invalid_ops_payloads() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-a-invalid-ops.xlsx");
+    let style_bad_path = tmp.path().join("style-bad.json");
+    let formula_bad_path = tmp.path().join("formula-bad.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &style_bad_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target":{"kind":"unknown"},"patch":{}}]}"#,
+    );
+    write_ops_payload(
+        &formula_bad_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C1","base_formula":"B2*3","fill_direction":"down"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let style_ref = format!("@{}", style_bad_path.to_str().expect("ops utf8"));
+    let formula_ref = format!("@{}", formula_bad_path.to_str().expect("ops utf8"));
+
+    assert_error_code(
+        &[
+            "style-batch",
+            file,
+            "--ops",
+            style_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    assert_error_code(
+        &[
+            "apply-formula-pattern",
+            file,
+            "--ops",
+            formula_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+}
+
+#[test]
+fn phase_a_safety_mode_matrix_for_style_and_formula_commands() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-a-safety.xlsx");
+    let style_ops_path = tmp.path().join("style-ops.json");
+    let formula_ops_path = tmp.path().join("formula-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &style_ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"bold":true}}}]}"#,
+    );
+    write_ops_payload(
+        &formula_ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let style_ref = format!("@{}", style_ops_path.to_str().expect("ops utf8"));
+    let formula_ref = format!("@{}", formula_ops_path.to_str().expect("ops utf8"));
+
+    assert_batch_mode_matrix("style-batch", file, style_ref.as_str());
+    assert_batch_mode_matrix("apply-formula-pattern", file, formula_ref.as_str());
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_a_style_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-style-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"B2:B2","style":{"font":{"bold":true}}}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "style-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_a_apply_formula_pattern_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-a-formula-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked-formula");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("formula-ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down"}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "apply-formula-pattern",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[test]
+fn phase_b_help_examples_for_structure_column_and_layout_commands() {
+    let structure_help = run_cli(&["structure-batch", "--help"]);
+    assert!(
+        structure_help.status.success(),
+        "stderr: {:?}",
+        structure_help.stderr
+    );
+    let structure = parse_stdout_text(&structure_help);
+    assert!(structure.contains("Examples:"));
+    assert!(
+        structure.contains("structure-batch workbook.xlsx --ops @structure_ops.json --dry-run")
+    );
+    assert!(structure.contains(
+        "structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
+    ));
+
+    let column_help = run_cli(&["column-size-batch", "--help"]);
+    assert!(
+        column_help.status.success(),
+        "stderr: {:?}",
+        column_help.stderr
+    );
+    let column = parse_stdout_text(&column_help);
+    assert!(column.contains("Examples:"));
+    assert!(
+        column.contains("column-size-batch workbook.xlsx --ops @column_size_ops.json --in-place")
+    );
+    assert!(column.contains(
+        "column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
+    ));
+
+    let layout_help = run_cli(&["sheet-layout-batch", "--help"]);
+    assert!(
+        layout_help.status.success(),
+        "stderr: {:?}",
+        layout_help.stderr
+    );
+    let layout = parse_stdout_text(&layout_help);
+    assert!(layout.contains("Examples:"));
+    assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run"));
+    assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place"));
+}
+
+#[test]
+fn phase_b_structure_batch_positive_in_place_renames_sheet() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-b-structure-in-place.xlsx");
+    let ops_path = tmp.path().join("structure-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["op_count"].as_u64(), Some(1));
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    assert!(book.get_sheet_by_name("Dashboard").is_some());
+    assert!(book.get_sheet_by_name("Summary").is_none());
+}
+
+#[test]
+fn phase_b_structure_batch_positive_dry_run_and_output_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-structure-source.xlsx");
+    let output_path = tmp.path().join("phase-b-structure-output.xlsx");
+    let ops_path = tmp.path().join("structure-ops-output.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before dry-run");
+
+    let dry_run = run_cli(&[
+        "structure-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+
+    let source_after_dry = fs::read(&source_path).expect("read source after dry-run");
+    assert_eq!(before, source_after_dry, "dry-run mutated source workbook");
+
+    let output_run = run_cli(&[
+        "structure-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(
+        output_run.status.success(),
+        "stderr: {:?}",
+        output_run.stderr
+    );
+    let payload = parse_stdout_json(&output_run);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let source_book = umya_spreadsheet::reader::xlsx::read(&source_path).expect("read source");
+    assert!(source_book.get_sheet_by_name("Summary").is_some());
+    assert!(source_book.get_sheet_by_name("Dashboard").is_none());
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    assert!(output_book.get_sheet_by_name("Dashboard").is_some());
+    assert!(output_book.get_sheet_by_name("Summary").is_none());
+}
+
+#[test]
+fn phase_b_structure_batch_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-structure-force-source.xlsx");
+    let output_path = tmp.path().join("phase-b-structure-force-output.xlsx");
+    let ops_first_path = tmp.path().join("structure-ops-first.json");
+    let ops_second_path = tmp.path().join("structure-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Board"}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "structure-batch",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    assert_error_code(
+        &[
+            "structure-batch",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let forced = run_cli(&[
+        "structure-batch",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    assert!(output_book.get_sheet_by_name("Board").is_some());
+    assert!(output_book.get_sheet_by_name("Summary").is_none());
+}
+
+#[test]
+fn phase_b_column_size_batch_positive_output_mutates_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-source.xlsx");
+    let output_path = tmp.path().join("phase-b-column-output.xlsx");
+    let ops_path = tmp.path().join("column-ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":25.0}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before dry-run");
+
+    let dry_run = run_cli(&[
+        "column-size-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+
+    let source_after_dry = fs::read(&source_path).expect("read source after dry-run");
+    assert_eq!(before, source_after_dry, "dry-run mutated source workbook");
+
+    let run = run_cli(&[
+        "column-size-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(run.status.success(), "stderr: {:?}", run.stderr);
+    let payload = parse_stdout_json(&run);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let source_after = fs::read(&source_path).expect("read source after output mode");
+    assert_eq!(before, source_after, "source changed during --output mode");
+
+    let output_book =
+        umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let width = *output_sheet
+        .get_column_dimension("A")
+        .expect("A column")
+        .get_width();
+    assert!((width - 25.0).abs() < 0.001);
+}
+
+#[test]
+fn phase_b_column_size_batch_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-force-source.xlsx");
+    let output_path = tmp.path().join("phase-b-column-force-output.xlsx");
+    let ops_first_path = tmp.path().join("column-ops-first.json");
+    let ops_second_path = tmp.path().join("column-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":25.0}}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":18.0}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "column-size-batch",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    assert_error_code(
+        &[
+            "column-size-batch",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let without_force_book =
+        umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output without force");
+    let without_force_sheet = without_force_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let without_force_width = *without_force_sheet
+        .get_column_dimension("A")
+        .expect("A column")
+        .get_width();
+    assert!((without_force_width - 25.0).abs() < 0.001);
+
+    let forced = run_cli(&[
+        "column-size-batch",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let forced_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let forced_sheet = forced_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let forced_width = *forced_sheet
+        .get_column_dimension("A")
+        .expect("A column")
+        .get_width();
+    assert!((forced_width - 18.0).abs() < 0.001);
+}
+
+#[test]
+fn phase_b_sheet_layout_batch_positive_dry_run_and_in_place() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-b-layout.xlsx");
+    let ops_path = tmp.path().join("layout-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&workbook_path).expect("read before dry-run");
+    let dry_run = run_cli(&[
+        "sheet-layout-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+    let after_dry = fs::read(&workbook_path).expect("read after dry-run");
+    assert_eq!(before, after_dry, "dry-run mutated workbook");
+
+    let in_place = run_cli(&[
+        "sheet-layout-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(in_place.status.success(), "stderr: {:?}", in_place.stderr);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
+    let views = sheet.get_sheets_views().get_sheet_view_list();
+    let pane = views
+        .first()
+        .and_then(|view| view.get_pane())
+        .expect("pane");
+    assert_eq!(*pane.get_horizontal_split(), 1.0);
+    assert_eq!(*pane.get_vertical_split(), 1.0);
+    assert_eq!(pane.get_top_left_cell().to_string(), "B2");
+}
+
+#[test]
+fn phase_b_sheet_layout_batch_positive_output_mutates_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-layout-source.xlsx");
+    let output_path = tmp.path().join("phase-b-layout-output.xlsx");
+    let ops_path = tmp.path().join("layout-output-ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before output mode");
+
+    let run = run_cli(&[
+        "sheet-layout-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(run.status.success(), "stderr: {:?}", run.stderr);
+    let payload = parse_stdout_json(&run);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let source_after = fs::read(&source_path).expect("read source after output mode");
+    assert_eq!(before, source_after, "source changed during --output mode");
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let pane = output_sheet
+        .get_sheets_views()
+        .get_sheet_view_list()
+        .first()
+        .and_then(|view| view.get_pane())
+        .expect("pane");
+    assert_eq!(pane.get_top_left_cell().to_string(), "B2");
+}
+
+#[test]
+fn phase_b_sheet_layout_batch_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-layout-force-source.xlsx");
+    let output_path = tmp.path().join("phase-b-layout-force-output.xlsx");
+    let ops_first_path = tmp.path().join("layout-ops-first.json");
+    let ops_second_path = tmp.path().join("layout-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":2,"freeze_cols":0}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "sheet-layout-batch",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    assert_error_code(
+        &[
+            "sheet-layout-batch",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let without_force_book =
+        umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output without force");
+    let without_force_sheet = without_force_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let without_force_pane = without_force_sheet
+        .get_sheets_views()
+        .get_sheet_view_list()
+        .first()
+        .and_then(|view| view.get_pane())
+        .expect("pane without force");
+    assert_eq!(without_force_pane.get_top_left_cell().to_string(), "B2");
+
+    let forced = run_cli(&[
+        "sheet-layout-batch",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let forced_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let forced_sheet = forced_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let forced_pane = forced_sheet
+        .get_sheets_views()
+        .get_sheet_view_list()
+        .first()
+        .and_then(|view| view.get_pane())
+        .expect("forced pane");
+    assert_eq!(forced_pane.get_top_left_cell().to_string(), "A3");
+}
+
+#[test]
+fn phase_b_negative_invalid_ops_payloads() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-b-invalid-ops.xlsx");
+    let structure_bad_path = tmp.path().join("structure-bad.json");
+    let column_bad_path = tmp.path().join("column-bad.json");
+    let layout_bad_path = tmp.path().join("layout-bad.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(&structure_bad_path, r#"{"ops":[{"kind":"unknown_kind"}]}"#);
+    write_ops_payload(
+        &column_bad_path,
+        r#"{"ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#,
+    );
+    write_ops_payload(
+        &layout_bad_path,
+        r#"{"ops":[{"kind":"set_zoom","sheet_name":"Sheet1","zoom_percent":5}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let structure_ref = format!("@{}", structure_bad_path.to_str().expect("ops utf8"));
+    let column_ref = format!("@{}", column_bad_path.to_str().expect("ops utf8"));
+    let layout_ref = format!("@{}", layout_bad_path.to_str().expect("ops utf8"));
+
+    assert_error_code(
+        &[
+            "structure-batch",
+            file,
+            "--ops",
+            structure_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    assert_error_code(
+        &[
+            "column-size-batch",
+            file,
+            "--ops",
+            column_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    assert_error_code(
+        &[
+            "sheet-layout-batch",
+            file,
+            "--ops",
+            layout_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+}
+
+#[test]
+fn phase_b_safety_mode_matrix_for_structure_column_layout_commands() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-b-safety.xlsx");
+    let structure_ops_path = tmp.path().join("structure-ops.json");
+    let column_ops_path = tmp.path().join("column-ops.json");
+    let layout_ops_path = tmp.path().join("layout-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &structure_ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#,
+    );
+    write_ops_payload(
+        &column_ops_path,
+        r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":20.0}}]}"#,
+    );
+    write_ops_payload(
+        &layout_ops_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let structure_ref = format!("@{}", structure_ops_path.to_str().expect("ops utf8"));
+    let column_ref = format!("@{}", column_ops_path.to_str().expect("ops utf8"));
+    let layout_ref = format!("@{}", layout_ops_path.to_str().expect("ops utf8"));
+
+    assert_batch_mode_matrix("structure-batch", file, structure_ref.as_str());
+    assert_batch_mode_matrix("column-size-batch", file, column_ref.as_str());
+    assert_batch_mode_matrix("sheet-layout-batch", file, layout_ref.as_str());
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_b_structure_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-structure-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "structure-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_b_column_size_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked-column");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops-column.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":20.0}}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "column-size-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_b_sheet_layout_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-layout-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked-layout");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops-layout.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "sheet-layout-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[test]
+fn phase_c_help_examples_for_rules_command() {
+    let rules_help = run_cli(&["rules-batch", "--help"]);
+    assert!(
+        rules_help.status.success(),
+        "stderr: {:?}",
+        rules_help.stderr
+    );
+    let rules = parse_stdout_text(&rules_help);
+    assert!(rules.contains("Examples:"));
+    assert!(rules.contains("rules-batch workbook.xlsx --ops @rules_ops.json --dry-run"));
+    assert!(
+        rules.contains(
+            "rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
+        )
+    );
+}
+
+#[test]
+fn phase_c_rules_batch_positive_in_place_sets_validation() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-c-rules-in-place.xlsx");
+    let ops_path = tmp.path().join("rules-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&["rules-batch", file, "--ops", ops_ref.as_str(), "--in-place"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
+    let dvs = sheet.get_data_validations().expect("data validations");
+    let list = dvs.get_data_validation_list();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].get_sequence_of_references().get_sqref(), "B2:B4");
+}
+
+#[test]
+fn phase_c_rules_batch_positive_dry_run_and_output_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-c-rules-source.xlsx");
+    let output_path = tmp.path().join("phase-c-rules-output.xlsx");
+    let ops_path = tmp.path().join("rules-ops-output.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"C2:C4","validation":{"kind":"list","formula1":"\"X,Y,Z\""}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let before = fs::read(&source_path).expect("read source before dry-run");
+
+    let dry_run = run_cli(&[
+        "rules-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(dry_run.status.success(), "stderr: {:?}", dry_run.stderr);
+    let dry_payload = parse_stdout_json(&dry_run);
+    assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+
+    let source_after_dry = fs::read(&source_path).expect("read source after dry-run");
+    assert_eq!(before, source_after_dry, "dry-run mutated source workbook");
+
+    let output_run = run_cli(&[
+        "rules-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(
+        output_run.status.success(),
+        "stderr: {:?}",
+        output_run.stderr
+    );
+
+    let source_after_output = fs::read(&source_path).expect("read source after output mode");
+    assert_eq!(
+        before, source_after_output,
+        "source changed during --output mode"
+    );
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let dvs = output_sheet
+        .get_data_validations()
+        .expect("data validations");
+    let list = dvs.get_data_validation_list();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].get_sequence_of_references().get_sqref(), "C2:C4");
+}
+
+#[test]
+fn phase_c_rules_batch_output_force_overwrite_semantics() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-c-rules-force-source.xlsx");
+    let output_path = tmp.path().join("phase-c-rules-force-output.xlsx");
+    let ops_first_path = tmp.path().join("rules-ops-first.json");
+    let ops_second_path = tmp.path().join("rules-ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_first_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#,
+    );
+    write_ops_payload(
+        &ops_second_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"C2:C4","validation":{"kind":"list","formula1":"\"X,Y,Z\""}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let first_ref = format!("@{}", ops_first_path.to_str().expect("ops utf8"));
+    let second_ref = format!("@{}", ops_second_path.to_str().expect("ops utf8"));
+
+    let first = run_cli(&[
+        "rules-batch",
+        source,
+        "--ops",
+        first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    assert_error_code(
+        &[
+            "rules-batch",
+            source,
+            "--ops",
+            second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let forced = run_cli(&[
+        "rules-batch",
+        source,
+        "--ops",
+        second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let dvs = output_sheet
+        .get_data_validations()
+        .expect("data validations");
+    let list = dvs.get_data_validation_list();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].get_sequence_of_references().get_sqref(), "C2:C4");
+}
+
+#[test]
+fn phase_c_negative_invalid_ops_payload() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-c-invalid-ops.xlsx");
+    let bad_ops_path = tmp.path().join("rules-bad.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(&bad_ops_path, r#"{"ops":[{"kind":"unknown_rule"}]}"#);
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", bad_ops_path.to_str().expect("ops utf8"));
+    assert_error_code(
+        &["rules-batch", file, "--ops", ops_ref.as_str(), "--dry-run"],
+        "INVALID_OPS_PAYLOAD",
+    );
+}
+
+#[test]
+fn phase_c_safety_mode_matrix_for_rules_command() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-c-safety.xlsx");
+    let ops_path = tmp.path().join("rules-ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+    assert_batch_mode_matrix("rules-batch", file, ops_ref.as_str());
+}
+
+#[cfg(unix)]
+#[test]
+fn phase_c_rules_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-c-rules-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_error_code(
+        &[
+            "rules-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        !blocked_output.exists(),
+        "write failure left a partial output artifact"
     );
 
     let mut restore = perms;

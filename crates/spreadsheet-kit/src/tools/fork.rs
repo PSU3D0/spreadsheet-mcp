@@ -709,6 +709,20 @@ fn normalize_column_size_batch(
     ))
 }
 
+pub(crate) fn normalize_column_size_payload(
+    sheet_name: String,
+    ops: Vec<ColumnSizeOpInput>,
+) -> Result<(Vec<ColumnSizeOp>, Vec<Warning>)> {
+    let (params, warnings) = normalize_column_size_batch(ColumnSizeBatchParamsInput {
+        fork_id: String::new(),
+        sheet_name,
+        ops,
+        mode: None,
+        label: None,
+    })?;
+    Ok((params.ops, warnings))
+}
+
 pub async fn column_size_batch(
     state: Arc<AppState>,
     params: ColumnSizeBatchParamsInput,
@@ -963,6 +977,32 @@ fn normalize_color_option(value: &mut Option<Option<String>>, alpha_defaulted: &
     }
 }
 
+pub(crate) fn resolve_style_ops_for_workbook(
+    workbook: &crate::workbook::WorkbookContext,
+    ops: &[StyleOp],
+) -> Result<Vec<StyleOp>> {
+    let mut resolved_ops = Vec::with_capacity(ops.len());
+    for op in ops {
+        let mut resolved = op.clone();
+        if let StyleTarget::Region { region_id } = &op.target {
+            let metrics = workbook.get_sheet_metrics(&op.sheet_name)?;
+            let regions = metrics.detected_regions();
+            let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
+                anyhow!(
+                    "region_id {} not found on sheet '{}'",
+                    region_id,
+                    op.sheet_name
+                )
+            })?;
+            resolved.target = StyleTarget::Range {
+                range: region.bounds.clone(),
+            };
+        }
+        resolved_ops.push(resolved);
+    }
+    Ok(resolved_ops)
+}
+
 pub async fn style_batch(
     state: Arc<AppState>,
     params: StyleBatchParamsInput,
@@ -982,25 +1022,7 @@ pub async fn style_batch(
     // Resolve any region targets against current fork regions.
     let fork_workbook_id = WorkbookId(params.fork_id.clone());
     let workbook = state.open_workbook(&fork_workbook_id).await?;
-    let mut resolved_ops = Vec::with_capacity(params.ops.len());
-    for op in &params.ops {
-        let mut resolved = op.clone();
-        if let StyleTarget::Region { region_id } = &op.target {
-            let metrics = workbook.get_sheet_metrics(&op.sheet_name)?;
-            let regions = metrics.detected_regions();
-            let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
-                anyhow!(
-                    "region_id {} not found on sheet '{}'",
-                    region_id,
-                    op.sheet_name
-                )
-            })?;
-            resolved.target = StyleTarget::Range {
-                range: region.bounds.clone(),
-            };
-        }
-        resolved_ops.push(resolved);
-    }
+    let resolved_ops = resolve_style_ops_for_workbook(&workbook, &params.ops)?;
 
     let mode = params.mode.unwrap_or_default();
 
@@ -1107,6 +1129,18 @@ struct ApplyFormulaPatternStagedPayload {
     base_formula: String,
     fill_direction: Option<FillDirection>,
     relative_mode: Option<FormulaRelativeMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ApplyFormulaPatternOpInput {
+    pub sheet_name: String,
+    pub target_range: String,
+    pub anchor_cell: String,
+    pub base_formula: String,
+    #[serde(default)]
+    pub fill_direction: Option<FillDirection>,
+    #[serde(default)]
+    pub relative_mode: Option<FormulaRelativeMode>,
 }
 
 pub async fn apply_formula_pattern(
@@ -1296,6 +1330,80 @@ fn apply_formula_pattern_to_file(
     Ok(FormulaPatternApplyResult {
         cells_filled,
         summary,
+    })
+}
+
+pub(crate) struct FormulaPatternBatchApplyResult {
+    pub(crate) ops_applied: usize,
+    pub(crate) summary: ChangeSummary,
+}
+
+pub(crate) fn apply_formula_pattern_ops_to_file(
+    path: &Path,
+    ops: &[ApplyFormulaPatternOpInput],
+) -> Result<FormulaPatternBatchApplyResult> {
+    struct PreparedFormulaPatternOp {
+        sheet_name: String,
+        target_range: String,
+        anchor_col: u32,
+        anchor_row: u32,
+        base_formula: String,
+        relative_mode: RelativeMode,
+    }
+
+    let mut prepared_ops = Vec::with_capacity(ops.len());
+    let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
+    let mut affected_bounds: Vec<String> = Vec::with_capacity(ops.len());
+
+    for op in ops {
+        let bounds = parse_range_bounds(&op.target_range)?;
+        let (anchor_col, anchor_row) = parse_cell_ref(&op.anchor_cell)?;
+        let fill_direction = op.fill_direction.unwrap_or_default();
+        validate_formula_pattern_bounds(&bounds, anchor_col, anchor_row, fill_direction)?;
+        parse_base_formula(&op.base_formula)?;
+
+        let relative_mode: RelativeMode = op.relative_mode.unwrap_or_default().into();
+
+        affected_sheets.insert(op.sheet_name.clone());
+        affected_bounds.push(op.target_range.clone());
+
+        prepared_ops.push(PreparedFormulaPatternOp {
+            sheet_name: op.sheet_name.clone(),
+            target_range: op.target_range.clone(),
+            anchor_col,
+            anchor_row,
+            base_formula: op.base_formula.clone(),
+            relative_mode,
+        });
+    }
+
+    let mut cells_filled = 0u64;
+    for op in prepared_ops {
+        let result = apply_formula_pattern_to_file(
+            path,
+            &op.sheet_name,
+            &op.target_range,
+            op.anchor_col,
+            op.anchor_row,
+            &op.base_formula,
+            op.relative_mode,
+        )?;
+        cells_filled += result.cells_filled;
+    }
+
+    let mut counts = BTreeMap::new();
+    counts.insert("cells_filled".to_string(), cells_filled);
+
+    Ok(FormulaPatternBatchApplyResult {
+        ops_applied: ops.len(),
+        summary: ChangeSummary {
+            op_kinds: vec!["apply_formula_pattern".to_string()],
+            affected_sheets: affected_sheets.into_iter().collect(),
+            affected_bounds,
+            counts,
+            warnings: Vec::new(),
+            ..Default::default()
+        },
     })
 }
 
@@ -1660,12 +1768,15 @@ pub async fn structure_batch(
     }
 }
 
-struct StructureApplyResult {
-    ops_applied: usize,
-    summary: ChangeSummary,
+pub(crate) struct StructureApplyResult {
+    pub(crate) ops_applied: usize,
+    pub(crate) summary: ChangeSummary,
 }
 
-fn apply_structure_ops_to_file(path: &Path, ops: &[StructureOp]) -> Result<StructureApplyResult> {
+pub(crate) fn apply_structure_ops_to_file(
+    path: &Path,
+    ops: &[StructureOp],
+) -> Result<StructureApplyResult> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
     let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
@@ -2721,18 +2832,18 @@ fn sheet_name_needs_quoting_for_formula(name: &str) -> bool {
     )
 }
 
-struct StyleApplyResult {
-    ops_applied: usize,
-    summary: ChangeSummary,
+pub(crate) struct StyleApplyResult {
+    pub(crate) ops_applied: usize,
+    pub(crate) summary: ChangeSummary,
 }
 
 pub(crate) fn stage_snapshot_path(fork_id: &str, change_id: &str) -> PathBuf {
     PathBuf::from("/tmp/mcp-staged").join(format!("{fork_id}_{change_id}.xlsx"))
 }
 
-struct ColumnSizeApplyResult {
-    ops_applied: usize,
-    summary: ChangeSummary,
+pub(crate) struct ColumnSizeApplyResult {
+    pub(crate) ops_applied: usize,
+    pub(crate) summary: ChangeSummary,
 }
 
 fn parse_column_span(spec: &str) -> Result<(u32, u32)> {
@@ -2763,7 +2874,7 @@ fn parse_column_span(spec: &str) -> Result<(u32, u32)> {
     Ok((min, max))
 }
 
-fn apply_column_size_ops_to_file(
+pub(crate) fn apply_column_size_ops_to_file(
     path: &Path,
     sheet_name: &str,
     ops: &[ColumnSizeOp],
@@ -3205,7 +3316,7 @@ pub(crate) fn apply_transform_ops_to_file(
     })
 }
 
-fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
+pub(crate) fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
     use crate::styles::{
         StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id,
     };

@@ -2,11 +2,17 @@ use crate::core::types::CellEdit;
 use crate::model::Warning;
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools::fork::{
-    TransformApplyResult, TransformOp, apply_transform_ops_to_file,
+    ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, StructureBatchParamsInput,
+    StructureOp, StructureOpInput, StyleBatchParamsInput, StyleOp, StyleOpInput, TransformOp,
+    apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file, apply_structure_ops_to_file,
+    apply_style_ops_to_file, apply_transform_ops_to_file, normalize_column_size_payload,
+    normalize_structure_batch, normalize_style_batch, resolve_style_ops_for_workbook,
     resolve_transform_ops_for_workbook,
 };
+use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
+use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -31,8 +37,14 @@ struct EditResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct TransformOpsPayload {
-    ops: Vec<TransformOp>,
+struct OpsPayload<T> {
+    ops: Vec<T>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ColumnSizeOpsPayload {
+    sheet_name: String,
+    ops: Vec<ColumnSizeOpInput>,
 }
 
 #[derive(Debug)]
@@ -49,7 +61,7 @@ struct DryRunSummary {
 }
 
 #[derive(Debug, Serialize)]
-struct TransformBatchDryRunResponse {
+struct BatchDryRunResponse {
     op_count: usize,
     validated_count: usize,
     would_change: bool,
@@ -58,7 +70,7 @@ struct TransformBatchDryRunResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct TransformBatchApplyResponse {
+struct BatchApplyResponse {
     op_count: usize,
     applied_count: usize,
     warnings: Vec<Warning>,
@@ -129,7 +141,7 @@ pub async fn transform_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload = parse_ops_payload(&ops)?;
+    let payload: OpsPayload<TransformOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
 
     let (state, workbook_id) = runtime.open_state_for_file(&source).await?;
     let workbook = state.open_workbook(&workbook_id).await?;
@@ -138,59 +150,621 @@ pub async fn transform_batch(
     let _ = state.close_workbook(&workbook_id);
 
     let op_count = resolved_ops.len();
-    let operation_counts = summarize_operation_counts(&resolved_ops);
+    let operation_counts = summarize_transform_operation_counts(&resolved_ops);
 
     match mode {
         BatchMutationMode::DryRun => {
             let (apply_result, _temp_path) =
-                apply_ops_to_temp_copy(&source, source.parent(), &resolved_ops)?;
-            let would_change = summary_indicates_change(&apply_result.summary.counts);
+                apply_to_temp_copy(&source, source.parent(), ".transform-batch-", |path| {
+                    apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                })?;
 
-            Ok(serde_json::to_value(TransformBatchDryRunResponse {
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = transform_summary_indicates_change(&result_counts);
+
+            dry_run_response(
                 op_count,
-                validated_count: op_count,
+                operation_counts,
+                result_counts,
+                warnings,
                 would_change,
-                warnings: Vec::new(),
-                summary: DryRunSummary {
-                    operation_counts,
-                    result_counts: apply_result.summary.counts,
-                },
-            })?)
+            )
         }
         BatchMutationMode::InPlace => {
-            let apply_result = apply_ops_in_place(&source, &resolved_ops)?;
-            let changed = summary_indicates_change(&apply_result.summary.counts);
+            let apply_result = apply_in_place_with_temp(&source, ".transform-batch-", |path| {
+                apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+            })?;
 
-            Ok(serde_json::to_value(TransformBatchApplyResponse {
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = transform_summary_indicates_change(&result_counts);
+
+            apply_response(
                 op_count,
-                applied_count: apply_result.ops_applied,
-                warnings: Vec::new(),
+                apply_result.ops_applied,
+                warnings,
                 changed,
-                target_path: source.display().to_string(),
-                source_path: source.display().to_string(),
-            })?)
+                source.display().to_string(),
+                source.display().to_string(),
+            )
         }
         BatchMutationMode::Output { target, force } => {
             let target = runtime.normalize_destination_path(&target)?;
             ensure_output_path_is_distinct(&source, &target)?;
-            if path_entry_exists(&target)? && !force {
-                return Err(output_exists(format!(
-                    "output path '{}' already exists",
-                    target.display()
-                )));
-            }
 
-            let apply_result = apply_ops_to_output(&source, &target, force, &resolved_ops)?;
-            let changed = summary_indicates_change(&apply_result.summary.counts);
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".transform-batch-", |path| {
+                    apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                })?;
 
-            Ok(serde_json::to_value(TransformBatchApplyResponse {
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = transform_summary_indicates_change(&result_counts);
+
+            apply_response(
                 op_count,
-                applied_count: apply_result.ops_applied,
-                warnings: Vec::new(),
+                apply_result.ops_applied,
+                warnings,
                 changed,
-                target_path: target.display().to_string(),
-                source_path: source.display().to_string(),
-            })?)
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn style_batch(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: OpsPayload<StyleOpInput> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let (normalized, base_warnings) = normalize_style_batch(StyleBatchParamsInput {
+        fork_id: String::new(),
+        ops: payload.ops,
+        mode: None,
+        label: None,
+    })
+    .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    let (state, workbook_id) = runtime.open_state_for_file(&source).await?;
+    let workbook = state.open_workbook(&workbook_id).await?;
+    let resolved_ops = resolve_style_ops_for_workbook(&workbook, &normalized.ops)
+        .map_err(|error| invalid_ops_payload(error.to_string()))?;
+    let _ = state.close_workbook(&workbook_id);
+
+    let op_count = resolved_ops.len();
+    let operation_counts = summarize_style_operation_counts(&resolved_ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".style-batch-", |path| {
+                    apply_style_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let would_change = style_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".style-batch-", |path| {
+                apply_style_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = style_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".style-batch-", |path| {
+                    apply_style_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings,
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = style_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn apply_formula_pattern(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: OpsPayload<ApplyFormulaPatternOpInput> =
+        parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+
+    let op_count = payload.ops.len();
+    let operation_counts = summarize_formula_pattern_operation_counts(&payload.ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) = apply_to_temp_copy(
+                &source,
+                source.parent(),
+                ".apply-formula-pattern-",
+                |path| {
+                    apply_formula_pattern_ops_to_file(path, &payload.ops)
+                        .map_err(classify_apply_error)
+                },
+            )?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = formula_pattern_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result =
+                apply_in_place_with_temp(&source, ".apply-formula-pattern-", |path| {
+                    apply_formula_pattern_ops_to_file(path, &payload.ops)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = formula_pattern_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result = apply_to_output_with_temp(
+                &source,
+                &target,
+                force,
+                ".apply-formula-pattern-",
+                |path| {
+                    apply_formula_pattern_ops_to_file(path, &payload.ops)
+                        .map_err(classify_apply_error)
+                },
+            )?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = formula_pattern_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn structure_batch(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: OpsPayload<StructureOpInput> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let (normalized, base_warnings) = normalize_structure_batch(StructureBatchParamsInput {
+        fork_id: String::new(),
+        ops: payload.ops,
+        mode: None,
+        label: None,
+    })
+    .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    let op_count = normalized.ops.len();
+    let operation_counts = summarize_structure_operation_counts(&normalized.ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".structure-batch-", |path| {
+                    apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let would_change = structure_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".structure-batch-", |path| {
+                apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = structure_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".structure-batch-", |path| {
+                    apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings,
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = structure_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn column_size_batch(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: ColumnSizeOpsPayload =
+        parse_ops_payload(&ops, r#"{"sheet_name":"...","ops":[...]}"#)?;
+    let (normalized_ops, base_warnings) =
+        normalize_column_size_payload(payload.sheet_name.clone(), payload.ops)
+            .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    let op_count = normalized_ops.len();
+    let operation_counts = summarize_column_size_operation_counts(&normalized_ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let sheet_name = payload.sheet_name.clone();
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".column-size-batch-", |path| {
+                    apply_column_size_ops_to_file(path, &sheet_name, &normalized_ops)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let would_change = column_size_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let sheet_name = payload.sheet_name.clone();
+            let apply_result = apply_in_place_with_temp(&source, ".column-size-batch-", |path| {
+                apply_column_size_ops_to_file(path, &sheet_name, &normalized_ops)
+                    .map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings.clone(),
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = column_size_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let sheet_name = payload.sheet_name;
+            let apply_result = apply_to_output_with_temp(
+                &source,
+                &target,
+                force,
+                ".column-size-batch-",
+                |path| {
+                    apply_column_size_ops_to_file(path, &sheet_name, &normalized_ops)
+                        .map_err(classify_apply_error)
+                },
+            )?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = merge_cli_warnings(
+                base_warnings,
+                warning_strings_to_cli_warnings(apply_result.summary.warnings),
+            );
+            let changed = column_size_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn sheet_layout_batch(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: OpsPayload<SheetLayoutOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+
+    let op_count = payload.ops.len();
+    let operation_counts = summarize_sheet_layout_operation_counts(&payload.ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".sheet-layout-batch-", |path| {
+                    apply_sheet_layout_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = sheet_layout_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".sheet-layout-batch-", |path| {
+                apply_sheet_layout_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = sheet_layout_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result = apply_to_output_with_temp(
+                &source,
+                &target,
+                force,
+                ".sheet-layout-batch-",
+                |path| {
+                    apply_sheet_layout_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                },
+            )?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = sheet_layout_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+    }
+}
+
+pub async fn rules_batch(
+    file: PathBuf,
+    ops: String,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let payload: OpsPayload<RulesOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+
+    let op_count = payload.ops.len();
+    let operation_counts = summarize_rules_operation_counts(&payload.ops);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".rules-batch-", |path| {
+                    apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = rules_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".rules-batch-", |path| {
+                apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = rules_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".rules-batch-", |path| {
+                    apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = rules_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                apply_result.ops_applied,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+            )
         }
     }
 }
@@ -238,7 +812,7 @@ fn validate_batch_mode(
     ))
 }
 
-fn parse_ops_payload(raw: &str) -> Result<TransformOpsPayload> {
+fn parse_ops_payload<T: DeserializeOwned>(raw: &str, schema_hint: &str) -> Result<T> {
     let path = raw
         .strip_prefix('@')
         .ok_or_else(|| invalid_ops_payload("--ops must be provided as @<path>"))?;
@@ -264,13 +838,13 @@ fn parse_ops_payload(raw: &str) -> Result<TransformOpsPayload> {
 
     serde_json::from_value(json_value).map_err(|error| {
         invalid_ops_payload(format!(
-            "ops payload does not match required schema {{\"ops\":[...]}}: {}",
-            error
+            "ops payload does not match required schema {}: {}",
+            schema_hint, error
         ))
     })
 }
 
-fn summarize_operation_counts(ops: &[TransformOp]) -> BTreeMap<String, u64> {
+fn summarize_transform_operation_counts(ops: &[TransformOp]) -> BTreeMap<String, u64> {
     let mut counts = BTreeMap::new();
     for op in ops {
         let key = match op {
@@ -283,7 +857,83 @@ fn summarize_operation_counts(ops: &[TransformOp]) -> BTreeMap<String, u64> {
     counts
 }
 
-fn summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+fn summarize_style_operation_counts(ops: &[StyleOp]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    counts.insert("style_ops".to_string(), ops.len() as u64);
+    counts
+}
+
+fn summarize_formula_pattern_operation_counts(
+    ops: &[ApplyFormulaPatternOpInput],
+) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    counts.insert("apply_formula_pattern_ops".to_string(), ops.len() as u64);
+    counts
+}
+
+fn summarize_structure_operation_counts(ops: &[StructureOp]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for op in ops {
+        let key = match op {
+            StructureOp::InsertRows { .. } => "insert_rows",
+            StructureOp::DeleteRows { .. } => "delete_rows",
+            StructureOp::InsertCols { .. } => "insert_cols",
+            StructureOp::DeleteCols { .. } => "delete_cols",
+            StructureOp::RenameSheet { .. } => "rename_sheet",
+            StructureOp::CreateSheet { .. } => "create_sheet",
+            StructureOp::DeleteSheet { .. } => "delete_sheet",
+            StructureOp::CopyRange { .. } => "copy_range",
+            StructureOp::MoveRange { .. } => "move_range",
+        };
+        *counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn summarize_column_size_operation_counts(ops: &[ColumnSizeOp]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for op in ops {
+        let key = match op.size {
+            crate::tools::fork::ColumnSizeSpec::Auto { .. } => "auto",
+            crate::tools::fork::ColumnSizeSpec::Width { .. } => "width",
+        };
+        *counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn summarize_sheet_layout_operation_counts(ops: &[SheetLayoutOp]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for op in ops {
+        let key = match op {
+            SheetLayoutOp::FreezePanes { .. } => "freeze_panes",
+            SheetLayoutOp::SetZoom { .. } => "set_zoom",
+            SheetLayoutOp::SetGridlines { .. } => "set_gridlines",
+            SheetLayoutOp::SetPageMargins { .. } => "set_page_margins",
+            SheetLayoutOp::SetPageSetup { .. } => "set_page_setup",
+            SheetLayoutOp::SetPrintArea { .. } => "set_print_area",
+            SheetLayoutOp::SetPageBreaks { .. } => "set_page_breaks",
+        };
+        *counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn summarize_rules_operation_counts(ops: &[RulesOp]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for op in ops {
+        let key = match op {
+            RulesOp::SetDataValidation { .. } => "set_data_validation",
+            RulesOp::AddConditionalFormat { .. } => "add_conditional_format",
+            RulesOp::SetConditionalFormat { .. } => "set_conditional_format",
+            RulesOp::ClearConditionalFormats { .. } => "clear_conditional_formats",
+        };
+        *counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn transform_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
     const CHANGE_KEYS: &[&str] = &[
         "cells_value_cleared",
         "cells_formula_cleared",
@@ -292,24 +942,166 @@ fn summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
         "cells_value_replaced",
         "cells_formula_replaced",
     ];
+    any_count_non_zero(counts, CHANGE_KEYS)
+}
 
-    CHANGE_KEYS
-        .iter()
+fn style_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(counts, &["cells_style_changed"])
+}
+
+fn formula_pattern_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(counts, &["cells_filled"])
+}
+
+fn structure_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(
+        counts,
+        &[
+            "rows_inserted",
+            "rows_deleted",
+            "cols_inserted",
+            "cols_deleted",
+            "sheets_renamed",
+            "sheets_created",
+            "sheets_deleted",
+            "cells_copied",
+            "cells_moved",
+            "ranges_copied",
+            "ranges_moved",
+        ],
+    )
+}
+
+fn column_size_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(counts, &["columns_sized"])
+}
+
+fn sheet_layout_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(
+        counts,
+        &[
+            "ops",
+            "freeze_panes_ops",
+            "set_zoom_ops",
+            "set_gridlines_ops",
+            "set_page_margins_ops",
+            "set_page_setup_ops",
+            "set_print_area_ops",
+            "set_page_breaks_ops",
+        ],
+    )
+}
+
+fn rules_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    any_count_non_zero(
+        counts,
+        &[
+            "validations_set",
+            "validations_replaced",
+            "conditional_formats_added",
+            "conditional_formats_set",
+            "conditional_formats_replaced",
+            "conditional_formats_cleared",
+        ],
+    )
+}
+
+fn any_count_non_zero(counts: &BTreeMap<String, u64>, keys: &[&str]) -> bool {
+    keys.iter()
         .any(|key| counts.get(*key).copied().unwrap_or(0) > 0)
 }
 
-fn apply_ops_in_place(source: &Path, ops: &[TransformOp]) -> Result<TransformApplyResult> {
-    let (apply_result, temp_path) = apply_ops_to_temp_copy(source, source.parent(), ops)?;
+fn warning_strings_to_cli_warnings(messages: Vec<String>) -> Vec<Warning> {
+    messages.into_iter().map(parse_warning_message).collect()
+}
+
+fn merge_cli_warnings(mut left: Vec<Warning>, mut right: Vec<Warning>) -> Vec<Warning> {
+    left.append(&mut right);
+    left
+}
+
+fn parse_warning_message(message: String) -> Warning {
+    if let Some((code, detail)) = message.split_once(':') {
+        let code = code.trim();
+        let detail = detail.trim();
+        if is_warning_code(code) && !detail.is_empty() {
+            return Warning {
+                code: code.to_string(),
+                message: detail.to_string(),
+            };
+        }
+    }
+
+    Warning {
+        code: "WARN_INFO".to_string(),
+        message,
+    }
+}
+
+fn is_warning_code(value: &str) -> bool {
+    value.starts_with("WARN_")
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == '_' || ch.is_ascii_digit())
+}
+
+fn dry_run_response(
+    op_count: usize,
+    operation_counts: BTreeMap<String, u64>,
+    result_counts: BTreeMap<String, u64>,
+    warnings: Vec<Warning>,
+    would_change: bool,
+) -> Result<Value> {
+    Ok(serde_json::to_value(BatchDryRunResponse {
+        op_count,
+        validated_count: op_count,
+        would_change,
+        warnings,
+        summary: DryRunSummary {
+            operation_counts,
+            result_counts,
+        },
+    })?)
+}
+
+fn apply_response(
+    op_count: usize,
+    applied_count: usize,
+    warnings: Vec<Warning>,
+    changed: bool,
+    target_path: String,
+    source_path: String,
+) -> Result<Value> {
+    Ok(serde_json::to_value(BatchApplyResponse {
+        op_count,
+        applied_count,
+        warnings,
+        changed,
+        target_path,
+        source_path,
+    })?)
+}
+
+fn apply_in_place_with_temp<T, F>(source: &Path, temp_prefix: &str, apply_fn: F) -> Result<T>
+where
+    F: FnOnce(&Path) -> Result<T>,
+{
+    let (apply_result, temp_path) =
+        apply_to_temp_copy(source, source.parent(), temp_prefix, apply_fn)?;
     atomic_replace_target(temp_path, source, true)?;
     Ok(apply_result)
 }
 
-fn apply_ops_to_output(
+fn apply_to_output_with_temp<T, F>(
     source: &Path,
     target: &Path,
     force: bool,
-    ops: &[TransformOp],
-) -> Result<TransformApplyResult> {
+    temp_prefix: &str,
+    apply_fn: F,
+) -> Result<T>
+where
+    F: FnOnce(&Path) -> Result<T>,
+{
     let target_exists = path_entry_exists(target)?;
     if target_exists && !force {
         return Err(output_exists(format!(
@@ -318,16 +1110,21 @@ fn apply_ops_to_output(
         )));
     }
 
-    let (apply_result, temp_path) = apply_ops_to_temp_copy(source, target.parent(), ops)?;
+    let (apply_result, temp_path) =
+        apply_to_temp_copy(source, target.parent(), temp_prefix, apply_fn)?;
     atomic_replace_target(temp_path, target, force)?;
     Ok(apply_result)
 }
 
-fn apply_ops_to_temp_copy(
+fn apply_to_temp_copy<T, F>(
     source: &Path,
     directory: Option<&Path>,
-    ops: &[TransformOp],
-) -> Result<(TransformApplyResult, TempPath)> {
+    temp_prefix: &str,
+    apply_fn: F,
+) -> Result<(T, TempPath)>
+where
+    F: FnOnce(&Path) -> Result<T>,
+{
     let parent = directory.ok_or_else(|| {
         write_failed(format!(
             "unable to create temp file: '{}' has no parent directory",
@@ -335,7 +1132,7 @@ fn apply_ops_to_temp_copy(
         ))
     })?;
     let temp_path = Builder::new()
-        .prefix(".transform-batch-")
+        .prefix(temp_prefix)
         .suffix(".tmp.xlsx")
         .tempfile_in(parent)
         .map_err(|error| {
@@ -358,8 +1155,7 @@ fn apply_ops_to_temp_copy(
         ))
     })?;
 
-    let apply_result =
-        apply_transform_ops_to_file(temp_path_ref, ops).map_err(classify_apply_transform_error)?;
+    let apply_result = apply_fn(temp_path_ref)?;
 
     fsync_file(temp_path_ref)?;
 
@@ -509,7 +1305,7 @@ fn atomic_overwrite_supported() -> bool {
     false
 }
 
-fn classify_apply_transform_error(error: anyhow::Error) -> anyhow::Error {
+fn classify_apply_error(error: anyhow::Error) -> anyhow::Error {
     if error
         .chain()
         .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())

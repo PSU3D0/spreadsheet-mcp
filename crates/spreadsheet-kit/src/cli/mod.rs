@@ -442,6 +442,174 @@ pub enum Commands {
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
     },
+    #[command(
+        about = "Apply stateless style operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --dry-run\n  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
+    )]
+    StyleBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to style")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply style ops by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply style ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Apply stateless formula pattern operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run"
+    )]
+    ApplyFormulaPattern {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply formula pattern ops by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply formula pattern ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Apply stateless structure operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --dry-run\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
+    )]
+    StructureBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply structure ops by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply structure ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Apply stateless column sizing operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --in-place\n  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
+    )]
+    ColumnSizeBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply column sizing ops by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply column sizing ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Apply stateless sheet layout operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run\n  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place"
+    )]
+    SheetLayoutBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply sheet layout ops by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply sheet layout ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Apply stateless data validation and conditional format operations from an @ops payload",
+        after_long_help = "Examples:\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --dry-run\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
+    )]
+    RulesBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply rules ops by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply rules ops to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
     #[command(about = "Recalculate workbook formulas")]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
@@ -591,6 +759,57 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             output,
             force,
         } => commands::write::transform_batch(file, ops, dry_run, in_place, output, force).await,
+        Commands::StyleBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::style_batch(file, ops, dry_run, in_place, output, force).await,
+        Commands::ApplyFormulaPattern {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::apply_formula_pattern(file, ops, dry_run, in_place, output, force)
+                .await
+        }
+        Commands::StructureBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::structure_batch(file, ops, dry_run, in_place, output, force).await,
+        Commands::ColumnSizeBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::column_size_batch(file, ops, dry_run, in_place, output, force).await,
+        Commands::SheetLayoutBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::sheet_layout_batch(file, ops, dry_run, in_place, output, force).await,
+        Commands::RulesBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::rules_batch(file, ops, dry_run, in_place, output, force).await,
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
     }
@@ -948,6 +1167,162 @@ mod tests {
                 assert!(!dry_run);
                 assert!(!in_place);
                 assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+                assert!(force);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_style_batch_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "style-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@style.json",
+            "--dry-run",
+        ])
+        .expect("parse style-batch");
+
+        match cli.command {
+            Commands::StyleBatch {
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(ops, "@style.json");
+                assert!(dry_run);
+                assert!(!in_place);
+                assert!(output.is_none());
+                assert!(!force);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_apply_formula_pattern_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "apply-formula-pattern",
+            "workbook.xlsx",
+            "--ops",
+            "@formula.json",
+            "--in-place",
+        ])
+        .expect("parse apply-formula-pattern");
+
+        match cli.command {
+            Commands::ApplyFormulaPattern {
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(ops, "@formula.json");
+                assert!(!dry_run);
+                assert!(in_place);
+                assert!(output.is_none());
+                assert!(!force);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_phase_b_batch_write_arguments() {
+        let structure = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "structure-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@structure.json",
+            "--output",
+            "out.xlsx",
+        ])
+        .expect("parse structure-batch");
+        match structure.command {
+            Commands::StructureBatch {
+                file, ops, output, ..
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(ops, "@structure.json");
+                assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let column = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "column-size-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@columns.json",
+            "--in-place",
+        ])
+        .expect("parse column-size-batch");
+        match column.command {
+            Commands::ColumnSizeBatch { ops, in_place, .. } => {
+                assert_eq!(ops, "@columns.json");
+                assert!(in_place);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let layout = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheet-layout-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@layout.json",
+            "--dry-run",
+        ])
+        .expect("parse sheet-layout-batch");
+        match layout.command {
+            Commands::SheetLayoutBatch { ops, dry_run, .. } => {
+                assert_eq!(ops, "@layout.json");
+                assert!(dry_run);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_rules_batch_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "rules-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@rules.json",
+            "--output",
+            "rules.xlsx",
+            "--force",
+        ])
+        .expect("parse rules-batch");
+
+        match cli.command {
+            Commands::RulesBatch {
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(ops, "@rules.json");
+                assert!(!dry_run);
+                assert!(!in_place);
+                assert_eq!(output, Some(PathBuf::from("rules.xlsx")));
                 assert!(force);
             }
             other => panic!("unexpected command: {other:?}"),
