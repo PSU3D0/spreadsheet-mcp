@@ -69,7 +69,7 @@ fn project_read_table_compact(value: &mut Value) {
     let Value::Object(obj) = value else {
         return;
     };
-    drop_empty_wrappers(obj, &["warnings", "headers", "types"]);
+    drop_empty_wrappers(obj, &["headers", "types"]);
 }
 
 fn project_sheet_page_compact(value: &mut Value) {

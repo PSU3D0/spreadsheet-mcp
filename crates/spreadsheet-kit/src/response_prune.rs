@@ -53,6 +53,7 @@ pub fn prune_non_structural_empties(value: &mut Value) {
                 }
                 if let Value::Array(arr) = child
                     && arr.is_empty()
+                    && key != "warnings"
                 {
                     remove_keys.push(key.clone());
                 }

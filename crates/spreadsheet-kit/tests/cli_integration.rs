@@ -1,7 +1,11 @@
 use serde_json::Value;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
+
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 fn write_fixture(path: &Path) {
     let mut workbook = umya_spreadsheet::new_file();
@@ -148,6 +152,10 @@ fn parse_stdout_text(output: &std::process::Output) -> String {
 }
 
 fn assert_invalid_argument(args: &[&str]) -> Value {
+    assert_error_code(args, "INVALID_ARGUMENT")
+}
+
+fn assert_error_code(args: &[&str], expected_code: &str) -> Value {
     let output = run_cli(args);
     assert!(
         !output.status.success(),
@@ -155,10 +163,14 @@ fn assert_invalid_argument(args: &[&str]) -> Value {
     );
     let err = parse_stderr_json(&output);
     assert_eq!(
-        err["code"], "INVALID_ARGUMENT",
+        err["code"], expected_code,
         "unexpected error envelope: {err}"
     );
     err
+}
+
+fn write_ops_payload(path: &Path, payload: &str) {
+    fs::write(path, payload).expect("write ops payload");
 }
 
 #[test]
@@ -2539,6 +2551,376 @@ fn cli_range_values_shape_compact_multi_range_preserves_next_start_row_without_f
             .iter()
             .any(|entry| entry.get("range").and_then(Value::as_str) == Some("B1:B2"))
     );
+}
+
+#[test]
+fn cli_transform_batch_dry_run_validates_contract_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-batch-dry-run.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"77"}]}"#,
+    );
+
+    let before = fs::read(&workbook_path).expect("read source before dry-run");
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert_eq!(payload["op_count"].as_u64(), Some(1));
+    assert_eq!(payload["validated_count"].as_u64(), Some(1));
+    assert!(payload["would_change"].as_bool().unwrap_or(false));
+    assert!(payload["warnings"].is_array());
+    assert!(payload["summary"].is_object());
+    assert!(payload["summary"]["operation_counts"].is_object());
+    assert!(payload["summary"]["result_counts"].is_object());
+
+    let after = fs::read(&workbook_path).expect("read source after dry-run");
+    assert_eq!(before, after, "dry-run mutated the source workbook");
+}
+
+#[test]
+fn cli_transform_batch_in_place_applies_atomically() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-batch-in-place.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"44"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert_eq!(payload["op_count"].as_u64(), Some(1));
+    assert_eq!(payload["applied_count"].as_u64(), Some(1));
+    assert!(payload["warnings"].is_array());
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+    assert_eq!(payload["source_path"].as_str(), Some(file));
+    assert_eq!(payload["target_path"].as_str(), Some(file));
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
+    assert_eq!(sheet.get_cell("B2").expect("B2 exists").get_value(), "44");
+}
+
+#[test]
+fn cli_transform_batch_output_and_force_modes_apply_with_overwrite_checks() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("transform-batch-source.xlsx");
+    let output_path = tmp.path().join("transform-batch-output.xlsx");
+    let ops_path_first = tmp.path().join("ops-first.json");
+    let ops_path_second = tmp.path().join("ops-second.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path_first,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"51"}]}"#,
+    );
+    write_ops_payload(
+        &ops_path_second,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B3"]},"value":"91"}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_first_ref = format!("@{}", ops_path_first.to_str().expect("ops path utf8"));
+    let ops_second_ref = format!("@{}", ops_path_second.to_str().expect("ops path utf8"));
+
+    let first = run_cli(&[
+        "transform-batch",
+        source,
+        "--ops",
+        ops_first_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+
+    let source_book = umya_spreadsheet::reader::xlsx::read(&source_path).expect("read source");
+    let source_sheet = source_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    assert_eq!(
+        source_sheet
+            .get_cell("B2")
+            .expect("source B2 exists")
+            .get_value(),
+        "10"
+    );
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    assert_eq!(
+        output_sheet
+            .get_cell("B2")
+            .expect("output B2 exists")
+            .get_value(),
+        "51"
+    );
+
+    assert_error_code(
+        &[
+            "transform-batch",
+            source,
+            "--ops",
+            ops_second_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+
+    let forced = run_cli(&[
+        "transform-batch",
+        source,
+        "--ops",
+        ops_second_ref.as_str(),
+        "--output",
+        output,
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
+    let forced_payload = parse_stdout_json(&forced);
+    assert_eq!(forced_payload["target_path"].as_str(), Some(output));
+
+    let overwritten = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let overwritten_sheet = overwritten
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    assert_eq!(
+        overwritten_sheet
+            .get_cell("B3")
+            .expect("output B3 exists")
+            .get_value(),
+        "91"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_transform_batch_rejects_dangling_symlink_output_without_force() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp
+        .path()
+        .join("transform-batch-source-dangling-symlink.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    let output_link = tmp.path().join("dangling-output.xlsx");
+    let missing_target = tmp.path().join("missing-target.xlsx");
+
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"66"}]}"#,
+    );
+
+    symlink(&missing_target, &output_link).expect("create dangling symlink");
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_link.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let err = assert_error_code(
+        &[
+            "transform-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "OUTPUT_EXISTS",
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already exists")
+    );
+
+    assert!(
+        fs::symlink_metadata(&output_link).is_ok(),
+        "dangling symlink should remain in place"
+    );
+}
+
+#[test]
+fn cli_transform_batch_rejects_invalid_mode_combinations() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-batch-mode-matrix.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"7"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    assert_invalid_argument(&["transform-batch", file, "--ops", ops_ref.as_str()]);
+    assert_invalid_argument(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--in-place",
+    ]);
+    assert_invalid_argument(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--output",
+        "out.xlsx",
+    ]);
+    assert_invalid_argument(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--output",
+        "out.xlsx",
+    ]);
+    assert_invalid_argument(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--force",
+    ]);
+    assert_invalid_argument(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        file,
+    ]);
+}
+
+#[test]
+fn cli_transform_batch_rejects_invalid_ops_payloads() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-batch-invalid-ops.xlsx");
+    let malformed_path = tmp.path().join("ops-malformed.json");
+    let schema_path = tmp.path().join("ops-schema.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(&malformed_path, "{not-json}");
+    write_ops_payload(&schema_path, r#"{"ops":[{"kind":"unknown_op"}]}"#);
+
+    let file = workbook_path.to_str().expect("path utf8");
+
+    assert_error_code(
+        &["transform-batch", file, "--ops", "ops.json", "--dry-run"],
+        "INVALID_OPS_PAYLOAD",
+    );
+
+    let malformed_ref = format!("@{}", malformed_path.to_str().expect("ops path utf8"));
+    assert_error_code(
+        &[
+            "transform-batch",
+            file,
+            "--ops",
+            malformed_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+
+    let schema_ref = format!("@{}", schema_path.to_str().expect("ops path utf8"));
+    assert_error_code(
+        &[
+            "transform-batch",
+            file,
+            "--ops",
+            schema_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_transform_batch_maps_write_failures_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("transform-batch-write-fail-source.xlsx");
+    let blocked_dir = tmp.path().join("blocked");
+    let blocked_output = blocked_dir.join("output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"123"}]}"#,
+    );
+    fs::create_dir(&blocked_dir).expect("create blocked dir");
+
+    let mut perms = fs::metadata(&blocked_dir)
+        .expect("blocked metadata")
+        .permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&blocked_dir, perms.clone()).expect("set blocked perms");
+
+    let before = fs::read(&source_path).expect("read source before write failure");
+    let source = source_path.to_str().expect("source utf8");
+    let output = blocked_output.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let err = assert_error_code(
+        &[
+            "transform-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--output",
+            output,
+        ],
+        "WRITE_FAILED",
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unable to allocate temp file")
+            || err["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Permission denied")
+    );
+
+    let mut restore = perms;
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked perms");
+
+    let after = fs::read(&source_path).expect("read source after write failure");
+    assert_eq!(before, after, "source workbook changed after write failure");
 }
 
 #[test]

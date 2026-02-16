@@ -230,22 +230,13 @@ struct TransformBatchStagedPayload {
     ops: Vec<TransformOp>,
 }
 
-pub async fn transform_batch(
-    state: Arc<AppState>,
-    params: TransformBatchParams,
-) -> Result<TransformBatchResponse> {
-    let registry = state
-        .fork_registry()
-        .ok_or_else(|| anyhow!("fork registry not available"))?;
+pub(crate) fn resolve_transform_ops_for_workbook(
+    workbook: &crate::workbook::WorkbookContext,
+    ops: &[TransformOp],
+) -> Result<Vec<TransformOp>> {
+    let mut resolved_ops = Vec::with_capacity(ops.len());
 
-    let fork_ctx = registry.get_fork(&params.fork_id)?;
-    let work_path = fork_ctx.work_path.clone();
-
-    let fork_workbook_id = WorkbookId(params.fork_id.clone());
-    let workbook = state.open_workbook(&fork_workbook_id).await?;
-
-    let mut resolved_ops = Vec::with_capacity(params.ops.len());
-    for op in &params.ops {
+    for op in ops {
         let (sheet_name, target) = match op {
             TransformOp::ClearRange {
                 sheet_name, target, ..
@@ -326,6 +317,25 @@ pub async fn transform_batch(
             }
         }
     }
+
+    Ok(resolved_ops)
+}
+
+pub async fn transform_batch(
+    state: Arc<AppState>,
+    params: TransformBatchParams,
+) -> Result<TransformBatchResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+
+    let resolved_ops = resolve_transform_ops_for_workbook(&workbook, &params.ops)?;
 
     let mode = params.mode.unwrap_or_default();
 
@@ -2860,12 +2870,15 @@ fn apply_column_size_ops_to_file(
     })
 }
 
-struct TransformApplyResult {
-    ops_applied: usize,
-    summary: ChangeSummary,
+pub(crate) struct TransformApplyResult {
+    pub(crate) ops_applied: usize,
+    pub(crate) summary: ChangeSummary,
 }
 
-fn apply_transform_ops_to_file(path: &Path, ops: &[TransformOp]) -> Result<TransformApplyResult> {
+pub(crate) fn apply_transform_ops_to_file(
+    path: &Path,
+    ops: &[TransformOp],
+) -> Result<TransformApplyResult> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
     let mut sheets: BTreeSet<String> = BTreeSet::new();

@@ -416,6 +416,32 @@ pub enum Commands {
         )]
         edits: Vec<String>,
     },
+    #[command(about = "Apply stateless transform operations from an @ops payload")]
+    TransformBatch {
+        #[arg(value_name = "FILE", help = "Workbook path to transform")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply transforms by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply transforms to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
     #[command(about = "Recalculate workbook formulas")]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
@@ -557,6 +583,14 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
         Commands::Copy { source, dest } => commands::write::copy(source, dest).await,
         Commands::Edit { file, sheet, edits } => commands::write::edit(file, sheet, edits).await,
+        Commands::TransformBatch {
+            file,
+            ops,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => commands::write::transform_batch(file, ops, dry_run, in_place, output, force).await,
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
     }
@@ -881,6 +915,40 @@ mod tests {
                 assert_eq!(include_styles, Some(true));
                 assert_eq!(include_header, Some(true));
                 assert!(matches!(format, SheetPageFormatArg::Compact));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_transform_batch_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "transform-batch",
+            "workbook.xlsx",
+            "--ops",
+            "@ops.json",
+            "--output",
+            "out.xlsx",
+            "--force",
+        ])
+        .expect("parse transform-batch");
+
+        match cli.command {
+            Commands::TransformBatch {
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(ops, "@ops.json");
+                assert!(!dry_run);
+                assert!(!in_place);
+                assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+                assert!(force);
             }
             other => panic!("unexpected command: {other:?}"),
         }
