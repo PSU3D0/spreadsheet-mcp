@@ -52,6 +52,65 @@ fn write_trace_pagination_fixture(path: &Path) {
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
 }
 
+fn write_phase1_read_surface_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("C1").set_value("Calc");
+        sheet.get_cell_mut("D1").set_value("Volatile");
+
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("C2").set_formula("SUM(B2:B2)");
+        sheet.get_cell_mut("D2").set_formula("NOW()");
+
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        sheet.get_cell_mut("C3").set_formula("SUM(B3:B3)");
+        sheet.get_cell_mut("D3").set_formula("RAND()");
+
+        sheet.get_cell_mut("A4").set_value("Carol");
+        sheet.get_cell_mut("B4").set_value_number(30.0);
+        sheet.get_cell_mut("C4").set_formula("SUM(B4:B4)");
+        sheet.get_cell_mut("D4").set_formula("TODAY()");
+
+        let mut table = umya_spreadsheet::structs::Table::new("SalesTable", ("A1", "D4"));
+        table.set_display_name("SalesTable");
+        sheet.add_table(table);
+    }
+
+    workbook.new_sheet("Summary").expect("add summary sheet");
+    {
+        let summary = workbook
+            .get_sheet_by_name_mut("Summary")
+            .expect("summary sheet exists");
+        summary.get_cell_mut("A1").set_value("Flag");
+        summary.get_cell_mut("B1").set_value("Ready");
+    }
+
+    let sheet1 = workbook
+        .get_sheet_by_name_mut("Sheet1")
+        .expect("sheet1 exists");
+    sheet1
+        .add_defined_name("Sales_Amount", "Sheet1!$B$2:$B$4")
+        .expect("defined name Sales_Amount");
+    sheet1
+        .add_defined_name("Sales_First", "Sheet1!$A$2")
+        .expect("defined name Sales_First");
+    let summary = workbook
+        .get_sheet_by_name_mut("Summary")
+        .expect("summary exists");
+    summary
+        .add_defined_name("Meta_Flag", "Summary!$A$1")
+        .expect("defined name Meta_Flag");
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
 fn run_cli(args: &[&str]) -> std::process::Output {
     Command::new(assert_cmd::cargo::cargo_bin!("agent-spreadsheet"))
         .args(args)
@@ -96,6 +155,10 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root.contains("Common workflows:"));
     assert!(root.contains("global --output-format csv is currently unsupported"));
     assert!(root.contains("find-value"));
+    assert!(root.contains("named-ranges"));
+    assert!(root.contains("find-formula"));
+    assert!(root.contains("scan-volatiles"));
+    assert!(root.contains("sheet-statistics"));
     assert!(root.contains("Find cells matching a text query by value or label"));
 
     let find_help = run_cli(&["find-value", "--help"]);
@@ -117,6 +180,63 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(formula.contains("Summarize formulas on a sheet by complexity or frequency"));
     assert!(formula.contains("Examples:"));
     assert!(formula.contains("formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25"));
+
+    let named_ranges_help = run_cli(&["named-ranges", "--help"]);
+    assert!(
+        named_ranges_help.status.success(),
+        "stderr: {:?}",
+        named_ranges_help.stderr
+    );
+    let named_ranges = parse_stdout_text(&named_ranges_help);
+    assert!(named_ranges.contains("List workbook named ranges and table/formula named items"));
+    assert!(named_ranges.contains("Examples:"));
+    assert!(named_ranges.contains("named-ranges data.xlsx"));
+    assert!(
+        named_ranges.contains("named-ranges data.xlsx --sheet \"Q1 Actuals\" --name-prefix Sales")
+    );
+
+    let find_formula_help = run_cli(&["find-formula", "--help"]);
+    assert!(
+        find_formula_help.status.success(),
+        "stderr: {:?}",
+        find_formula_help.stderr
+    );
+    let find_formula = parse_stdout_text(&find_formula_help);
+    assert!(find_formula.contains("Find formulas containing a text query with pagination"));
+    assert!(find_formula.contains("Examples:"));
+    assert!(find_formula.contains("find-formula data.xlsx SUM("));
+    assert!(
+        find_formula.contains(
+            "find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50"
+        )
+    );
+
+    let scan_volatiles_help = run_cli(&["scan-volatiles", "--help"]);
+    assert!(
+        scan_volatiles_help.status.success(),
+        "stderr: {:?}",
+        scan_volatiles_help.stderr
+    );
+    let scan_volatiles = parse_stdout_text(&scan_volatiles_help);
+    assert!(scan_volatiles.contains("Scan workbook formulas for volatile functions"));
+    assert!(scan_volatiles.contains("Examples:"));
+    assert!(scan_volatiles.contains("scan-volatiles data.xlsx"));
+    assert!(
+        scan_volatiles
+            .contains("scan-volatiles data.xlsx --sheet \"Q1 Actuals\" --limit 10 --offset 10")
+    );
+
+    let sheet_statistics_help = run_cli(&["sheet-statistics", "--help"]);
+    assert!(
+        sheet_statistics_help.status.success(),
+        "stderr: {:?}",
+        sheet_statistics_help.stderr
+    );
+    let sheet_statistics = parse_stdout_text(&sheet_statistics_help);
+    assert!(sheet_statistics.contains("Compute per-sheet statistics for density and column types"));
+    assert!(sheet_statistics.contains("Examples:"));
+    assert!(sheet_statistics.contains("sheet-statistics data.xlsx Sheet1"));
+    assert!(sheet_statistics.contains("sheet-statistics data.xlsx \"Q1 Actuals\""));
 
     let table_help = run_cli(&["table-profile", "--help"]);
     assert!(
@@ -260,6 +380,256 @@ fn cli_read_commands_cover_ticket_surface() {
             .unwrap_or(0)
             >= 3
     );
+}
+
+#[test]
+fn cli_phase1_named_ranges_filters_are_deterministic() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-named-ranges.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let baseline = run_cli(&["named-ranges", file]);
+    assert!(baseline.status.success(), "stderr: {:?}", baseline.stderr);
+    let baseline_payload = parse_stdout_json(&baseline);
+    let baseline_items = baseline_payload["items"].as_array().expect("items array");
+    assert!(!baseline_items.is_empty());
+
+    let by_sheet = run_cli(&["named-ranges", file, "--sheet", "Sheet1"]);
+    assert!(by_sheet.status.success(), "stderr: {:?}", by_sheet.stderr);
+    let by_sheet_payload = parse_stdout_json(&by_sheet);
+    let by_sheet_items = by_sheet_payload["items"].as_array().expect("items array");
+    assert!(!by_sheet_items.is_empty());
+    assert!(
+        by_sheet_items
+            .iter()
+            .all(|item| item["sheet_name"] == "Sheet1")
+    );
+
+    let by_prefix_first = run_cli(&["named-ranges", file, "--name-prefix", "Sales"]);
+    assert!(
+        by_prefix_first.status.success(),
+        "stderr: {:?}",
+        by_prefix_first.stderr
+    );
+    let by_prefix_first_payload = parse_stdout_json(&by_prefix_first);
+    let by_prefix_first_items = by_prefix_first_payload["items"]
+        .as_array()
+        .expect("items array");
+    assert!(!by_prefix_first_items.is_empty());
+    assert!(by_prefix_first_items.iter().all(|item| {
+        item["name"]
+            .as_str()
+            .map(|name| name.starts_with("Sales"))
+            .unwrap_or(false)
+    }));
+
+    let by_prefix_second = run_cli(&["named-ranges", file, "--name-prefix", "Sales"]);
+    assert!(
+        by_prefix_second.status.success(),
+        "stderr: {:?}",
+        by_prefix_second.stderr
+    );
+    let by_prefix_second_payload = parse_stdout_json(&by_prefix_second);
+    assert_eq!(by_prefix_first_payload, by_prefix_second_payload);
+}
+
+#[test]
+fn cli_phase1_find_formula_supports_limit_offset_continuation() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-find-formula.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let first = run_cli(&[
+        "find-formula",
+        file,
+        "SUM(",
+        "--sheet",
+        "Sheet1",
+        "--limit",
+        "1",
+        "--offset",
+        "0",
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+    let first_matches = first_payload["matches"].as_array().expect("matches array");
+    assert_eq!(first_matches.len(), 1);
+    let first_next = first_payload["next_offset"]
+        .as_u64()
+        .expect("next_offset on first page");
+
+    let second_offset = first_next.to_string();
+    let second = run_cli(&[
+        "find-formula",
+        file,
+        "SUM(",
+        "--sheet",
+        "Sheet1",
+        "--limit",
+        "1",
+        "--offset",
+        second_offset.as_str(),
+    ]);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    let second_payload = parse_stdout_json(&second);
+    let second_matches = second_payload["matches"].as_array().expect("matches array");
+    assert_eq!(second_matches.len(), 1);
+    let second_next = second_payload["next_offset"].as_u64().unwrap_or(first_next);
+    assert!(second_next >= first_next);
+
+    let terminal = run_cli(&[
+        "find-formula",
+        file,
+        "SUM(",
+        "--sheet",
+        "Sheet1",
+        "--limit",
+        "10",
+        "--offset",
+        "2",
+    ]);
+    assert!(terminal.status.success(), "stderr: {:?}", terminal.stderr);
+    let terminal_payload = parse_stdout_json(&terminal);
+    assert!(
+        terminal_payload["matches"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(terminal_payload.get("next_offset").is_none());
+}
+
+#[test]
+fn cli_phase1_scan_volatiles_detects_and_paginates_deterministically() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-scan-volatiles.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let full = run_cli(&["scan-volatiles", file]);
+    assert!(full.status.success(), "stderr: {:?}", full.stderr);
+    let full_payload = parse_stdout_json(&full);
+    let full_items = full_payload["items"].as_array().expect("items array");
+    assert!(!full_items.is_empty());
+
+    let first = run_cli(&["scan-volatiles", file, "--limit", "1", "--offset", "0"]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+    let first_items = first_payload["items"].as_array().expect("items array");
+    assert_eq!(first_items.len(), 1);
+    let first_entry = first_items[0].clone();
+    let first_next = first_payload["next_offset"]
+        .as_u64()
+        .expect("next_offset for first volatile page");
+
+    let second_offset = first_next.to_string();
+    let second = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--limit",
+        "1",
+        "--offset",
+        second_offset.as_str(),
+    ]);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    let second_payload = parse_stdout_json(&second);
+    let second_items = second_payload["items"].as_array().expect("items array");
+    assert_eq!(second_items.len(), 1);
+    let second_entry = second_items[0].clone();
+    assert_ne!(
+        first_entry, second_entry,
+        "continuation repeated first entry"
+    );
+
+    let second_again = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--limit",
+        "1",
+        "--offset",
+        second_offset.as_str(),
+    ]);
+    assert!(
+        second_again.status.success(),
+        "stderr: {:?}",
+        second_again.stderr
+    );
+    let second_again_payload = parse_stdout_json(&second_again);
+    assert_eq!(second_payload, second_again_payload);
+}
+
+#[test]
+fn cli_phase1_sheet_statistics_returns_expected_fields() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-sheet-statistics.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["sheet-statistics", file, "Sheet1"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert!(payload["row_count"].as_u64().unwrap_or(0) >= 4);
+    assert!(payload["column_count"].as_u64().unwrap_or(0) >= 4);
+    assert!(payload["density"].as_f64().unwrap_or(0.0) > 0.0);
+    assert!(payload["numeric_columns"].is_array());
+    assert!(payload["text_columns"].is_array());
+}
+
+#[test]
+fn cli_phase1_sheet_scoped_commands_unknown_sheet_return_sheet_not_found() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-sheet-not-found.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["named-ranges", file, "--sheet", "Shet1"],
+        vec!["find-formula", file, "SUM(", "--sheet", "Shet1"],
+        vec!["scan-volatiles", file, "--sheet", "Shet1"],
+        vec!["sheet-statistics", file, "Shet1"],
+    ];
+
+    for args in cases {
+        let output = run_cli(&args);
+        assert!(
+            !output.status.success(),
+            "command unexpectedly succeeded: {args:?}"
+        );
+        let err = parse_stderr_json(&output);
+        assert_eq!(err["code"], "SHEET_NOT_FOUND", "unexpected envelope: {err}");
+    }
+}
+
+#[test]
+fn cli_phase1_invalid_limit_flags_return_invalid_argument() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-invalid-limit.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    assert_invalid_argument(&["find-formula", file, "SUM(", "--limit", "0"]);
+    assert_invalid_argument(&["scan-volatiles", file, "--limit", "0"]);
+}
+
+#[test]
+fn cli_phase1_malformed_usage_prints_help_and_exits_non_zero() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-malformed-usage.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let missing_query = run_cli(&["find-formula", file]);
+    assert!(
+        !missing_query.status.success(),
+        "find-formula without query should fail"
+    );
+    let missing_query_stderr = String::from_utf8(missing_query.stderr).expect("stderr utf8");
+    assert!(missing_query_stderr.contains("Usage:"));
+    assert!(missing_query_stderr.contains("find-formula <FILE> <QUERY>"));
 }
 
 #[test]
@@ -1346,12 +1716,7 @@ fn cli_errors_use_machine_envelope() {
 
 #[test]
 fn cli_legacy_global_format_csv_returns_output_format_unsupported_envelope() {
-    let output = run_cli(&[
-        "--format",
-        "csv",
-        "list-sheets",
-        "/tmp/does-not-exist.xlsx",
-    ]);
+    let output = run_cli(&["--format", "csv", "list-sheets", "/tmp/does-not-exist.xlsx"]);
     assert!(!output.status.success(), "command unexpectedly succeeded");
 
     let err = parse_stderr_json(&output);

@@ -6,10 +6,11 @@ use spreadsheet_mcp::model::{SheetPageFormat, TraceDirection, WorkbookId};
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::{
     DescribeWorkbookParams, FindFormulaParams, FormulaTraceParams, ListSheetsParams,
-    ListWorkbooksParams, ManifestStubParams, NamedRangesParams, SheetFormulaMapParams,
-    SheetOverviewParams, SheetPageParams, SheetStatisticsParams, SheetStylesParams,
-    describe_workbook, find_formula, formula_trace, get_manifest_stub, list_sheets, list_workbooks,
-    named_ranges, sheet_formula_map, sheet_overview, sheet_page, sheet_statistics, sheet_styles,
+    ListWorkbooksParams, ManifestStubParams, NamedRangesParams, ScanVolatilesParams,
+    SheetFormulaMapParams, SheetOverviewParams, SheetPageParams, SheetStatisticsParams,
+    SheetStylesParams, describe_workbook, find_formula, formula_trace, get_manifest_stub,
+    list_sheets, list_workbooks, named_ranges, scan_volatiles, sheet_formula_map, sheet_overview,
+    sheet_page, sheet_statistics, sheet_styles,
 };
 use umya_spreadsheet::{NumberingFormat, Spreadsheet};
 
@@ -499,6 +500,93 @@ async fn find_formula_defaults_and_paging() -> Result<()> {
     assert!(!with_context.matches.is_empty());
     assert!(!with_context.matches[0].context.is_empty());
     assert!(with_context.next_offset.is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_volatiles_limit_offset_pagination_is_deterministic() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("scan_volatiles_paging.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.set_name("Sheet1");
+        sheet.get_cell_mut("A1").set_value("Volatile");
+        sheet.get_cell_mut("A2").set_formula("NOW()");
+        sheet.get_cell_mut("A3").set_formula("RAND()");
+        sheet.get_cell_mut("A4").set_formula("TODAY()");
+        sheet.get_cell_mut("B2").set_formula("SUM(1,2)");
+    });
+
+    let state = workspace.app_state();
+    let list_response = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list_response.workbooks[0].workbook_id.clone();
+
+    let first_page = scan_volatiles(
+        state.clone(),
+        ScanVolatilesParams {
+            workbook_or_fork_id: workbook_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            summary_only: Some(false),
+            include_addresses: Some(true),
+            addresses_limit: None,
+            limit: Some(1),
+            offset: Some(0),
+        },
+    )
+    .await?;
+
+    assert_eq!(first_page.items.len(), 1);
+    let first_entry = serde_json::to_value(&first_page.items[0])?;
+    let first_next = first_page.next_offset.expect("next_offset on first page");
+    assert_eq!(first_next, 1);
+
+    let second_page = scan_volatiles(
+        state.clone(),
+        ScanVolatilesParams {
+            workbook_or_fork_id: workbook_id.clone(),
+            sheet_name: Some("Sheet1".to_string()),
+            summary_only: Some(false),
+            include_addresses: Some(true),
+            addresses_limit: None,
+            limit: Some(1),
+            offset: Some(first_next),
+        },
+    )
+    .await?;
+
+    assert_eq!(second_page.items.len(), 1);
+    let second_entry = serde_json::to_value(&second_page.items[0])?;
+    assert_ne!(first_entry, second_entry);
+
+    let second_page_again = scan_volatiles(
+        state,
+        ScanVolatilesParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: Some("Sheet1".to_string()),
+            summary_only: Some(false),
+            include_addresses: Some(true),
+            addresses_limit: None,
+            limit: Some(1),
+            offset: Some(first_next),
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        serde_json::to_value(&second_page.items)?,
+        serde_json::to_value(&second_page_again.items)?
+    );
 
     Ok(())
 }

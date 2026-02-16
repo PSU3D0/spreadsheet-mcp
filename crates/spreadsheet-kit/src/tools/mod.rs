@@ -2735,6 +2735,12 @@ pub struct ScanVolatilesParams {
     /// Maximum addresses to include per volatile function (default: 15)
     #[serde(default)]
     pub addresses_limit: Option<u32>,
+    /// Maximum entries to return for this page
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Entry offset for pagination; use next_offset from previous response
+    #[serde(default)]
+    pub offset: Option<u32>,
 }
 
 pub async fn scan_volatiles(
@@ -2752,20 +2758,33 @@ pub async fn scan_volatiles(
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
 
-    let target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
+    let mut target_sheets: Vec<String> = if let Some(sheet) = &params.sheet_name {
         vec![sheet.clone()]
     } else {
         workbook.sheet_names()
     };
+    target_sheets.sort_by(|left, right| {
+        left.to_ascii_lowercase()
+            .cmp(&right.to_ascii_lowercase())
+            .then_with(|| left.cmp(right))
+    });
 
     let mut items = Vec::new();
     for sheet_name in target_sheets {
         let graph = workbook.formula_graph(&sheet_name)?;
-        for group in graph.groups() {
-            if !group.is_volatile {
-                continue;
-            }
+        let mut groups = graph
+            .groups()
+            .into_iter()
+            .filter(|group| group.is_volatile)
+            .collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            left.formula
+                .cmp(&right.formula)
+                .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+                .then_with(|| left.addresses.len().cmp(&right.addresses.len()))
+        });
 
+        for group in groups {
             if summary_only {
                 items.push(VolatileScanEntry {
                     address: String::new(),
@@ -2773,10 +2792,15 @@ pub async fn scan_volatiles(
                     function: "volatile".to_string(),
                     note: Some(format!("Count: {}", group.addresses.len())),
                 });
-            } else if include_addresses {
-                for address in group.addresses.iter().take(addresses_limit as usize) {
+                continue;
+            }
+
+            if include_addresses {
+                let mut addresses = group.addresses;
+                addresses.sort();
+                for address in addresses.into_iter().take(addresses_limit as usize) {
                     items.push(VolatileScanEntry {
-                        address: address.clone(),
+                        address,
                         sheet_name: sheet_name.clone(),
                         function: "volatile".to_string(),
                         note: Some(group.formula.clone()),
@@ -2793,19 +2817,35 @@ pub async fn scan_volatiles(
         }
     }
 
+    items.sort_by(|left, right| {
+        left.sheet_name
+            .cmp(&right.sheet_name)
+            .then_with(|| left.function.cmp(&right.function))
+            .then_with(|| left.note.cmp(&right.note))
+            .then_with(|| left.address.cmp(&right.address))
+    });
+
     let total_items = items.len();
+    let offset = params.offset.unwrap_or(0) as usize;
+    let page_limit = params
+        .limit
+        .map(|limit| limit.max(1) as usize)
+        .unwrap_or(usize::MAX);
+    let start = offset.min(total_items);
+    let end = start.saturating_add(page_limit).min(total_items);
+    let mut page_items = items[start..end].to_vec();
 
     if let Some(max_items) = max_items
-        && items.len() > max_items
+        && page_items.len() > max_items
     {
-        items.truncate(max_items);
+        page_items.truncate(max_items);
     }
 
     if let Some(max_bytes) = max_payload_bytes {
-        let item_limit = cap_rows_by_payload_bytes(items.len(), Some(max_bytes), |count| {
+        let item_limit = cap_rows_by_payload_bytes(page_items.len(), Some(max_bytes), |count| {
             let response = VolatileScanResponse {
                 workbook_id: workbook.id.clone(),
-                items: items[..count].to_vec(),
+                items: page_items[..count].to_vec(),
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -2813,20 +2853,22 @@ pub async fn scan_volatiles(
                 .unwrap_or(usize::MAX)
         });
 
-        if item_limit < items.len() {
-            items.truncate(item_limit);
+        if item_limit < page_items.len() {
+            page_items.truncate(item_limit);
         }
     }
 
-    let next_offset = if items.len() < total_items {
-        Some(items.len() as u32)
+    let emitted = page_items.len();
+    let absolute_next = offset.saturating_add(emitted);
+    let next_offset = if emitted > 0 && absolute_next < total_items {
+        Some(absolute_next as u32)
     } else {
         None
     };
 
     let response = VolatileScanResponse {
         workbook_id: workbook.id.clone(),
-        items,
+        items: page_items,
         next_offset,
     };
     Ok(response)
