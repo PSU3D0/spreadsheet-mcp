@@ -111,6 +111,21 @@ fn write_phase1_read_surface_fixture(path: &Path) {
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
 }
 
+fn write_workbook_short_id_column_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("workbook_short_id");
+        sheet.get_cell_mut("B1").set_value("Name");
+        sheet.get_cell_mut("A2").set_value("user-data-id");
+        sheet.get_cell_mut("B2").set_value("Alice");
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
 fn run_cli(args: &[&str]) -> std::process::Output {
     Command::new(assert_cmd::cargo::cargo_bin!("agent-spreadsheet"))
         .args(args)
@@ -1050,6 +1065,896 @@ fn cli_sheet_page_preserves_next_start_row_in_canonical_and_compact_shapes() {
         canonical_payload["next_start_row"],
         compact_shape_payload["next_start_row"]
     );
+}
+
+#[test]
+fn cli_shape_3109_read_table_compact_preserves_contract_branches() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-read-table-branches.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    for (table_format, branch) in [("json", "rows"), ("values", "values"), ("csv", "csv")] {
+        let canonical = run_cli(&[
+            "read-table",
+            file,
+            "--sheet",
+            "Sheet1",
+            "--table-name",
+            "SalesTable",
+            "--table-format",
+            table_format,
+            "--sample-mode",
+            "first",
+            "--limit",
+            "1",
+            "--offset",
+            "0",
+        ]);
+        assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+        let canonical_payload = parse_stdout_json(&canonical);
+
+        let compact = run_cli(&[
+            "--shape",
+            "compact",
+            "read-table",
+            file,
+            "--sheet",
+            "Sheet1",
+            "--table-name",
+            "SalesTable",
+            "--table-format",
+            table_format,
+            "--sample-mode",
+            "first",
+            "--limit",
+            "1",
+            "--offset",
+            "0",
+        ]);
+        assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+        let compact_payload = parse_stdout_json(&compact);
+
+        assert_eq!(
+            compact_payload["workbook_id"],
+            canonical_payload["workbook_id"]
+        );
+        assert_eq!(compact_payload["sheet_name"], "Sheet1");
+        assert_eq!(compact_payload["table_name"], "SalesTable");
+        assert_eq!(
+            compact_payload["total_rows"],
+            canonical_payload["total_rows"]
+        );
+        assert_eq!(
+            compact_payload["next_offset"],
+            canonical_payload["next_offset"]
+        );
+
+        match branch {
+            "rows" => {
+                assert!(compact_payload["rows"].is_array());
+                assert!(compact_payload.get("values").is_none());
+                assert!(compact_payload.get("csv").is_none());
+            }
+            "values" => {
+                assert!(compact_payload["values"].is_array());
+                assert!(compact_payload.get("rows").is_none());
+                assert!(compact_payload.get("csv").is_none());
+            }
+            "csv" => {
+                assert!(compact_payload["csv"].is_string());
+                assert!(compact_payload.get("rows").is_none());
+                assert!(compact_payload.get("values").is_none());
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(compact_payload, canonical_payload);
+    }
+}
+
+#[test]
+fn cli_shape_3109_read_table_compact_round_trips_next_offset_until_terminal() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-read-table-next-offset.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical_first = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "first",
+        "--limit",
+        "1",
+        "--offset",
+        "0",
+    ]);
+    assert!(
+        canonical_first.status.success(),
+        "stderr: {:?}",
+        canonical_first.stderr
+    );
+    let canonical_first_payload = parse_stdout_json(&canonical_first);
+
+    let compact_first = run_cli(&[
+        "--shape",
+        "compact",
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "first",
+        "--limit",
+        "1",
+        "--offset",
+        "0",
+    ]);
+    assert!(
+        compact_first.status.success(),
+        "stderr: {:?}",
+        compact_first.stderr
+    );
+    let compact_first_payload = parse_stdout_json(&compact_first);
+
+    assert_eq!(
+        compact_first_payload["next_offset"],
+        canonical_first_payload["next_offset"]
+    );
+
+    let mut offset = compact_first_payload["next_offset"]
+        .as_u64()
+        .expect("next_offset on compact first page") as u32;
+    let mut saw_terminal = false;
+
+    for _ in 0..10 {
+        let offset_arg = offset.to_string();
+        let page = run_cli(&[
+            "--shape",
+            "compact",
+            "read-table",
+            file,
+            "--sheet",
+            "Sheet1",
+            "--range",
+            "A1:C4",
+            "--table-format",
+            "json",
+            "--sample-mode",
+            "first",
+            "--limit",
+            "1",
+            "--offset",
+            offset_arg.as_str(),
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+
+        let payload = parse_stdout_json(&page);
+        if let Some(next_offset) = payload["next_offset"].as_u64() {
+            assert!(
+                next_offset > offset as u64,
+                "next_offset must strictly increase"
+            );
+            offset = next_offset as u32;
+        } else {
+            saw_terminal = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_terminal,
+        "compact read-table pagination did not reach a terminal page"
+    );
+}
+
+#[test]
+fn cli_shape_3109_read_table_compact_preserves_user_workbook_short_id_columns() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp
+        .path()
+        .join("shape-3109-read-table-workbook-short-id-column.xlsx");
+    write_workbook_short_id_column_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&[
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:B2",
+        "--table-format",
+        "json",
+    ]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+
+    let compact = run_cli(&[
+        "--shape",
+        "compact",
+        "read-table",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:B2",
+        "--table-format",
+        "json",
+    ]);
+    assert!(compact.status.success(), "stderr: {:?}", compact.stderr);
+    let compact_payload = parse_stdout_json(&compact);
+
+    assert_eq!(compact_payload, canonical_payload);
+
+    let row = compact_payload["rows"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_object)
+        .expect("first compact row object");
+    assert!(row.contains_key("workbook_short_id"));
+}
+
+#[test]
+fn cli_shape_3109_sheet_page_compact_preserves_active_branches_without_collapse() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-sheet-page-branches.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    for format in ["full", "compact", "values_only"] {
+        let canonical = run_cli(&[
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--start-row",
+            "2",
+            "--page-size",
+            "2",
+            "--format",
+            format,
+        ]);
+        assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+        let canonical_payload = parse_stdout_json(&canonical);
+
+        let compact_shape = run_cli(&[
+            "--shape",
+            "compact",
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--start-row",
+            "2",
+            "--page-size",
+            "2",
+            "--format",
+            format,
+        ]);
+        assert!(
+            compact_shape.status.success(),
+            "stderr: {:?}",
+            compact_shape.stderr
+        );
+        let compact_payload = parse_stdout_json(&compact_shape);
+
+        assert_eq!(
+            compact_payload["workbook_id"],
+            canonical_payload["workbook_id"]
+        );
+        assert_eq!(compact_payload["sheet_name"], "Sheet1");
+        assert_eq!(compact_payload["format"], format);
+        assert_eq!(
+            compact_payload["next_start_row"],
+            canonical_payload["next_start_row"]
+        );
+
+        match format {
+            "full" => {
+                let compact_rows = compact_payload["rows"].as_array().expect("full rows");
+                let canonical_rows = canonical_payload["rows"]
+                    .as_array()
+                    .expect("canonical full rows");
+                assert_eq!(compact_rows.len(), canonical_rows.len());
+                assert!(compact_rows.len() > 1, "expected multi-row full payload");
+                assert!(compact_payload.get("compact").is_none());
+                assert!(compact_payload.get("values_only").is_none());
+            }
+            "compact" => {
+                let compact_rows = compact_payload["compact"]["rows"]
+                    .as_array()
+                    .expect("compact branch rows");
+                let canonical_rows = canonical_payload["compact"]["rows"]
+                    .as_array()
+                    .expect("canonical compact branch rows");
+                assert_eq!(compact_rows.len(), canonical_rows.len());
+                assert!(compact_rows.len() > 1, "expected multi-row compact payload");
+                assert!(compact_payload.get("rows").is_none());
+                assert!(compact_payload.get("values_only").is_none());
+            }
+            "values_only" => {
+                let compact_rows = compact_payload["values_only"]["rows"]
+                    .as_array()
+                    .expect("values_only branch rows");
+                let canonical_rows = canonical_payload["values_only"]["rows"]
+                    .as_array()
+                    .expect("canonical values_only branch rows");
+                assert_eq!(compact_rows.len(), canonical_rows.len());
+                assert!(
+                    compact_rows.len() > 1,
+                    "expected multi-row values_only payload"
+                );
+                assert!(compact_payload.get("rows").is_none());
+                assert!(compact_payload.get("compact").is_none());
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(compact_payload, canonical_payload);
+    }
+}
+
+#[test]
+fn cli_shape_3109_sheet_page_compact_round_trips_next_start_row() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-sheet-page-next-start-row.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical_first = run_cli(&[
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        canonical_first.status.success(),
+        "stderr: {:?}",
+        canonical_first.stderr
+    );
+    let canonical_first_payload = parse_stdout_json(&canonical_first);
+
+    let compact_first = run_cli(&[
+        "--shape",
+        "compact",
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        compact_first.status.success(),
+        "stderr: {:?}",
+        compact_first.stderr
+    );
+    let compact_first_payload = parse_stdout_json(&compact_first);
+
+    assert_eq!(
+        compact_first_payload["next_start_row"],
+        canonical_first_payload["next_start_row"]
+    );
+
+    let next_start_row = compact_first_payload["next_start_row"]
+        .as_u64()
+        .expect("next_start_row on compact first page")
+        .to_string();
+
+    let continuation = run_cli(&[
+        "--shape",
+        "compact",
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        next_start_row.as_str(),
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(
+        continuation.status.success(),
+        "stderr: {:?}",
+        continuation.stderr
+    );
+    let continuation_payload = parse_stdout_json(&continuation);
+
+    let direct = run_cli(&[
+        "--shape",
+        "compact",
+        "sheet-page",
+        file,
+        "Sheet1",
+        "--start-row",
+        "3",
+        "--page-size",
+        "1",
+        "--format",
+        "compact",
+    ]);
+    assert!(direct.status.success(), "stderr: {:?}", direct.stderr);
+    let direct_payload = parse_stdout_json(&direct);
+
+    assert_eq!(continuation_payload, direct_payload);
+}
+
+#[test]
+fn cli_shape_3109_formula_trace_compact_omits_layer_highlights_and_preserves_cursor() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp
+        .path()
+        .join("shape-3109-formula-trace-compact-contract.xlsx");
+    write_trace_pagination_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+
+    let compact_shape = run_cli(&[
+        "--shape",
+        "compact",
+        "formula-trace",
+        file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        compact_shape.status.success(),
+        "stderr: {:?}",
+        compact_shape.stderr
+    );
+    let compact_payload = parse_stdout_json(&compact_shape);
+
+    assert_eq!(
+        compact_payload["workbook_id"],
+        canonical_payload["workbook_id"]
+    );
+    assert_eq!(
+        compact_payload["sheet_name"],
+        canonical_payload["sheet_name"]
+    );
+    assert_eq!(compact_payload["origin"], canonical_payload["origin"]);
+    assert_eq!(compact_payload["direction"], canonical_payload["direction"]);
+    assert_eq!(
+        compact_payload["next_cursor"],
+        canonical_payload["next_cursor"]
+    );
+    assert_eq!(compact_payload["notes"], canonical_payload["notes"]);
+
+    let canonical_layers = canonical_payload["layers"]
+        .as_array()
+        .expect("canonical layers")
+        .clone();
+    assert!(!canonical_layers.is_empty(), "expected canonical layers");
+    assert!(
+        canonical_layers
+            .iter()
+            .all(|layer| layer.get("highlights").is_some()),
+        "canonical layers should include highlights"
+    );
+
+    let compact_layers = compact_payload["layers"]
+        .as_array()
+        .expect("compact layers");
+    assert_eq!(compact_layers.len(), canonical_layers.len());
+    assert!(
+        compact_layers
+            .iter()
+            .all(|layer| layer.get("highlights").is_none()),
+        "compact layers must omit highlights"
+    );
+    assert!(compact_layers.iter().all(|layer| {
+        layer.get("depth").is_some()
+            && layer.get("summary").is_some()
+            && layer.get("edges").is_some()
+            && layer.get("has_more").is_some()
+    }));
+
+    for (canonical_layer, compact_layer) in canonical_layers.iter().zip(compact_layers.iter()) {
+        assert_eq!(compact_layer["depth"], canonical_layer["depth"]);
+        assert_eq!(compact_layer["summary"], canonical_layer["summary"]);
+        assert_eq!(compact_layer["has_more"], canonical_layer["has_more"]);
+
+        let mut canonical_edges = canonical_layer["edges"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut compact_edges = compact_layer["edges"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        canonical_edges.sort_by(|a, b| {
+            serde_json::to_string(a)
+                .expect("serialize canonical edge")
+                .cmp(&serde_json::to_string(b).expect("serialize canonical edge"))
+        });
+        compact_edges.sort_by(|a, b| {
+            serde_json::to_string(a)
+                .expect("serialize compact edge")
+                .cmp(&serde_json::to_string(b).expect("serialize compact edge"))
+        });
+
+        assert_eq!(compact_edges, canonical_edges);
+    }
+}
+
+#[test]
+fn cli_shape_3109_formula_trace_compact_round_trips_next_cursor_until_terminal() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-formula-trace-next-cursor.xlsx");
+    write_trace_pagination_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical_first = run_cli(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        canonical_first.status.success(),
+        "stderr: {:?}",
+        canonical_first.stderr
+    );
+    let canonical_first_payload = parse_stdout_json(&canonical_first);
+
+    let compact_first = run_cli(&[
+        "--shape",
+        "compact",
+        "formula-trace",
+        file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        compact_first.status.success(),
+        "stderr: {:?}",
+        compact_first.stderr
+    );
+    let compact_first_payload = parse_stdout_json(&compact_first);
+
+    assert_eq!(
+        compact_first_payload["next_cursor"],
+        canonical_first_payload["next_cursor"]
+    );
+
+    let first_cursor = compact_first_payload["next_cursor"]
+        .as_object()
+        .expect("next_cursor on first compact trace page");
+    let mut cursor_depth = first_cursor["depth"].as_u64().expect("cursor depth") as u32;
+    let mut cursor_offset = first_cursor["offset"].as_u64().expect("cursor offset") as usize;
+
+    let mut saw_terminal = false;
+    for _ in 0..10 {
+        let depth_arg = cursor_depth.to_string();
+        let offset_arg = cursor_offset.to_string();
+        let page = run_cli(&[
+            "--shape",
+            "compact",
+            "formula-trace",
+            file,
+            "Sheet1",
+            "A1",
+            "dependents",
+            "--depth",
+            "1",
+            "--page-size",
+            "5",
+            "--cursor-depth",
+            depth_arg.as_str(),
+            "--cursor-offset",
+            offset_arg.as_str(),
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+
+        let payload = parse_stdout_json(&page);
+        let layers = payload["layers"].as_array().expect("layers array");
+        assert!(layers.iter().all(|layer| layer.get("highlights").is_none()));
+
+        if let Some(next_cursor) = payload["next_cursor"].as_object() {
+            let next_depth = next_cursor["depth"].as_u64().expect("next depth") as u32;
+            let next_offset = next_cursor["offset"].as_u64().expect("next offset") as usize;
+            assert_eq!(next_depth, cursor_depth);
+            assert!(next_offset > cursor_offset, "cursor offset must increase");
+            cursor_depth = next_depth;
+            cursor_offset = next_offset;
+        } else {
+            saw_terminal = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_terminal,
+        "compact formula-trace pagination did not reach a terminal page"
+    );
+}
+
+#[test]
+fn cli_shape_3109_compact_does_not_over_apply_to_unrelated_find_value_payloads() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("shape-3109-over-apply-find-value.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let canonical = run_cli(&["find-value", file, "Bob", "--sheet", "Sheet1"]);
+    assert!(canonical.status.success(), "stderr: {:?}", canonical.stderr);
+    let canonical_payload = parse_stdout_json(&canonical);
+
+    let compact_shape = run_cli(&[
+        "--shape",
+        "compact",
+        "find-value",
+        file,
+        "Bob",
+        "--sheet",
+        "Sheet1",
+    ]);
+    assert!(
+        compact_shape.status.success(),
+        "stderr: {:?}",
+        compact_shape.stderr
+    );
+    let compact_payload = parse_stdout_json(&compact_shape);
+
+    assert_eq!(compact_payload, canonical_payload);
+}
+
+#[test]
+fn cli_shape_3109_default_shape_matches_explicit_canonical_for_ticket_commands() {
+    let tmp = tempdir().expect("tempdir");
+
+    let read_table_workbook = tmp
+        .path()
+        .join("shape-3109-default-canonical-read-table.xlsx");
+    write_fixture(&read_table_workbook);
+    let read_table_file = read_table_workbook.to_str().expect("path utf8");
+    let read_table_default = run_cli(&[
+        "read-table",
+        read_table_file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "first",
+        "--limit",
+        "1",
+        "--offset",
+        "0",
+    ]);
+    assert!(
+        read_table_default.status.success(),
+        "stderr: {:?}",
+        read_table_default.stderr
+    );
+    let read_table_canonical = run_cli(&[
+        "--shape",
+        "canonical",
+        "read-table",
+        read_table_file,
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "A1:C4",
+        "--table-format",
+        "json",
+        "--sample-mode",
+        "first",
+        "--limit",
+        "1",
+        "--offset",
+        "0",
+    ]);
+    assert!(
+        read_table_canonical.status.success(),
+        "stderr: {:?}",
+        read_table_canonical.stderr
+    );
+    assert_eq!(
+        parse_stdout_json(&read_table_default),
+        parse_stdout_json(&read_table_canonical)
+    );
+
+    let sheet_page_workbook = tmp
+        .path()
+        .join("shape-3109-default-canonical-sheet-page.xlsx");
+    write_fixture(&sheet_page_workbook);
+    let sheet_page_file = sheet_page_workbook.to_str().expect("path utf8");
+    let sheet_page_default = run_cli(&[
+        "sheet-page",
+        sheet_page_file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(
+        sheet_page_default.status.success(),
+        "stderr: {:?}",
+        sheet_page_default.stderr
+    );
+    let sheet_page_canonical = run_cli(&[
+        "--shape",
+        "canonical",
+        "sheet-page",
+        sheet_page_file,
+        "Sheet1",
+        "--start-row",
+        "2",
+        "--page-size",
+        "1",
+        "--format",
+        "full",
+    ]);
+    assert!(
+        sheet_page_canonical.status.success(),
+        "stderr: {:?}",
+        sheet_page_canonical.stderr
+    );
+    assert_eq!(
+        parse_stdout_json(&sheet_page_default),
+        parse_stdout_json(&sheet_page_canonical)
+    );
+
+    let trace_workbook = tmp
+        .path()
+        .join("shape-3109-default-canonical-formula-trace.xlsx");
+    write_trace_pagination_fixture(&trace_workbook);
+    let trace_file = trace_workbook.to_str().expect("path utf8");
+    let trace_default = run_cli(&[
+        "formula-trace",
+        trace_file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        trace_default.status.success(),
+        "stderr: {:?}",
+        trace_default.stderr
+    );
+    let trace_canonical = run_cli(&[
+        "--shape",
+        "canonical",
+        "formula-trace",
+        trace_file,
+        "Sheet1",
+        "A1",
+        "dependents",
+        "--depth",
+        "1",
+        "--page-size",
+        "5",
+    ]);
+    assert!(
+        trace_canonical.status.success(),
+        "stderr: {:?}",
+        trace_canonical.stderr
+    );
+
+    let trace_default_payload = parse_stdout_json(&trace_default);
+    let trace_canonical_payload = parse_stdout_json(&trace_canonical);
+    assert_eq!(
+        trace_default_payload["workbook_id"],
+        trace_canonical_payload["workbook_id"]
+    );
+    assert_eq!(
+        trace_default_payload["sheet_name"],
+        trace_canonical_payload["sheet_name"]
+    );
+    assert_eq!(
+        trace_default_payload["origin"],
+        trace_canonical_payload["origin"]
+    );
+    assert_eq!(
+        trace_default_payload["direction"],
+        trace_canonical_payload["direction"]
+    );
+    assert_eq!(
+        trace_default_payload["next_cursor"],
+        trace_canonical_payload["next_cursor"]
+    );
+    assert_eq!(
+        trace_default_payload["notes"],
+        trace_canonical_payload["notes"]
+    );
+
+    let default_layers = trace_default_payload["layers"]
+        .as_array()
+        .expect("default layers");
+    let canonical_layers = trace_canonical_payload["layers"]
+        .as_array()
+        .expect("canonical layers");
+    assert_eq!(default_layers.len(), canonical_layers.len());
+
+    for (default_layer, canonical_layer) in default_layers.iter().zip(canonical_layers.iter()) {
+        assert_eq!(default_layer["depth"], canonical_layer["depth"]);
+        assert_eq!(default_layer["summary"], canonical_layer["summary"]);
+        assert_eq!(default_layer["has_more"], canonical_layer["has_more"]);
+        assert_eq!(
+            default_layer.get("highlights").is_some(),
+            canonical_layer.get("highlights").is_some()
+        );
+
+        let mut default_edges = default_layer["edges"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut canonical_edges = canonical_layer["edges"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        default_edges.sort_by(|a, b| {
+            serde_json::to_string(a)
+                .expect("serialize default edge")
+                .cmp(&serde_json::to_string(b).expect("serialize default edge"))
+        });
+        canonical_edges.sort_by(|a, b| {
+            serde_json::to_string(a)
+                .expect("serialize canonical edge")
+                .cmp(&serde_json::to_string(b).expect("serialize canonical edge"))
+        });
+
+        assert_eq!(default_edges, canonical_edges);
+    }
 }
 
 #[test]

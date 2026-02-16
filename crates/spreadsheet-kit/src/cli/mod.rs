@@ -84,7 +84,7 @@ pub struct Cli {
         value_enum,
         default_value_t = OutputShape::Canonical,
         global = true,
-        help = "Output shape (canonical default keeps full schema; compact only flattens single-range range-values responses and preserves continuation fields like next_start_row)"
+        help = "Output shape (canonical keeps full schema; compact applies command-specific projections: range-values single-range flattening, read-table/sheet-page branch preservation, and formula-trace layer highlight omission while preserving continuation fields)"
     )]
     pub shape: OutputShape,
 
@@ -676,14 +676,28 @@ pub async fn run_with_options(
         emit_error_and_exit(error);
     }
 
+    let projection_target = compact_projection_target_for_command(&command);
+
     match run_command(command).await {
         Ok(payload) => {
-            if let Err(error) = output::emit_value(&payload, format, shape, compact, quiet) {
+            if let Err(error) =
+                output::emit_value(&payload, format, shape, projection_target, compact, quiet)
+            {
                 emit_error_and_exit(error);
             }
             Ok(())
         }
         Err(error) => emit_error_and_exit(error),
+    }
+}
+
+fn compact_projection_target_for_command(command: &Commands) -> output::CompactProjectionTarget {
+    match command {
+        Commands::RangeValues { .. } => output::CompactProjectionTarget::RangeValues,
+        Commands::ReadTable { .. } => output::CompactProjectionTarget::ReadTable,
+        Commands::SheetPage { .. } => output::CompactProjectionTarget::SheetPage,
+        Commands::FormulaTrace { .. } => output::CompactProjectionTarget::FormulaTrace,
+        _ => output::CompactProjectionTarget::None,
     }
 }
 
