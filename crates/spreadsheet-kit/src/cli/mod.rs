@@ -51,6 +51,13 @@ pub enum FindValueMode {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LabelDirectionArg {
+    Right,
+    Below,
+    Any,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum FormulaSort {
     Complexity,
     Count,
@@ -250,7 +257,7 @@ pub enum Commands {
     },
     #[command(
         about = "Find cells matching a text query by value or label",
-        after_long_help = "Examples:\n  agent-spreadsheet find-value data.xlsx Revenue\n  agent-spreadsheet find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label"
+        after_long_help = "Examples:\n  agent-spreadsheet find-value data.xlsx Revenue --mode value\n  agent-spreadsheet find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label --label-direction below\n\nLabel mode behavior:\n  - QUERY is matched against label cells.\n  - Result value is taken from an adjacent cell, not from the label itself.\n  - --label-direction any (default) checks right first, then below."
     )]
     FindValue {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -266,6 +273,13 @@ pub enum Commands {
             help = "Search mode: value or label"
         )]
         mode: Option<FindValueMode>,
+        #[arg(
+            long = "label-direction",
+            value_enum,
+            value_name = "DIR",
+            help = "For --mode label, read the value from right, below, or any (default: any)"
+        )]
+        label_direction: Option<LabelDirectionArg>,
     },
     #[command(
         about = "List workbook named ranges and table/formula named items",
@@ -482,7 +496,7 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless formula pattern operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run"
+        after_long_help = "Examples:\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run\n\nCache note:\n  Updated formula cells clear cached results. Run recalculate to refresh computed values."
     )]
     ApplyFormulaPattern {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -709,7 +723,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             query,
             sheet,
             mode,
-        } => commands::read::find_value(file, query, sheet, mode).await,
+            label_direction,
+        } => commands::read::find_value(file, query, sheet, mode, label_direction).await,
         Commands::NamedRanges {
             file,
             sheet,
@@ -1391,6 +1406,40 @@ mod tests {
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
                 assert_eq!(limit, Some(10));
                 assert_eq!(offset, Some(5));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_find_value_label_direction_arguments() {
+        let find = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "find-value",
+            "workbook.xlsx",
+            "Amount",
+            "--sheet",
+            "Sheet1",
+            "--mode",
+            "label",
+            "--label-direction",
+            "below",
+        ])
+        .expect("parse find-value");
+
+        match find.command {
+            Commands::FindValue {
+                file,
+                query,
+                sheet,
+                mode,
+                label_direction,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(query, "Amount");
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert!(matches!(mode, Some(FindValueMode::Label)));
+                assert!(matches!(label_direction, Some(LabelDirectionArg::Below)));
             }
             other => panic!("unexpected command: {other:?}"),
         }

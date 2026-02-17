@@ -244,8 +244,12 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(find.contains("Find cells matching a text query by value or label"));
     assert!(find.contains("Examples:"));
     assert!(
-        find.contains("find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label")
+        find.contains(
+            "find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label --label-direction below"
+        )
     );
+    assert!(find.contains("Label mode behavior:"));
+    assert!(find.contains("--label-direction any (default) checks right first, then below"));
 
     let formula_help = run_cli(&["formula-map", "--help"]);
     assert!(
@@ -423,12 +427,15 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "agent-spreadsheet read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
         "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
         "agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run",
+        "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "`range-values <file> <sheet> <range> [range...]`",
+        "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
         "Compact (single range):** flatten that entry to top-level fields",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
+        "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
     ] {
         assert!(
             readme.contains(anchor),
@@ -494,6 +501,17 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         ],
         vec!["range-values", file, "Sheet1", "A1:C4"],
         vec![
+            "find-value",
+            file,
+            "Amount",
+            "--sheet",
+            "Sheet1",
+            "--mode",
+            "label",
+            "--label-direction",
+            "below",
+        ],
+        vec![
             "transform-batch",
             file,
             "--ops",
@@ -527,10 +545,13 @@ fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
     for anchor in [
         "agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200",
         "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
+        "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
+        "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
         "Canonical (default/omitted): return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.",
+        "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
     ] {
         assert!(
             readme.contains(anchor),
@@ -567,6 +588,17 @@ fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
             "2",
         ],
         vec!["table-profile", file, "--sheet", "Sheet1"],
+        vec![
+            "find-value",
+            file,
+            "Amount",
+            "--sheet",
+            "Sheet1",
+            "--mode",
+            "label",
+            "--label-direction",
+            "below",
+        ],
         vec![
             "transform-batch",
             file,
@@ -696,6 +728,51 @@ fn cli_read_commands_cover_ticket_surface() {
             .unwrap_or(0)
             >= 3
     );
+}
+
+#[test]
+fn cli_find_value_label_mode_uses_query_as_label_and_direction() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("find-value-label-mode.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let below = run_cli(&[
+        "find-value",
+        file,
+        "Amount",
+        "--sheet",
+        "Sheet1",
+        "--mode",
+        "label",
+        "--label-direction",
+        "below",
+    ]);
+    assert!(below.status.success(), "stderr: {:?}", below.stderr);
+    let below_payload = parse_stdout_json(&below);
+    let below_matches = below_payload["matches"].as_array().expect("matches array");
+    assert_eq!(below_matches.len(), 1);
+    assert_eq!(below_matches[0]["address"], "B1");
+    assert_eq!(below_matches[0]["label_hit"]["label"], "Amount");
+    assert_eq!(below_matches[0]["value"]["kind"], "Number");
+    assert_eq!(below_matches[0]["value"]["value"], 10.0);
+
+    let any = run_cli(&[
+        "find-value",
+        file,
+        "Amount",
+        "--sheet",
+        "Sheet1",
+        "--mode",
+        "label",
+    ]);
+    assert!(any.status.success(), "stderr: {:?}", any.stderr);
+    let any_payload = parse_stdout_json(&any);
+    let any_matches = any_payload["matches"].as_array().expect("matches array");
+    assert_eq!(any_matches.len(), 1);
+    assert_eq!(any_matches[0]["address"], "B1");
+    assert_eq!(any_matches[0]["value"]["kind"], "Text");
+    assert_eq!(any_matches[0]["value"]["value"], "Total");
 }
 
 #[test]
@@ -875,6 +952,74 @@ fn cli_phase1_scan_volatiles_detects_and_paginates_deterministically() {
     );
     let second_again_payload = parse_stdout_json(&second_again);
     assert_eq!(second_payload, second_again_payload);
+}
+
+#[test]
+fn cli_phase1_scan_volatiles_skips_unparsable_formulas_instead_of_failing() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase1-scan-volatiles-parser-failure.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("Input");
+        sheet.get_cell_mut("B1").set_value("Result");
+        // Intentionally malformed: one extra closing parenthesis.
+        sheet.get_cell_mut("B2").set_formula(
+            r#"IF(C70="","",IF(C70="N/A","",IF(C70="Unknown",0,IF(LEFT(C70,1)="0",0,IF(LEFT(C70,1)="1",25,IF(LEFT(C70,1)="2",50,IF(LEFT(C70,1)="3",75,IF(LEFT(C70,1)="4",100,"")))))))))"#,
+        );
+        sheet.get_cell_mut("B3").set_formula("NOW()");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["scan-volatiles", file, "--sheet", "Sheet1"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    let items = payload["items"].as_array().expect("items array");
+    assert!(
+        items.iter().any(|item| {
+            item["address"] == "B3"
+                && item["function"] == "volatile"
+                && item["sheet_name"] == "Sheet1"
+        }),
+        "expected volatile match from valid formula"
+    );
+}
+
+#[test]
+fn cli_formula_map_skips_unparsable_formulas_instead_of_failing() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-map-parser-failure.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("Input");
+        sheet.get_cell_mut("B1").set_value("Result");
+        // Intentionally malformed: one extra closing parenthesis.
+        sheet.get_cell_mut("B2").set_formula(
+            r#"IF(C70="","",IF(C70="N/A","",IF(C70="Unknown",0,IF(LEFT(C70,1)="0",0,IF(LEFT(C70,1)="1",25,IF(LEFT(C70,1)="2",50,IF(LEFT(C70,1)="3",75,IF(LEFT(C70,1)="4",100,"")))))))))"#,
+        );
+        sheet.get_cell_mut("B3").set_formula("SUM(1,2)");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["formula-map", file, "Sheet1", "--limit", "10"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    let groups = payload["groups"].as_array().expect("groups array");
+    assert!(
+        !groups.is_empty(),
+        "expected at least one parseable formula group"
+    );
 }
 
 #[test]
@@ -3243,6 +3388,9 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     assert!(
         formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run")
     );
+    assert!(formula.contains(
+        "Updated formula cells clear cached results. Run recalculate to refresh computed values."
+    ));
 }
 
 #[test]
@@ -3455,6 +3603,60 @@ fn phase_a_apply_formula_pattern_positive_dry_run_and_output_target_only() {
             .get_formula()
             .replace(' ', ""),
         "B4*3"
+    );
+}
+
+#[test]
+fn phase_a_apply_formula_pattern_clears_formula_cache_for_touched_cells() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-a-formula-cache-clear.xlsx");
+    let ops_path = tmp.path().join("formula-cache-ops.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("C1").set_value("Total");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        let c2 = sheet.get_cell_mut("C2");
+        c2.set_formula("B2*2");
+        c2.get_cell_value_mut().set_formula_result_default("20");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C2","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down","relative_mode":"excel"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "apply-formula-pattern",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
+    let c2 = sheet.get_cell("C2").expect("C2 exists");
+    assert_eq!(c2.get_formula().replace(' ', ""), "B2*3");
+    assert_eq!(c2.get_value(), "", "expected formula cache to be cleared");
+
+    let read = run_cli(&["range-values", file, "Sheet1", "C2", "--shape", "compact"]);
+    assert!(read.status.success(), "stderr: {:?}", read.stderr);
+    let payload = parse_stdout_json(&read);
+    assert!(
+        payload["rows"][0][0].is_null(),
+        "range-values should report null until recalculate refreshes cache"
     );
 }
 

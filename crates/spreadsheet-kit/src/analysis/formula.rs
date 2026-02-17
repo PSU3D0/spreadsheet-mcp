@@ -130,6 +130,8 @@ impl FormulaGraph {
             if !cell.is_formula() {
                 continue;
             }
+            let coordinate = cell.get_coordinate();
+            let address = coordinate.get_coordinate();
             let formula_text = cell.get_formula();
             if formula_text.is_empty() {
                 continue;
@@ -142,17 +144,35 @@ impl FormulaGraph {
 
             let ast = {
                 let mut parser = atlas.parser.lock();
-                parser
-                    .parse(&formula_with_prefix)
-                    .with_context(|| format!("failed to parse formula: {formula_with_prefix}"))?
+                match parser.parse(&formula_with_prefix) {
+                    Ok(ast) => Some(ast),
+                    Err(batch_err) => {
+                        let fallback = formualizer_parse::parse(&formula_with_prefix);
+                        match fallback {
+                            Ok(ast) => Some(ast),
+                            Err(fallback_err) => {
+                                tracing::warn!(
+                                    sheet = %sheet_name,
+                                    address = %address,
+                                    formula = %formula_with_prefix,
+                                    batch_error = %batch_err,
+                                    fallback_error = %fallback_err,
+                                    "skipping unparsable formula cell"
+                                );
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+
+            let Some(ast) = ast else {
+                continue;
             };
 
             let fingerprint = format!("{:016x}", ast.fingerprint());
             let canonical = unescape_formula_string(&canonical_formula(&ast));
             let is_volatile = ast.contains_volatile();
-
-            let coordinate = cell.get_coordinate();
-            let address = coordinate.get_coordinate();
 
             let (is_array, is_shared_type) = cell
                 .get_formula_obj()

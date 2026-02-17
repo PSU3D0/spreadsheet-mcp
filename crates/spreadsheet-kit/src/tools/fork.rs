@@ -1306,9 +1306,9 @@ fn apply_formula_pattern_to_file(
             let shifted = shift_formula_ast(&ast, delta_col, delta_row, relative_mode)?;
             let shifted_for_umya = shifted.strip_prefix('=').unwrap_or(&shifted);
             let addr = crate::utils::cell_address(col, row);
-            sheet
-                .get_cell_mut(addr.as_str())
-                .set_formula(shifted_for_umya.to_string());
+            let cell = sheet.get_cell_mut(addr.as_str());
+            cell.set_formula(shifted_for_umya.to_string());
+            cell.set_formula_result_default("");
             cells_filled += 1;
         }
     }

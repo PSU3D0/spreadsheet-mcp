@@ -590,3 +590,57 @@ async fn scan_volatiles_limit_offset_pagination_is_deterministic() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn scan_volatiles_skips_unparsable_formulas_instead_of_failing() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let _path = workspace.create_workbook("scan_volatiles_parser_failure.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").expect("default sheet");
+        sheet.get_cell_mut("A1").set_value("Input");
+        sheet.get_cell_mut("B1").set_value("Result");
+        // Intentionally malformed: one extra closing parenthesis.
+        sheet.get_cell_mut("B2").set_formula(
+            r#"IF(C70="","",IF(C70="N/A","",IF(C70="Unknown",0,IF(LEFT(C70,1)="0",0,IF(LEFT(C70,1)="1",25,IF(LEFT(C70,1)="2",50,IF(LEFT(C70,1)="3",75,IF(LEFT(C70,1)="4",100,"")))))))))"#,
+        );
+        // Valid volatile formula should still be detected.
+        sheet.get_cell_mut("B3").set_formula("NOW()");
+    });
+
+    let state = workspace.app_state();
+    let list_response = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list_response.workbooks[0].workbook_id.clone();
+
+    let response = scan_volatiles(
+        state,
+        ScanVolatilesParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: Some("Sheet1".to_string()),
+            summary_only: Some(false),
+            include_addresses: Some(true),
+            addresses_limit: None,
+            limit: Some(5),
+            offset: Some(0),
+        },
+    )
+    .await?;
+
+    assert!(
+        response
+            .items
+            .iter()
+            .any(|item| item.address == "B3" && item.function == "volatile")
+    );
+
+    Ok(())
+}

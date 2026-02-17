@@ -3,9 +3,10 @@ use crate::recalc::RecalcBackend;
 use crate::utils::column_number_to_name;
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use formualizer_workbook::{
+use formualizer::workbook::{
     LiteralValue, LoadStrategy, SpreadsheetReader, UmyaAdapter, Workbook, WorkbookMode,
 };
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,15 +38,19 @@ impl RecalcBackend for FormualizerBackend {
 fn recalc_sync(path: &Path, timeout_ms: Option<u64>) -> Result<RecalcResult> {
     let start = Instant::now();
 
-    // NOTE: this currently loads the workbook twice (once for writeback via umya,
-    // once for formualizer ingestion via UmyaAdapter::open_path).
-    // formualizer-workbook does not expose a constructor from an existing
-    // `umya_spreadsheet::Spreadsheet` yet, so we cannot reuse a single parse here.
-    // TODO(formualizer-workbook): add UmyaAdapter::from_spreadsheet to remove this duplicate read.
-    let mut spreadsheet = umya_spreadsheet::reader::xlsx::read(path)
+    // Read the workbook bytes once so we can hydrate umya from memory.
+    // If UmyaAdapter::open_bytes is supported by the active formualizer backend,
+    // this path also avoids a second filesystem read for formualizer ingestion.
+    // Otherwise we gracefully fall back to open_path (legacy behavior).
+    let workbook_bytes =
+        std::fs::read(path).with_context(|| format!("failed to read workbook bytes {:?}", path))?;
+
+    let mut reader = Cursor::new(workbook_bytes.clone());
+    let mut spreadsheet = umya_spreadsheet::reader::xlsx::read_reader(&mut reader, true)
         .with_context(|| format!("failed to parse workbook {:?}", path))?;
 
-    let adapter = UmyaAdapter::open_path(path)
+    let adapter = UmyaAdapter::open_bytes(workbook_bytes)
+        .or_else(|_| UmyaAdapter::open_path(path))
         .map_err(|e| anyhow!("failed to open workbook adapter {:?}: {e}", path))?;
     let mut workbook =
         Workbook::from_reader_with_mode(adapter, LoadStrategy::EagerAll, WorkbookMode::Ephemeral)
@@ -113,7 +118,7 @@ fn recalc_sync(path: &Path, timeout_ms: Option<u64>) -> Result<RecalcResult> {
 fn evaluate_with_optional_timeout(
     workbook: &mut Workbook,
     timeout_ms: Option<u64>,
-) -> Result<(u64, u64), formualizer_workbook::IoError> {
+) -> Result<(u64, u64), formualizer::workbook::IoError> {
     let Some(timeout_ms) = timeout_ms else {
         let eval = workbook.evaluate_all()?;
         return Ok((eval.computed_vertices as u64, eval.cycle_errors as u64));

@@ -3,10 +3,12 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::cli::{
-    FindValueMode, FormulaSort, SheetPageFormatArg, TableReadFormat, TableSampleModeArg,
-    TraceDirectionArg,
+    FindValueMode, FormulaSort, LabelDirectionArg, SheetPageFormatArg, TableReadFormat,
+    TableSampleModeArg, TraceDirectionArg,
 };
-use crate::model::{FindMode, SheetPageFormat, TableOutputFormat, TraceCursor, TraceDirection};
+use crate::model::{
+    FindMode, LabelDirection, SheetPageFormat, TableOutputFormat, TraceCursor, TraceDirection,
+};
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
@@ -183,6 +185,7 @@ pub async fn find_value(
     query: String,
     sheet: Option<String>,
     mode: Option<FindValueMode>,
+    label_direction: Option<LabelDirectionArg>,
 ) -> Result<Value> {
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
@@ -190,12 +193,22 @@ pub async fn find_value(
         Some(name) => Some(resolve_sheet_name(&state, &workbook_id, &name).await?),
         None => None,
     };
+
+    let mapped_mode = mode.map(map_find_value_mode);
+    let label = if matches!(mapped_mode, Some(FindMode::Label)) {
+        Some(query.clone())
+    } else {
+        None
+    };
+
     let response = tools::find_value(
         state,
         FindValueParams {
             workbook_or_fork_id: workbook_id,
             query,
-            mode: mode.map(map_find_value_mode),
+            label,
+            mode: mapped_mode,
+            direction: label_direction.map(map_label_direction),
             sheet_name,
             ..FindValueParams::default()
         },
@@ -422,6 +435,14 @@ fn map_find_value_mode(mode: FindValueMode) -> FindMode {
     match mode {
         FindValueMode::Value => FindMode::Value,
         FindValueMode::Label => FindMode::Label,
+    }
+}
+
+fn map_label_direction(direction: LabelDirectionArg) -> LabelDirection {
+    match direction {
+        LabelDirectionArg::Right => LabelDirection::Right,
+        LabelDirectionArg::Below => LabelDirection::Below,
+        LabelDirectionArg::Any => LabelDirection::Any,
     }
 }
 
