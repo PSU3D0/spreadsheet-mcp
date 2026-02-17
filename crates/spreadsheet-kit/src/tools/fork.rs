@@ -1552,6 +1552,8 @@ pub struct StructureBatchParams {
     #[serde(default)]
     pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1561,6 +1563,8 @@ pub struct StructureBatchParamsInput {
     #[serde(default)]
     pub mode: Option<BatchMode>,
     pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -1651,6 +1655,7 @@ pub fn normalize_structure_batch(
             ops,
             mode: input.mode,
             label: input.label,
+            formula_parse_policy: input.formula_parse_policy,
         },
         warnings,
     ))
@@ -1739,11 +1744,15 @@ pub struct StructureBatchResponse {
     pub change_id: Option<String>,
     pub ops_applied: usize,
     pub summary: ChangeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StructureBatchStagedPayload {
     ops: Vec<StructureOp>,
+    #[serde(default)]
+    formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 pub async fn structure_batch(
@@ -1751,6 +1760,11 @@ pub async fn structure_batch(
     params: StructureBatchParamsInput,
 ) -> Result<StructureBatchResponse> {
     let (params, warnings) = normalize_structure_batch(params)?;
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::default_for_command_class(
+            CommandClass::BatchWrite,
+        ));
     let alias_warnings: Vec<String> = warnings
         .into_iter()
         .map(|warning| format!("{}: {}", warning.code, warning.message))
@@ -1776,7 +1790,7 @@ pub async fn structure_batch(
         let ops_for_apply = params.ops.clone();
 
         let apply_result = tokio::task::spawn_blocking(move || {
-            apply_structure_ops_to_file(&snapshot_for_apply, &ops_for_apply)
+            apply_structure_ops_to_file(&snapshot_for_apply, &ops_for_apply, policy)
         })
         .await??;
 
@@ -1810,6 +1824,7 @@ pub async fn structure_batch(
             kind: "structure_batch".to_string(),
             payload: serde_json::to_value(StructureBatchStagedPayload {
                 ops: params.ops.clone(),
+                formula_parse_policy: Some(policy),
             })?,
         };
 
@@ -1830,11 +1845,12 @@ pub async fn structure_batch(
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
         })
     } else {
         let ops_for_apply = params.ops.clone();
         let apply_result = tokio::task::spawn_blocking(move || {
-            apply_structure_ops_to_file(&work_path, &ops_for_apply)
+            apply_structure_ops_to_file(&work_path, &ops_for_apply, policy)
         })
         .await??;
 
@@ -1859,6 +1875,7 @@ pub async fn structure_batch(
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
         })
     }
 }
@@ -1866,13 +1883,16 @@ pub async fn structure_batch(
 pub(crate) struct StructureApplyResult {
     pub(crate) ops_applied: usize,
     pub(crate) summary: ChangeSummary,
+    pub(crate) formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 pub(crate) fn apply_structure_ops_to_file(
     path: &Path,
     ops: &[StructureOp],
+    policy: FormulaParsePolicy,
 ) -> Result<StructureApplyResult> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+    let mut formula_parse_diagnostics_builder = FormulaParseDiagnosticsBuilder::new(policy);
 
     let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
     let affected_bounds: Vec<String> = Vec::new();
@@ -1897,9 +1917,21 @@ pub(crate) fn apply_structure_ops_to_file(
                         .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                     sheet.insert_new_row(at_row, count);
                 }
-                rewrite_formulas_for_sheet_row_insert(&mut book, sheet_name, *at_row, *count)?;
+                rewrite_formulas_for_sheet_row_insert(
+                    &mut book,
+                    sheet_name,
+                    *at_row,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
                 rewrite_defined_name_formulas_for_sheet_row_insert(
-                    &mut book, sheet_name, *at_row, *count,
+                    &mut book,
+                    sheet_name,
+                    *at_row,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
@@ -1921,9 +1953,21 @@ pub(crate) fn apply_structure_ops_to_file(
                         .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                     sheet.remove_row(start_row, count);
                 }
-                rewrite_formulas_for_sheet_row_delete(&mut book, sheet_name, *start_row, *count)?;
+                rewrite_formulas_for_sheet_row_delete(
+                    &mut book,
+                    sheet_name,
+                    *start_row,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
                 rewrite_defined_name_formulas_for_sheet_row_delete(
-                    &mut book, sheet_name, *start_row, *count,
+                    &mut book,
+                    sheet_name,
+                    *start_row,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
@@ -1948,9 +1992,21 @@ pub(crate) fn apply_structure_ops_to_file(
                         .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                     sheet.insert_new_column(&col_letters, count);
                 }
-                rewrite_formulas_for_sheet_col_insert(&mut book, sheet_name, root_col, *count)?;
+                rewrite_formulas_for_sheet_col_insert(
+                    &mut book,
+                    sheet_name,
+                    root_col,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
                 rewrite_defined_name_formulas_for_sheet_col_insert(
-                    &mut book, sheet_name, root_col, *count,
+                    &mut book,
+                    sheet_name,
+                    root_col,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
@@ -1975,9 +2031,21 @@ pub(crate) fn apply_structure_ops_to_file(
                         .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                     sheet.remove_column(&col_letters, count);
                 }
-                rewrite_formulas_for_sheet_col_delete(&mut book, sheet_name, root_col, *count)?;
+                rewrite_formulas_for_sheet_col_delete(
+                    &mut book,
+                    sheet_name,
+                    root_col,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
                 rewrite_defined_name_formulas_for_sheet_col_delete(
-                    &mut book, sheet_name, root_col, *count,
+                    &mut book,
+                    sheet_name,
+                    root_col,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 counts
@@ -2000,8 +2068,20 @@ pub(crate) fn apply_structure_ops_to_file(
                 book.set_sheet_name(sheet_index, new_name.to_string())
                     .map_err(|e| anyhow!("failed to rename sheet '{}': {}", old_name, e))?;
 
-                rewrite_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
-                rewrite_defined_name_formulas_for_sheet_rename(&mut book, old_name, new_name)?;
+                rewrite_formulas_for_sheet_rename(
+                    &mut book,
+                    old_name,
+                    new_name,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
+                rewrite_defined_name_formulas_for_sheet_rename(
+                    &mut book,
+                    old_name,
+                    new_name,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
 
                 affected_sheets.insert(old_name.to_string());
                 affected_sheets.insert(new_name.to_string());
@@ -2074,6 +2154,8 @@ pub(crate) fn apply_structure_ops_to_file(
                     *include_styles,
                     *include_formulas,
                     false,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 affected_sheets.insert(dest_sheet_name.to_string());
@@ -2105,6 +2187,8 @@ pub(crate) fn apply_structure_ops_to_file(
                     *include_styles,
                     *include_formulas,
                     true,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
                 )?;
                 affected_sheets.insert(sheet_name.clone());
                 affected_sheets.insert(dest_sheet_name.to_string());
@@ -2132,9 +2216,16 @@ pub(crate) fn apply_structure_ops_to_file(
         ..Default::default()
     };
 
+    let formula_parse_diagnostics = if formula_parse_diagnostics_builder.has_errors() {
+        Some(formula_parse_diagnostics_builder.build())
+    } else {
+        None
+    };
+
     Ok(StructureApplyResult {
         ops_applied: ops.len(),
         summary,
+        formula_parse_diagnostics,
     })
 }
 
@@ -2178,6 +2269,8 @@ fn copy_or_move_range(
     include_styles: bool,
     include_formulas: bool,
     clear_source: bool,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<CopyMoveApplyResult> {
     let src_bounds = parse_range_bounds(src_range)?;
     let (dest_start_col, dest_start_row) = parse_cell_ref(dest_anchor)?;
@@ -2226,7 +2319,6 @@ fn copy_or_move_range(
     let delta_row = dest_start_row as i32 - src_bounds.min_row as i32;
 
     let mut warnings: Vec<String> = Vec::new();
-    let mut formula_shift_failures: u64 = 0;
     let mut formula_value_copies: u64 = 0;
 
     let (src_sheet_index, dest_sheet_index) = {
@@ -2264,18 +2356,41 @@ fn copy_or_move_range(
 
                 if include_formulas && src_cell.is_formula() {
                     let src_formula = src_cell.get_formula().to_string();
-                    match parse_base_formula(&src_formula).and_then(|ast| {
-                        shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
-                    }) {
-                        Ok(shifted) => {
-                            let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
-                            dest_formula = Some(shifted);
-                            set_value = false;
-                        }
-                        Err(_) => {
-                            dest_formula = Some(src_formula);
-                            set_value = false;
-                            formula_shift_failures += 1;
+                    if policy == FormulaParsePolicy::Off {
+                        dest_formula = Some(src_formula);
+                        set_value = false;
+                    } else {
+                        match parse_base_formula(&src_formula).and_then(|ast| {
+                            shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                        }) {
+                            Ok(shifted) => {
+                                let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                                dest_formula = Some(shifted);
+                                set_value = false;
+                            }
+                            Err(err) => {
+                                let src_address = crate::utils::cell_address(src_col, src_row);
+                                let dest_address = crate::utils::cell_address(dest_col, dest_row);
+                                if policy == FormulaParsePolicy::Fail {
+                                    bail!(
+                                        "{}formula shift failed in {}!{} -> {}!{}: {}",
+                                        FORMULA_PARSE_FAILED_PREFIX,
+                                        src_sheet_name,
+                                        src_address,
+                                        dest_sheet_name,
+                                        dest_address,
+                                        err
+                                    );
+                                }
+                                builder.record_error(
+                                    dest_sheet_name,
+                                    &dest_address,
+                                    &src_formula,
+                                    &err.to_string(),
+                                );
+                                dest_formula = Some(src_formula);
+                                set_value = false;
+                            }
                         }
                     }
                 } else if !include_formulas && src_cell.is_formula() {
@@ -2336,18 +2451,41 @@ fn copy_or_move_range(
 
                 if include_formulas && src_cell.is_formula() {
                     let src_formula = src_cell.get_formula().to_string();
-                    match parse_base_formula(&src_formula).and_then(|ast| {
-                        shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
-                    }) {
-                        Ok(shifted) => {
-                            let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
-                            dest_formula = Some(shifted);
-                            set_value = false;
-                        }
-                        Err(_) => {
-                            dest_formula = Some(src_formula);
-                            set_value = false;
-                            formula_shift_failures += 1;
+                    if policy == FormulaParsePolicy::Off {
+                        dest_formula = Some(src_formula);
+                        set_value = false;
+                    } else {
+                        match parse_base_formula(&src_formula).and_then(|ast| {
+                            shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
+                        }) {
+                            Ok(shifted) => {
+                                let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                                dest_formula = Some(shifted);
+                                set_value = false;
+                            }
+                            Err(err) => {
+                                let src_address = crate::utils::cell_address(src_col, src_row);
+                                let dest_address = crate::utils::cell_address(dest_col, dest_row);
+                                if policy == FormulaParsePolicy::Fail {
+                                    bail!(
+                                        "{}formula shift failed in {}!{} -> {}!{}: {}",
+                                        FORMULA_PARSE_FAILED_PREFIX,
+                                        src_sheet_name,
+                                        src_address,
+                                        dest_sheet_name,
+                                        dest_address,
+                                        err
+                                    );
+                                }
+                                builder.record_error(
+                                    dest_sheet_name,
+                                    &dest_address,
+                                    &src_formula,
+                                    &err.to_string(),
+                                );
+                                dest_formula = Some(src_formula);
+                                set_value = false;
+                            }
                         }
                     }
                 } else if !include_formulas && src_cell.is_formula() {
@@ -2384,12 +2522,6 @@ fn copy_or_move_range(
         }
     }
 
-    if include_formulas && formula_shift_failures > 0 {
-        warnings.push(format!(
-            "Failed to shift {} formula(s); copied original formula text.",
-            formula_shift_failures
-        ));
-    }
     if !include_formulas && formula_value_copies > 0 {
         warnings.push(format!(
             "Copied cached values for {} formula cell(s) (include_formulas=false); run recalculate for fresh results.",
@@ -2407,10 +2539,13 @@ fn rewrite_formulas_for_sheet_rename(
     book: &mut umya_spreadsheet::Spreadsheet,
     old_name: &str,
     new_name: &str,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     let new_prefix = format_sheet_prefix_for_formula(new_name);
 
     for sheet in book.get_sheet_collection_mut().iter_mut() {
+        let sheet_name = sheet.get_name().to_string();
         for cell in sheet.get_cell_collection_mut() {
             if !cell.is_formula() {
                 continue;
@@ -2425,10 +2560,28 @@ fn rewrite_formulas_for_sheet_rename(
                 format!("={}", formula_text)
             };
 
-            let tokenizer = Tokenizer::new(&formula_with_equals)
-                .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
+            if policy == FormulaParsePolicy::Off {
+                continue;
+            }
 
-            let tokens = tokenizer.items;
+            let cell_address = cell.get_coordinate().get_coordinate().to_string();
+            let context_description = format!("{}!{}", sheet_name, cell_address);
+
+            let tokens = match Tokenizer::new(&formula_with_equals) {
+                Ok(tokenizer) => tokenizer.items,
+                Err(e) => {
+                    if policy == FormulaParsePolicy::Fail {
+                        bail!(
+                            "{}tokenizer error in {}: {}",
+                            FORMULA_PARSE_FAILED_PREFIX,
+                            context_description,
+                            e.message
+                        );
+                    }
+                    builder.record_error(&sheet_name, &cell_address, formula_text, &e.message);
+                    continue;
+                }
+            };
             let mut out = String::with_capacity(formula_with_equals.len());
             let mut cursor = 0usize;
 
@@ -2466,6 +2619,8 @@ fn rewrite_defined_name_formulas_for_sheet_rename(
     book: &mut umya_spreadsheet::Spreadsheet,
     old_name: &str,
     new_name: &str,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     let new_prefix = format_sheet_prefix_for_formula(new_name);
 
@@ -2484,9 +2639,28 @@ fn rewrite_defined_name_formulas_for_sheet_rename(
             format!("={}", trimmed)
         };
 
-        let tokenizer = Tokenizer::new(&formula_in)
-            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
-        let tokens = tokenizer.items;
+        if policy == FormulaParsePolicy::Off {
+            continue;
+        }
+
+        let defined_name = defined.get_name().to_string();
+        let context_description = format!("defined name '{}'", defined_name);
+
+        let tokens = match Tokenizer::new(&formula_in) {
+            Ok(tokenizer) => tokenizer.items,
+            Err(e) => {
+                if policy == FormulaParsePolicy::Fail {
+                    bail!(
+                        "{}tokenizer error in {}: {}",
+                        FORMULA_PARSE_FAILED_PREFIX,
+                        context_description,
+                        e.message
+                    );
+                }
+                builder.record_error("[DefinedName]", &defined_name, trimmed, &e.message);
+                continue;
+            }
+        };
 
         let mut out = String::with_capacity(formula_in.len());
         let mut cursor = 0usize;
@@ -2533,12 +2707,16 @@ fn rewrite_defined_name_formulas_for_sheet_col_insert(
     sheet_name: &str,
     at_col: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_defined_name_formulas_for_sheet_structure_change(
         book,
         sheet_name,
         StructureAxis::Col,
         StructureEdit::Insert { at: at_col, count },
+        policy,
+        builder,
     )
 }
 
@@ -2547,6 +2725,8 @@ fn rewrite_defined_name_formulas_for_sheet_col_delete(
     sheet_name: &str,
     start_col: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_defined_name_formulas_for_sheet_structure_change(
         book,
@@ -2556,6 +2736,8 @@ fn rewrite_defined_name_formulas_for_sheet_col_delete(
             start: start_col,
             count,
         },
+        policy,
+        builder,
     )
 }
 
@@ -2564,12 +2746,16 @@ fn rewrite_defined_name_formulas_for_sheet_row_insert(
     sheet_name: &str,
     at_row: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_defined_name_formulas_for_sheet_structure_change(
         book,
         sheet_name,
         StructureAxis::Row,
         StructureEdit::Insert { at: at_row, count },
+        policy,
+        builder,
     )
 }
 
@@ -2578,6 +2764,8 @@ fn rewrite_defined_name_formulas_for_sheet_row_delete(
     sheet_name: &str,
     start_row: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_defined_name_formulas_for_sheet_structure_change(
         book,
@@ -2587,6 +2775,8 @@ fn rewrite_defined_name_formulas_for_sheet_row_delete(
             start: start_row,
             count,
         },
+        policy,
+        builder,
     )
 }
 
@@ -2595,6 +2785,8 @@ fn rewrite_defined_name_formulas_for_sheet_structure_change(
     sheet_name: &str,
     axis: StructureAxis,
     edit: StructureEdit,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     for defined in book.get_defined_names_mut() {
         let refers_to = defined.get_address();
@@ -2611,9 +2803,28 @@ fn rewrite_defined_name_formulas_for_sheet_structure_change(
             format!("={}", trimmed)
         };
 
-        let tokenizer = Tokenizer::new(&formula_in)
-            .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
-        let tokens = tokenizer.items;
+        if policy == FormulaParsePolicy::Off {
+            continue;
+        }
+
+        let defined_name = defined.get_name().to_string();
+        let context_description = format!("defined name '{}'", defined_name);
+
+        let tokens = match Tokenizer::new(&formula_in) {
+            Ok(tokenizer) => tokenizer.items,
+            Err(e) => {
+                if policy == FormulaParsePolicy::Fail {
+                    bail!(
+                        "{}tokenizer error in {}: {}",
+                        FORMULA_PARSE_FAILED_PREFIX,
+                        context_description,
+                        e.message
+                    );
+                }
+                builder.record_error("[DefinedName]", &defined_name, trimmed, &e.message);
+                continue;
+            }
+        };
 
         let mut out = String::with_capacity(formula_in.len());
         let mut cursor = 0usize;
@@ -2661,12 +2872,16 @@ fn rewrite_formulas_for_sheet_col_insert(
     sheet_name: &str,
     at_col: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_formulas_for_sheet_structure_change(
         book,
         sheet_name,
         StructureAxis::Col,
         StructureEdit::Insert { at: at_col, count },
+        policy,
+        builder,
     )
 }
 
@@ -2675,6 +2890,8 @@ fn rewrite_formulas_for_sheet_col_delete(
     sheet_name: &str,
     start_col: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_formulas_for_sheet_structure_change(
         book,
@@ -2684,6 +2901,8 @@ fn rewrite_formulas_for_sheet_col_delete(
             start: start_col,
             count,
         },
+        policy,
+        builder,
     )
 }
 
@@ -2692,12 +2911,16 @@ fn rewrite_formulas_for_sheet_row_insert(
     sheet_name: &str,
     at_row: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_formulas_for_sheet_structure_change(
         book,
         sheet_name,
         StructureAxis::Row,
         StructureEdit::Insert { at: at_row, count },
+        policy,
+        builder,
     )
 }
 
@@ -2706,6 +2929,8 @@ fn rewrite_formulas_for_sheet_row_delete(
     sheet_name: &str,
     start_row: u32,
     count: u32,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     rewrite_formulas_for_sheet_structure_change(
         book,
@@ -2715,6 +2940,8 @@ fn rewrite_formulas_for_sheet_row_delete(
             start: start_row,
             count,
         },
+        policy,
+        builder,
     )
 }
 
@@ -2735,11 +2962,14 @@ fn rewrite_formulas_for_sheet_structure_change(
     sheet_name: &str,
     axis: StructureAxis,
     edit: StructureEdit,
+    policy: FormulaParsePolicy,
+    builder: &mut FormulaParseDiagnosticsBuilder,
 ) -> Result<()> {
     for sheet in book.get_sheet_collection_mut().iter_mut() {
         if sheet.get_name() == sheet_name {
             continue;
         }
+        let current_sheet_name = sheet.get_name().to_string();
         for cell in sheet.get_cell_collection_mut() {
             if !cell.is_formula() {
                 continue;
@@ -2753,9 +2983,33 @@ fn rewrite_formulas_for_sheet_structure_change(
             } else {
                 format!("={}", formula_text)
             };
-            let tokenizer = Tokenizer::new(&formula_with_equals)
-                .map_err(|e| anyhow!("failed to tokenize formula: {}", e.message))?;
-            let tokens = tokenizer.items;
+            if policy == FormulaParsePolicy::Off {
+                continue;
+            }
+
+            let cell_address = cell.get_coordinate().get_coordinate().to_string();
+            let context_description = format!("{}!{}", current_sheet_name, cell_address);
+
+            let tokens = match Tokenizer::new(&formula_with_equals) {
+                Ok(tokenizer) => tokenizer.items,
+                Err(e) => {
+                    if policy == FormulaParsePolicy::Fail {
+                        bail!(
+                            "{}tokenizer error in {}: {}",
+                            FORMULA_PARSE_FAILED_PREFIX,
+                            context_description,
+                            e.message
+                        );
+                    }
+                    builder.record_error(
+                        &current_sheet_name,
+                        &cell_address,
+                        formula_text,
+                        &e.message,
+                    );
+                    continue;
+                }
+            };
 
             let mut out = String::with_capacity(formula_with_equals.len());
             let mut cursor = 0usize;
@@ -4405,7 +4659,10 @@ pub async fn apply_staged_change(
                 tokio::task::spawn_blocking({
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
-                    move || apply_structure_ops_to_file(&work_path, &ops)
+                    let policy = payload.formula_parse_policy.unwrap_or(
+                        FormulaParsePolicy::default_for_command_class(CommandClass::BatchWrite),
+                    );
+                    move || apply_structure_ops_to_file(&work_path, &ops, policy)
                 })
                 .await??;
 

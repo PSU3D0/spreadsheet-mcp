@@ -518,6 +518,7 @@ pub async fn structure_batch(
     in_place: bool,
     output: Option<PathBuf>,
     force: bool,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
@@ -529,8 +530,15 @@ pub async fn structure_batch(
         ops: payload.ops,
         mode: None,
         label: None,
+        formula_parse_policy,
     })
     .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    let policy = normalized
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::default_for_command_class(
+            CommandClass::BatchWrite,
+        ));
 
     let op_count = normalized.ops.len();
     let operation_counts = summarize_structure_operation_counts(&normalized.ops);
@@ -539,9 +547,11 @@ pub async fn structure_batch(
         BatchMutationMode::DryRun => {
             let (apply_result, _temp_path) =
                 apply_to_temp_copy(&source, source.parent(), ".structure-batch-", |path| {
-                    apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+                    apply_structure_ops_to_file(path, &normalized.ops, policy)
+                        .map_err(classify_apply_error)
                 })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = merge_cli_warnings(
                 base_warnings.clone(),
@@ -555,14 +565,16 @@ pub async fn structure_batch(
                 result_counts,
                 warnings,
                 would_change,
-                None,
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::InPlace => {
             let apply_result = apply_in_place_with_temp(&source, ".structure-batch-", |path| {
-                apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+                apply_structure_ops_to_file(path, &normalized.ops, policy)
+                    .map_err(classify_apply_error)
             })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = merge_cli_warnings(
                 base_warnings.clone(),
@@ -577,7 +589,7 @@ pub async fn structure_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
-                None,
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -586,9 +598,11 @@ pub async fn structure_batch(
 
             let apply_result =
                 apply_to_output_with_temp(&source, &target, force, ".structure-batch-", |path| {
-                    apply_structure_ops_to_file(path, &normalized.ops).map_err(classify_apply_error)
+                    apply_structure_ops_to_file(path, &normalized.ops, policy)
+                        .map_err(classify_apply_error)
                 })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = merge_cli_warnings(
                 base_warnings,
@@ -603,7 +617,7 @@ pub async fn structure_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
-                None,
+                formula_parse_diagnostics,
             )
         }
     }
@@ -1425,13 +1439,18 @@ fn atomic_overwrite_supported() -> bool {
 }
 
 fn classify_apply_error(error: anyhow::Error) -> anyhow::Error {
+    let message = error.to_string();
+    if message.starts_with(FORMULA_PARSE_FAILED_PREFIX) {
+        return error;
+    }
+
     if error
         .chain()
         .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
     {
-        write_failed(format!("failed while applying ops payload: {}", error))
+        write_failed(format!("failed while applying ops payload: {}", message))
     } else {
-        invalid_ops_payload(format!("{}", error))
+        invalid_ops_payload(message)
     }
 }
 

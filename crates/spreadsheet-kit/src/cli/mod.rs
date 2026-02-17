@@ -587,6 +587,13 @@ pub enum Commands {
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default for structure-batch), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
         about = "Apply stateless column sizing operations from an @ops payload",
@@ -869,7 +876,19 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::structure_batch(file, ops, dry_run, in_place, output, force).await,
+            formula_parse_policy,
+        } => {
+            commands::write::structure_batch(
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        },
         Commands::ColumnSizeBatch {
             file,
             ops,
