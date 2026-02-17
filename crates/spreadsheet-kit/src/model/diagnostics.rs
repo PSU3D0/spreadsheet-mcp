@@ -206,7 +206,7 @@ fn normalize_refs_regex(formula: &str) -> String {
             j += 1;
         }
         let col_len = j - col_start;
-        if col_len >= 1 && col_len <= 3 {
+        if (1..=3).contains(&col_len) {
             // skip optional $ before row
             if j < bytes.len() && bytes[j] == b'$' {
                 j += 1;
@@ -219,8 +219,8 @@ fn normalize_refs_regex(formula: &str) -> String {
             let row_len = j - row_start;
             if row_len >= 1 {
                 // Ensure this isn't part of a larger identifier (e.g. function name)
-                let preceded_by_alpha =
-                    start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+                let preceded_by_alpha = start > 0
+                    && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
                 let followed_by_alpha =
                     j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_');
                 if !preceded_by_alpha && !followed_by_alpha {
@@ -530,10 +530,7 @@ mod tests {
 
         let group = &diagnostics.groups[0];
         assert_eq!(group.count, 3);
-        assert_eq!(
-            group.sample_addresses,
-            vec!["D4", "D5", "D10"]
-        );
+        assert_eq!(group.sample_addresses, vec!["D4", "D5", "D10"]);
         // formula_preview should show the first formula encountered (human-readable, not normalized)
         assert!(group.formula_preview.contains("C4"));
     }
@@ -542,18 +539,8 @@ mod tests {
     fn test_grouping_different_structure_not_collapsed() {
         // Formulas with genuinely different structure should NOT collapse.
         let mut builder = FormulaParseDiagnosticsBuilder::new(FormulaParsePolicy::Warn);
-        builder.record_error(
-            "Sheet1",
-            "A1",
-            "=SUM(A1:A10)",
-            "unexpected token",
-        );
-        builder.record_error(
-            "Sheet1",
-            "A2",
-            "=AVERAGE(B1:B10)",
-            "unexpected token",
-        );
+        builder.record_error("Sheet1", "A1", "=SUM(A1:A10)", "unexpected token");
+        builder.record_error("Sheet1", "A2", "=AVERAGE(B1:B10)", "unexpected token");
 
         let diagnostics = builder.build();
         assert_eq!(diagnostics.groups.len(), 2);

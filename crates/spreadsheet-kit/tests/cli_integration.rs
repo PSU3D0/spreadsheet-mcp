@@ -6111,7 +6111,10 @@ fn transform_batch_replace_in_range_formula_clears_cache() {
     let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
     let sheet = book.get_sheet_by_name("Sheet1").expect("sheet");
     let a1 = sheet.get_cell("A1").expect("A1");
-    assert!(a1.get_formula().contains("AVERAGE"), "formula should be replaced");
+    assert!(
+        a1.get_formula().contains("AVERAGE"),
+        "formula should be replaced"
+    );
     assert_eq!(
         a1.get_value(),
         "",
@@ -6129,7 +6132,8 @@ fn edit_batch_formula_clears_cache() {
         let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet");
         let a1 = sheet.get_cell_mut("A1");
         a1.set_formula("B1+C1");
-        a1.get_cell_value_mut().set_formula_result_default("old_value");
+        a1.get_cell_value_mut()
+            .set_formula_result_default("old_value");
     }
     umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
 

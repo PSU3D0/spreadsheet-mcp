@@ -1013,14 +1013,13 @@ fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
             }
         }
 
-        if can_rewrite_here {
-            if let Some(value) = token.strip_prefix("--format=") {
-                if is_legacy_output_format(value) {
-                    normalized.push(OsString::from(format!("--output-format={value}")));
-                    index += 1;
-                    continue;
-                }
-            }
+        if can_rewrite_here
+            && let Some(value) = token.strip_prefix("--format=")
+            && is_legacy_output_format(value)
+        {
+            normalized.push(OsString::from(format!("--output-format={value}")));
+            index += 1;
+            continue;
         }
 
         normalized.push(argv[index].clone());
