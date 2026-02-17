@@ -678,6 +678,13 @@ pub enum Commands {
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default for rules-batch), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(about = "Recalculate workbook formulas")]
     Recalculate {
@@ -888,7 +895,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                 formula_parse_policy,
             )
             .await
-        },
+        }
         Commands::ColumnSizeBatch {
             file,
             ops,
@@ -912,7 +919,19 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::rules_batch(file, ops, dry_run, in_place, output, force).await,
+            formula_parse_policy,
+        } => {
+            commands::write::rules_batch(
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        }
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
     }
@@ -1422,6 +1441,7 @@ mod tests {
                 in_place,
                 output,
                 force,
+                formula_parse_policy,
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(ops, "@rules.json");
@@ -1429,6 +1449,7 @@ mod tests {
                 assert!(!in_place);
                 assert_eq!(output, Some(PathBuf::from("rules.xlsx")));
                 assert!(force);
+                assert!(formula_parse_policy.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }

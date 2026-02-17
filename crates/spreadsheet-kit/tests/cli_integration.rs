@@ -5435,7 +5435,10 @@ fn cli_transform_batch_dry_run_formula_diagnostics_parity() {
     let payload = parse_stdout_json(&output);
 
     let diagnostics = &payload["formula_parse_diagnostics"];
-    assert!(diagnostics.is_object(), "expected diagnostics object in dry-run");
+    assert!(
+        diagnostics.is_object(),
+        "expected diagnostics object in dry-run"
+    );
     assert_eq!(diagnostics["policy"], "warn");
     assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 
@@ -5482,9 +5485,7 @@ fn cli_structure_batch_rename_with_malformed_formula_warn_mode() {
         {
             let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
             sheet.get_cell_mut("A1").set_value_number(10.0);
-            sheet
-                .get_cell_mut("B1")
-                .set_formula("SUM(\"Sheet1!A1:A10)");
+            sheet.get_cell_mut("B1").set_formula("SUM(\"Sheet1!A1:A10)");
         }
         umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
     }
@@ -5512,7 +5513,10 @@ fn cli_structure_batch_rename_with_malformed_formula_warn_mode() {
     assert_eq!(payload["applied_count"], 1);
 
     let diagnostics = &payload["formula_parse_diagnostics"];
-    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics object");
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
     assert_eq!(diagnostics["policy"], "warn");
     assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 }
@@ -5535,9 +5539,7 @@ fn cli_structure_batch_rename_with_malformed_formula_fail_mode() {
         {
             let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
             sheet.get_cell_mut("A1").set_value_number(10.0);
-            sheet
-                .get_cell_mut("B1")
-                .set_formula("SUM(\"Sheet1!A1:A10)");
+            sheet.get_cell_mut("B1").set_formula("SUM(\"Sheet1!A1:A10)");
         }
         umya_spreadsheet::writer::xlsx::write(&workbook, &source_path).expect("write");
     }
@@ -5565,7 +5567,10 @@ fn cli_structure_batch_rename_with_malformed_formula_fail_mode() {
     assert!(!output.status.success(), "should fail");
     let error = parse_stderr_json(&output);
     assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
-    assert!(!output_path.exists(), "output should not be created on fail");
+    assert!(
+        !output_path.exists(),
+        "output should not be created on fail"
+    );
 }
 
 #[test]
@@ -5585,9 +5590,7 @@ fn cli_structure_batch_insert_rows_with_malformed_formula_warn_mode() {
         workbook.new_sheet("Sheet2").expect("add Sheet2");
         {
             let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
-            sheet
-                .get_cell_mut("A1")
-                .set_formula("SUM(\"Sheet1!A1:A10)");
+            sheet.get_cell_mut("A1").set_formula("SUM(\"Sheet1!A1:A10)");
             sheet.get_cell_mut("B1").set_formula("Sheet1!A1+1");
         }
         umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
@@ -5616,7 +5619,10 @@ fn cli_structure_batch_insert_rows_with_malformed_formula_warn_mode() {
     assert_eq!(payload["applied_count"], 1);
 
     let diagnostics = &payload["formula_parse_diagnostics"];
-    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics object");
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
     assert_eq!(diagnostics["policy"], "warn");
     assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 }
@@ -5674,7 +5680,10 @@ fn cli_structure_batch_rename_defined_name_malformed_formula_warn_diagnostics() 
     let payload = parse_stdout_json(&output);
 
     let diagnostics = &payload["formula_parse_diagnostics"];
-    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics");
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics"
+    );
     assert_eq!(diagnostics["policy"], "warn");
     assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 
@@ -5682,8 +5691,7 @@ fn cli_structure_batch_rename_defined_name_malformed_formula_warn_diagnostics() 
     assert!(!groups.is_empty(), "should have at least one error group");
     let first_group = &groups[0];
     assert_eq!(
-        first_group["sheet_name"],
-        "[DefinedName]",
+        first_group["sheet_name"], "[DefinedName]",
         "defined name errors should use [DefinedName] as sheet_name"
     );
 }
@@ -5815,4 +5823,213 @@ fn cli_structure_batch_copy_range_with_malformed_formula_fail_mode_aborts() {
         !output_path.exists(),
         "output should not be created on fail mode abort"
     );
+}
+
+// ─── 3205: Rules-batch formula parse policy tests ───
+
+#[test]
+fn cli_rules_batch_invalid_dv_formula_warn_mode_partial_apply() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("rules-dv-warn.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    // Two ops: one valid list DV, one with a malformed custom formula (unclosed paren)
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}},
+            {"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"C2:C4","validation":{"kind":"custom","formula1":"=AND(C2>0,LEN(C2"}}
+        ]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "rules-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // The custom formula with unclosed paren should be skipped; the valid list DV should apply
+    assert_eq!(
+        payload["op_count"].as_u64().unwrap(),
+        2,
+        "op_count should reflect total ops in payload"
+    );
+    assert_eq!(
+        payload["applied_count"].as_u64().unwrap(),
+        1,
+        "only the valid op should be applied"
+    );
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_rules_batch_invalid_dv_formula_fail_mode_aborts() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("rules-dv-fail.xlsx");
+    let output_path = tmp.path().join("rules-dv-fail-output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"C2:C4","validation":{"kind":"custom","formula1":"=AND(C2>0,LEN(C2"}}
+        ]}"#,
+    );
+
+    let file = source_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "rules-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        out,
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "command should fail");
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+    assert!(
+        !output_path.exists(),
+        "output file should not exist on fail mode abort"
+    );
+}
+
+#[test]
+fn cli_rules_batch_invalid_cf_formula_warn_mode_with_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("rules-cf-warn.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    // One valid CF expression, one with malformed formula (unclosed paren)
+    write_ops_payload(
+        &ops_path,
+        r##"{"ops":[
+            {"kind":"add_conditional_format","sheet_name":"Sheet1","target_range":"A1:A10","rule":{"kind":"expression","formula":"A1>0"},"style":{"fill_color":"#FF0000"}},
+            {"kind":"add_conditional_format","sheet_name":"Sheet1","target_range":"B1:B10","rule":{"kind":"expression","formula":"AND(B1>0,LEN(B1"},"style":{"fill_color":"#00FF00"}}
+        ]}"##,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "rules-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert_eq!(
+        payload["op_count"].as_u64().unwrap(),
+        2,
+        "op_count should reflect total ops in payload"
+    );
+    assert_eq!(
+        payload["applied_count"].as_u64().unwrap(),
+        1,
+        "only the valid CF op should be applied"
+    );
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_rules_batch_off_mode_permissive_behavior() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("rules-off.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}
+        ]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "rules-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "off",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert!(
+        payload["formula_parse_diagnostics"].is_null(),
+        "no diagnostics in off mode"
+    );
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+}
+
+#[test]
+fn cli_rules_batch_dry_run_formula_diagnostics_parity() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("rules-dryrun-diag.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"C2:C4","validation":{"kind":"custom","formula1":"=AND(C2>0,LEN(C2"}}
+        ]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let output = run_cli(&[
+        "rules-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected diagnostics in dry-run warn mode"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 }

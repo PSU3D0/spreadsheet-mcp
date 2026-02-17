@@ -1,7 +1,7 @@
 use crate::core::types::CellEdit;
 use crate::model::{
-    CommandClass, FormulaParseDiagnostics, FormulaParseDiagnosticsBuilder, FormulaParsePolicy,
-    Warning, FORMULA_PARSE_FAILED_PREFIX, validate_formula,
+    CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, Warning, validate_formula,
 };
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools::fork::{
@@ -823,12 +823,17 @@ pub async fn rules_batch(
     in_place: bool,
     output: Option<PathBuf>,
     force: bool,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
     let payload: OpsPayload<RulesOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
+        CommandClass::BatchWrite,
+    ));
 
     let op_count = payload.ops.len();
     let operation_counts = summarize_rules_operation_counts(&payload.ops);
@@ -837,9 +842,11 @@ pub async fn rules_batch(
         BatchMutationMode::DryRun => {
             let (apply_result, _temp_path) =
                 apply_to_temp_copy(&source, source.parent(), ".rules-batch-", |path| {
-                    apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                    apply_rules_ops_to_file(path, &payload.ops, policy)
+                        .map_err(classify_apply_error)
                 })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
             let would_change = rules_summary_indicates_change(&result_counts);
@@ -850,14 +857,15 @@ pub async fn rules_batch(
                 result_counts,
                 warnings,
                 would_change,
-                None,
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::InPlace => {
             let apply_result = apply_in_place_with_temp(&source, ".rules-batch-", |path| {
-                apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                apply_rules_ops_to_file(path, &payload.ops, policy).map_err(classify_apply_error)
             })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
             let changed = rules_summary_indicates_change(&result_counts);
@@ -869,7 +877,7 @@ pub async fn rules_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
-                None,
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -878,9 +886,11 @@ pub async fn rules_batch(
 
             let apply_result =
                 apply_to_output_with_temp(&source, &target, force, ".rules-batch-", |path| {
-                    apply_rules_ops_to_file(path, &payload.ops).map_err(classify_apply_error)
+                    apply_rules_ops_to_file(path, &payload.ops, policy)
+                        .map_err(classify_apply_error)
                 })?;
 
+            let formula_parse_diagnostics = apply_result.formula_parse_diagnostics;
             let result_counts = apply_result.summary.counts;
             let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
             let changed = rules_summary_indicates_change(&result_counts);
@@ -892,7 +902,7 @@ pub async fn rules_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
-                None,
+                formula_parse_diagnostics,
             )
         }
     }
