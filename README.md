@@ -202,6 +202,19 @@ Shape policy:
 - **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
 - **formula-trace compact:** omits per-layer `highlights` while preserving `layers` and `next_cursor`.
 
+#### `sheet-page` machine contract
+- Inspect top-level `format` before reading payload fields.
+- `format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`.
+- `format=compact`: read `compact.headers`, `compact.header_row`, `compact.rows` plus optional `next_start_row`.
+- `format=values_only`: read `values_only.rows` plus optional `next_start_row`.
+- Continuation is always driven by top-level `next_start_row` when present.
+- Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.
+
+Machine continuation example:
+1. Request page 1 without `--start-row`.
+2. If `next_start_row` is present, call `sheet-page` again with `--start-row <next_start_row>`.
+3. Stop when `next_start_row` is omitted.
+
 Use `--compact` to minimize whitespace and `--quiet` to suppress warnings.
 Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.
 

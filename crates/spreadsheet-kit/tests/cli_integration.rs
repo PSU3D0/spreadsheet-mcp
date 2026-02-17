@@ -404,12 +404,16 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(sheet_page.contains("Read one sheet page with deterministic continuation"));
     assert!(sheet_page.contains("Examples:"));
     assert!(sheet_page.contains("sheet-page data.xlsx Sheet1 --format compact --page-size 200"));
+    assert!(sheet_page.contains("Machine contract:"));
+    assert!(sheet_page.contains("format=full"));
+    assert!(sheet_page.contains("Global --shape compact preserves the active sheet-page branch"));
     assert!(
         sheet_page.contains(
             "sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201"
         )
     );
     assert!(sheet_page.contains("Pagination loop:"));
+    assert!(sheet_page.contains("Machine continuation example:"));
 
     let read_table_help = run_cli(&["read-table", "--help"]);
     assert!(
@@ -489,6 +493,10 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "top-level envelope object",
         "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
+        "#### `sheet-page` machine contract",
+        "format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`",
+        "Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.",
+        "Machine continuation example:",
         "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
         "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
         "`inspect-cells <file> <sheet> <range>`",
@@ -1720,6 +1728,44 @@ fn cli_sheet_page_accepts_all_formats_and_sets_expected_payload_branch() {
                 assert!(payload.get("compact").is_none());
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn cli_sheet_page_machine_contract_next_start_row_is_top_level_for_all_formats() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp
+        .path()
+        .join("sheet-page-machine-contract-next-start-row.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    for format in ["full", "compact", "values_only"] {
+        let page = run_cli(&[
+            "sheet-page",
+            file,
+            "Sheet1",
+            "--start-row",
+            "2",
+            "--page-size",
+            "1",
+            "--format",
+            format,
+        ]);
+        assert!(page.status.success(), "stderr: {:?}", page.stderr);
+        let payload = parse_stdout_json(&page);
+
+        assert!(
+            payload.get("next_start_row").is_some(),
+            "next_start_row must remain top-level for format={format}"
+        );
+
+        if format == "compact" {
+            assert!(payload["compact"].get("next_start_row").is_none());
+        }
+        if format == "values_only" {
+            assert!(payload["values_only"].get("next_start_row").is_none());
         }
     }
 }
