@@ -11,6 +11,9 @@ Core shared primitives for the [spreadsheet-kit](https://github.com/PSU3D0/sprea
 - **`agent-spreadsheet` CLI binary** — stateless command surface for reads/edits/diff/recalc
 - **`CellEdit`** — canonical cell edit type (address + value + is_formula)
 - **`CoreWarning`** — structured warning type (code + message)
+- **`FormulaParsePolicy`** — three-level policy enum (`Fail`, `Warn`, `Off`) controlling formula parse error handling
+- **`FormulaParseDiagnostics` / `FormulaParseDiagnosticsBuilder`** — structured error grouping with reference normalization, sample addresses, and truncation control
+- **`validate_formula()`** — preflight formula syntax validation via `formualizer-parse` tokenizer
 - **`BasicDiffChange` / `BasicDiffResponse`** — diff result types
 - **`RecalculateOutcome`** — recalc result metadata (backend, duration, cells evaluated, errors)
 - **Edit normalization** — `normalize_shorthand_edit()` parses `"A1=100"` / `"B2==SUM(...)"` into `CellEdit`
