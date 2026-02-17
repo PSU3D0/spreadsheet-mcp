@@ -5256,3 +5256,209 @@ fn cli_recalculate_flow_runs_after_copy_and_edit() {
     let diff_payload = parse_stdout_json(&diff);
     assert!(diff_payload["change_count"].as_u64().unwrap_or(0) >= 1);
 }
+
+// ─── 3203: Write preflight formula parse policy tests ───
+
+#[test]
+fn cli_edit_invalid_formula_default_fail_returns_error_envelope() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-formula-fail.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // "==SUM(A1:A10" is a formula (double = means formula) with unclosed paren
+    let output = run_cli(&["edit", file, "Sheet1", "B2==SUM(A1:A10"]);
+    assert!(
+        !output.status.success(),
+        "command should fail for invalid formula"
+    );
+
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+}
+
+#[test]
+fn cli_edit_invalid_formula_warn_mode_partial_apply_with_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-formula-warn.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "edit",
+        file,
+        "Sheet1",
+        "B2=42",
+        "C2==SUM(A1:A10",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // B2=42 (value, not formula) should apply; C2 formula is invalid → skipped
+    assert_eq!(payload["edits_applied"], 1);
+    assert_eq!(payload["recalc_needed"], true);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected diagnostics object");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_edit_invalid_formula_off_mode_permissive_write() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-formula-off.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "edit",
+        file,
+        "Sheet1",
+        "B2==SUM(A1:A10",
+        "--formula-parse-policy",
+        "off",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["edits_applied"], 1);
+    assert!(payload["formula_parse_diagnostics"].is_null());
+}
+
+#[test]
+fn cli_transform_batch_fill_invalid_formula_warn_mode_partial_apply() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-fill-formula-warn.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"SUM(A1:A10","is_formula":true},
+            {"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B3"]},"value":"42"}
+        ]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // Only the second op (value fill) should apply; first (bad formula) skipped
+    assert_eq!(payload["op_count"], 1);
+    assert_eq!(payload["applied_count"], 1);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected diagnostics object");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_transform_batch_fill_invalid_formula_fail_mode_aborts_no_output() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("transform-fill-formula-fail.xlsx");
+    let output_path = tmp.path().join("transform-fill-formula-fail-output.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"SUM(A1:A10","is_formula":true}
+        ]}"#,
+    );
+
+    let file = source_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        out,
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "command should fail");
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+
+    // No output file should be created
+    assert!(
+        !output_path.exists(),
+        "output file should not exist on fail mode abort"
+    );
+}
+
+#[test]
+fn cli_transform_batch_dry_run_formula_diagnostics_parity() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("transform-formula-dryrun.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[
+            {"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2"]},"value":"SUM(A1:A10","is_formula":true},
+            {"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"cells","cells":["B3"]},"value":"42"}
+        ]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "transform-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected diagnostics object in dry-run");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+
+    // Source should be untouched
+    let before = std::fs::read(&workbook_path).expect("read source");
+    let after = std::fs::read(&workbook_path).expect("read source again");
+    assert_eq!(before, after, "dry-run mutated source");
+}
+
+#[test]
+fn cli_edit_valid_formula_succeeds_with_default_policy() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-formula-valid.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["edit", file, "Sheet1", "B2==SUM(A1:A4)"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["edits_applied"], 1);
+    // No diagnostics when formula is valid
+    assert!(
+        payload["formula_parse_diagnostics"].is_null(),
+        "no diagnostics for valid formula"
+    );
+}

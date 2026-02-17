@@ -460,6 +460,13 @@ pub enum Commands {
             help = "Edit operations like A1=42 or B2==SUM(A1:A10)"
         )]
         edits: Vec<String>,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail (default for edit), warn, or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
         about = "Apply stateless transform operations from an @ops payload",
@@ -489,6 +496,13 @@ pub enum Commands {
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default for transform-batch), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
         about = "Apply stateless style operations from an @ops payload",
@@ -803,7 +817,12 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         Commands::Describe { file } => commands::read::describe(file).await,
         Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
         Commands::Copy { source, dest } => commands::write::copy(source, dest).await,
-        Commands::Edit { file, sheet, edits } => commands::write::edit(file, sheet, edits).await,
+        Commands::Edit {
+            file,
+            sheet,
+            edits,
+            formula_parse_policy,
+        } => commands::write::edit(file, sheet, edits, formula_parse_policy).await,
         Commands::TransformBatch {
             file,
             ops,
@@ -811,7 +830,19 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::transform_batch(file, ops, dry_run, in_place, output, force).await,
+            formula_parse_policy,
+        } => {
+            commands::write::transform_batch(
+                file,
+                ops,
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        }
         Commands::StyleBatch {
             file,
             ops,
@@ -1214,6 +1245,7 @@ mod tests {
                 in_place,
                 output,
                 force,
+                formula_parse_policy,
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(ops, "@ops.json");
@@ -1221,6 +1253,7 @@ mod tests {
                 assert!(!in_place);
                 assert_eq!(output, Some(PathBuf::from("out.xlsx")));
                 assert!(force);
+                assert_eq!(formula_parse_policy, None);
             }
             other => panic!("unexpected command: {other:?}"),
         }

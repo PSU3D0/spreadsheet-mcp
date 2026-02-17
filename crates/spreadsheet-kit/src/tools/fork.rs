@@ -3,8 +3,9 @@ use crate::config::RecalcBackendKind;
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{
-    AlignmentPatch, BordersPatch, FillPatch, FontPatch, PatternFillPatch, StylePatch, Warning,
-    WorkbookId,
+    AlignmentPatch, BordersPatch, CommandClass, FillPatch, FontPatch, FormulaParseDiagnostics,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, PatternFillPatch,
+    FORMULA_PARSE_FAILED_PREFIX, StylePatch, Warning, WorkbookId, validate_formula,
 };
 use crate::recalc::RecalcBackend;
 use crate::security::sanitize_filename_component;
@@ -90,13 +91,59 @@ pub struct EditBatchResponse {
     pub recalc_needed: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 pub async fn edit_batch(
     state: Arc<AppState>,
     params: EditBatchParamsInput,
 ) -> Result<EditBatchResponse> {
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::default_for_command_class(
+            CommandClass::BatchWrite,
+        ));
     let (params, warnings) = normalize_edit_batch(params)?;
+
+    let (edits_to_write, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (params.edits.clone(), None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_edits = Vec::new();
+        for edit in &params.edits {
+            if edit.is_formula {
+                match validate_formula(&edit.value) {
+                    Ok(()) => valid_edits.push(edit.clone()),
+                    Err(err_msg) => {
+                        if policy == FormulaParsePolicy::Fail {
+                            bail!(
+                                "{}edit at {} failed: {}",
+                                FORMULA_PARSE_FAILED_PREFIX,
+                                edit.address,
+                                err_msg
+                            );
+                        }
+                        builder.record_error(
+                            &params.sheet_name,
+                            &edit.address,
+                            &edit.value,
+                            &err_msg,
+                        );
+                    }
+                }
+            } else {
+                valid_edits.push(edit.clone());
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_edits, diagnostics)
+    };
+
     let registry = state
         .fork_registry()
         .ok_or_else(|| anyhow!("fork registry not available"))?;
@@ -104,8 +151,7 @@ pub async fn edit_batch(
     let fork_ctx = registry.get_fork(&params.fork_id)?;
     let work_path = fork_ctx.work_path.clone();
 
-    let edits_to_apply: Vec<_> = params
-        .edits
+    let edits_to_apply: Vec<_> = edits_to_write
         .iter()
         .map(|e| EditOp {
             timestamp: Utc::now(),
@@ -120,7 +166,7 @@ pub async fn edit_batch(
 
     tokio::task::spawn_blocking({
         let sheet_name = params.sheet_name.clone();
-        let edits = params.edits.clone();
+        let edits = edits_to_write.clone();
         move || {
             let core_edits = edits
                 .into_iter()
@@ -150,6 +196,7 @@ pub async fn edit_batch(
         total_edits: total,
         recalc_needed: true,
         warnings,
+        formula_parse_diagnostics,
     })
 }
 
@@ -172,6 +219,8 @@ pub struct TransformBatchParams {
     #[serde(default)]
     pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -223,6 +272,8 @@ pub struct TransformBatchResponse {
     pub change_id: Option<String>,
     pub ops_applied: usize,
     pub summary: ChangeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -337,6 +388,48 @@ pub async fn transform_batch(
 
     let resolved_ops = resolve_transform_ops_for_workbook(&workbook, &params.ops)?;
 
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::default_for_command_class(
+            CommandClass::BatchWrite,
+        ));
+
+    let (ops_to_apply, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (resolved_ops, None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_ops = Vec::new();
+        for op in resolved_ops {
+            match &op {
+                TransformOp::FillRange {
+                    sheet_name,
+                    value,
+                    is_formula,
+                    ..
+                } if *is_formula => match validate_formula(value) {
+                    Ok(()) => valid_ops.push(op),
+                    Err(err_msg) => {
+                        if policy == FormulaParsePolicy::Fail {
+                            bail!(
+                                "{}FillRange formula failed: {}",
+                                FORMULA_PARSE_FAILED_PREFIX,
+                                err_msg
+                            );
+                        }
+                        builder.record_error(sheet_name, "FillRange", value, &err_msg);
+                    }
+                },
+                _ => valid_ops.push(op),
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_ops, diagnostics)
+    };
+
     let mode = params.mode.unwrap_or_default();
 
     if mode.is_preview() {
@@ -347,7 +440,7 @@ pub async fn transform_batch(
 
         let snapshot_for_apply = snapshot_path.clone();
         let apply_result = tokio::task::spawn_blocking({
-            let ops = resolved_ops.clone();
+            let ops = ops_to_apply.clone();
             move || apply_transform_ops_to_file(&snapshot_for_apply, &ops)
         })
         .await??;
@@ -359,7 +452,7 @@ pub async fn transform_batch(
         let staged_op = StagedOp {
             kind: "transform_batch".to_string(),
             payload: serde_json::to_value(TransformBatchStagedPayload {
-                ops: resolved_ops.clone(),
+                ops: ops_to_apply.clone(),
             })?,
         };
 
@@ -380,10 +473,11 @@ pub async fn transform_batch(
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics,
         })
     } else {
         let apply_result = tokio::task::spawn_blocking({
-            let ops = resolved_ops.clone();
+            let ops = ops_to_apply.clone();
             let work_path = work_path.clone();
             move || apply_transform_ops_to_file(&work_path, &ops)
         })
@@ -406,6 +500,7 @@ pub async fn transform_batch(
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics,
         })
     }
 }

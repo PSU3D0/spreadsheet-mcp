@@ -151,6 +151,14 @@ fn truncate_formula_preview(formula: &str) -> String {
     result
 }
 
+/// Validate a single formula string using the project's formula parser.
+/// Returns Ok(()) if valid, Err(error_message) if invalid.
+pub fn validate_formula(formula: &str) -> Result<(), String> {
+    crate::formula::pattern::parse_base_formula(formula)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +368,19 @@ mod tests {
 
         assert!(builder.has_errors());
         assert!(!builder.is_empty());
+    }
+
+    #[test]
+    fn test_validate_formula_valid() {
+        assert!(validate_formula("SUM(A1:A10)").is_ok());
+        assert!(validate_formula("=SUM(A1:A10)").is_ok());
+        assert!(validate_formula("A1+B1").is_ok());
+        assert!(validate_formula("IF(A1>0,1,0)").is_ok());
+    }
+
+    #[test]
+    fn test_validate_formula_invalid() {
+        assert!(validate_formula("SUM(A1:A10").is_err()); // unclosed paren
+        assert!(validate_formula("SUM(A1:A10))").is_err()); // extra closing paren
     }
 }

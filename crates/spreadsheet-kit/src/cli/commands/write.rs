@@ -1,5 +1,8 @@
 use crate::core::types::CellEdit;
-use crate::model::Warning;
+use crate::model::{
+    CommandClass, FormulaParseDiagnostics, FormulaParseDiagnosticsBuilder, FormulaParsePolicy,
+    Warning, FORMULA_PARSE_FAILED_PREFIX, validate_formula,
+};
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools::fork::{
     ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, StructureBatchParamsInput,
@@ -34,6 +37,8 @@ struct EditResponse {
     edits_applied: usize,
     recalc_needed: bool,
     warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +72,8 @@ struct BatchDryRunResponse {
     would_change: bool,
     warnings: Vec<Warning>,
     summary: DryRunSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +84,8 @@ struct BatchApplyResponse {
     changed: bool,
     target_path: String,
     source_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 pub async fn copy(source: PathBuf, dest: PathBuf) -> Result<Value> {
@@ -98,7 +107,12 @@ pub async fn copy(source: PathBuf, dest: PathBuf) -> Result<Value> {
     })?)
 }
 
-pub async fn edit(file: PathBuf, sheet: String, edits: Vec<String>) -> Result<Value> {
+pub async fn edit(
+    file: PathBuf,
+    sheet: String,
+    edits: Vec<String>,
+    formula_parse_policy: Option<FormulaParsePolicy>,
+) -> Result<Value> {
     if edits.is_empty() {
         bail!("at least one edit must be provided");
     }
@@ -118,14 +132,53 @@ pub async fn edit(file: PathBuf, sheet: String, edits: Vec<String>) -> Result<Va
         }));
     }
 
-    runtime.apply_edits(&file, &sheet, &normalized_edits)?;
+    let policy = formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::default_for_command_class(
+            CommandClass::SingleWrite,
+        ));
+
+    let (edits_to_write, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (normalized_edits, None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_edits = Vec::new();
+        for edit in normalized_edits {
+            if edit.is_formula {
+                match validate_formula(&edit.value) {
+                    Ok(()) => valid_edits.push(edit),
+                    Err(err_msg) => {
+                        if policy == FormulaParsePolicy::Fail {
+                            bail!(
+                                "{}edit at {} failed: {}",
+                                FORMULA_PARSE_FAILED_PREFIX,
+                                edit.address,
+                                err_msg
+                            );
+                        }
+                        builder.record_error(&sheet, &edit.address, &edit.value, &err_msg);
+                    }
+                }
+            } else {
+                valid_edits.push(edit);
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_edits, diagnostics)
+    };
+
+    runtime.apply_edits(&file, &sheet, &edits_to_write)?;
 
     Ok(serde_json::to_value(EditResponse {
         file: file.display().to_string(),
         sheet,
-        edits_applied: normalized_edits.len(),
+        edits_applied: edits_to_write.len(),
         recalc_needed: true,
         warnings,
+        formula_parse_diagnostics,
     })?)
 }
 
@@ -136,6 +189,7 @@ pub async fn transform_batch(
     in_place: bool,
     output: Option<PathBuf>,
     force: bool,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
@@ -149,14 +203,54 @@ pub async fn transform_batch(
         .map_err(|error| invalid_ops_payload(error.to_string()))?;
     let _ = state.close_workbook(&workbook_id);
 
-    let op_count = resolved_ops.len();
-    let operation_counts = summarize_transform_operation_counts(&resolved_ops);
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
+        CommandClass::BatchWrite,
+    ));
+
+    let (ops_to_apply, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (resolved_ops, None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_ops = Vec::new();
+        for op in resolved_ops {
+            match &op {
+                TransformOp::FillRange {
+                    sheet_name,
+                    value,
+                    is_formula,
+                    ..
+                } if *is_formula => match validate_formula(value) {
+                    Ok(()) => valid_ops.push(op),
+                    Err(err_msg) => {
+                        if policy == FormulaParsePolicy::Fail {
+                            bail!(
+                                "{}FillRange formula failed: {}",
+                                FORMULA_PARSE_FAILED_PREFIX,
+                                err_msg
+                            );
+                        }
+                        builder.record_error(sheet_name, "FillRange", value, &err_msg);
+                    }
+                },
+                _ => valid_ops.push(op),
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_ops, diagnostics)
+    };
+
+    let op_count = ops_to_apply.len();
+    let operation_counts = summarize_transform_operation_counts(&ops_to_apply);
 
     match mode {
         BatchMutationMode::DryRun => {
             let (apply_result, _temp_path) =
                 apply_to_temp_copy(&source, source.parent(), ".transform-batch-", |path| {
-                    apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                    apply_transform_ops_to_file(path, &ops_to_apply).map_err(classify_apply_error)
                 })?;
 
             let result_counts = apply_result.summary.counts;
@@ -169,11 +263,12 @@ pub async fn transform_batch(
                 result_counts,
                 warnings,
                 would_change,
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::InPlace => {
             let apply_result = apply_in_place_with_temp(&source, ".transform-batch-", |path| {
-                apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                apply_transform_ops_to_file(path, &ops_to_apply).map_err(classify_apply_error)
             })?;
 
             let result_counts = apply_result.summary.counts;
@@ -187,6 +282,7 @@ pub async fn transform_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                formula_parse_diagnostics,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -195,7 +291,7 @@ pub async fn transform_batch(
 
             let apply_result =
                 apply_to_output_with_temp(&source, &target, force, ".transform-batch-", |path| {
-                    apply_transform_ops_to_file(path, &resolved_ops).map_err(classify_apply_error)
+                    apply_transform_ops_to_file(path, &ops_to_apply).map_err(classify_apply_error)
                 })?;
 
             let result_counts = apply_result.summary.counts;
@@ -209,6 +305,7 @@ pub async fn transform_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                formula_parse_diagnostics,
             )
         }
     }
@@ -264,6 +361,7 @@ pub async fn style_batch(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -285,6 +383,7 @@ pub async fn style_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -310,6 +409,7 @@ pub async fn style_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -355,6 +455,7 @@ pub async fn apply_formula_pattern(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -375,6 +476,7 @@ pub async fn apply_formula_pattern(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -403,6 +505,7 @@ pub async fn apply_formula_pattern(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -452,6 +555,7 @@ pub async fn structure_batch(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -473,6 +577,7 @@ pub async fn structure_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -498,6 +603,7 @@ pub async fn structure_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -546,6 +652,7 @@ pub async fn column_size_batch(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -569,6 +676,7 @@ pub async fn column_size_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -601,6 +709,7 @@ pub async fn column_size_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -640,6 +749,7 @@ pub async fn sheet_layout_batch(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -658,6 +768,7 @@ pub async fn sheet_layout_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -685,6 +796,7 @@ pub async fn sheet_layout_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -724,6 +836,7 @@ pub async fn rules_batch(
                 result_counts,
                 warnings,
                 would_change,
+                None,
             )
         }
         BatchMutationMode::InPlace => {
@@ -742,6 +855,7 @@ pub async fn rules_batch(
                 changed,
                 source.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
         BatchMutationMode::Output { target, force } => {
@@ -764,6 +878,7 @@ pub async fn rules_batch(
                 changed,
                 target.display().to_string(),
                 source.display().to_string(),
+                None,
             )
         }
     }
@@ -1051,6 +1166,7 @@ fn dry_run_response(
     result_counts: BTreeMap<String, u64>,
     warnings: Vec<Warning>,
     would_change: bool,
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 ) -> Result<Value> {
     Ok(serde_json::to_value(BatchDryRunResponse {
         op_count,
@@ -1061,6 +1177,7 @@ fn dry_run_response(
             operation_counts,
             result_counts,
         },
+        formula_parse_diagnostics,
     })?)
 }
 
@@ -1071,6 +1188,7 @@ fn apply_response(
     changed: bool,
     target_path: String,
     source_path: String,
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 ) -> Result<Value> {
     Ok(serde_json::to_value(BatchApplyResponse {
         op_count,
@@ -1079,6 +1197,7 @@ fn apply_response(
         changed,
         target_path,
         source_path,
+        formula_parse_diagnostics,
     })?)
 }
 
