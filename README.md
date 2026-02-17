@@ -122,7 +122,7 @@ agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xls
 
 #### Batch payload examples (JSON body passed via `--ops @file.json`)
 
-All batch payloads use a top-level envelope object. Most commands require `{"ops":[...]}`; `column-size-batch` requires `{"sheet_name":"...","ops":[...]}`.
+All batch payloads use a top-level envelope object. Most commands require `{"ops":[...]}`; `column-size-batch` prefers `{"sheet_name":"...","ops":[...]}` and also accepts per-op `sheet_name` inside `{"ops":[...]}`.
 
 ##### transform-batch payloads (`@transform_ops.json`)
 - Minimal: `{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B4"},"value":"0"}]}`
@@ -142,8 +142,9 @@ All batch payloads use a top-level envelope object. Most commands require `{"ops
 - Advanced: `{"ops":[{"kind":"copy_range","sheet_name":"Sheet1","dest_sheet_name":"Summary","src_range":"A1:C4","dest_anchor":"A1","include_styles":true,"include_formulas":true}]}`
 
 ##### column-size-batch payloads (`@column_size_ops.json`)
-- Minimal: `{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}`
-- Advanced: `{"sheet_name":"Sheet1","ops":[{"target":{"kind":"columns","range":"A:C"},"size":{"kind":"auto","min_width_chars":8.0,"max_width_chars":24.0}}]}`
+- Minimal (preferred): `{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}`
+- Advanced (preferred): `{"sheet_name":"Sheet1","ops":[{"target":{"kind":"columns","range":"A:C"},"size":{"kind":"auto","min_width_chars":8.0,"max_width_chars":24.0}}]}`
+- Also accepted (harmonized shape): `{"ops":[{"sheet_name":"Sheet1","range":"A:A","size":{"kind":"width","width_chars":12.0}}]}`
 
 ##### sheet-layout-batch payloads (`@layout_ops.json`)
 - Minimal: `{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}`

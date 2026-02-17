@@ -458,6 +458,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`",
         "##### structure-batch payloads (`@structure_ops.json`)",
         "##### column-size-batch payloads (`@column_size_ops.json`)",
+        "Also accepted (harmonized shape)",
         "##### sheet-layout-batch payloads (`@layout_ops.json`)",
         "##### rules-batch payloads (`@rules_ops.json`)",
         "top-level envelope object",
@@ -4201,6 +4202,7 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     assert!(column.contains("Payload examples (`--ops @column_size_ops.json`):"));
     assert!(column.contains("\"sheet_name\":\"Sheet1\""));
     assert!(column.contains("\"kind\":\"width\""));
+    assert!(column.contains("Also accepted: top-level `ops` where each op includes `sheet_name`."));
 
     let layout_help = run_cli(&["sheet-layout-batch", "--help"]);
     assert!(
@@ -4422,6 +4424,108 @@ fn phase_b_column_size_batch_positive_output_mutates_target_only() {
         .expect("A column")
         .get_width();
     assert!((width - 25.0).abs() < 0.001);
+}
+
+#[test]
+fn phase_b_column_size_batch_accepts_per_op_sheet_name_shape() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-per-op-source.xlsx");
+    let output_path = tmp.path().join("phase-b-column-per-op-output.xlsx");
+    let ops_path = tmp.path().join("column-ops-per-op-sheet.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"A:A","size":{"kind":"width","width_chars":21.0}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let run = run_cli(&[
+        "column-size-batch",
+        source,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        output,
+    ]);
+    assert!(run.status.success(), "stderr: {:?}", run.stderr);
+
+    let output_book =
+        umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("sheet exists");
+    let width = *output_sheet
+        .get_column_dimension("A")
+        .expect("A column")
+        .get_width();
+    assert!((width - 21.0).abs() < 0.001);
+}
+
+#[test]
+fn phase_b_column_size_batch_rejects_mixed_per_op_sheet_names() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-mixed-per-op-source.xlsx");
+    let ops_path = tmp.path().join("column-ops-mixed-sheets.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","range":"A:A","size":{"kind":"width","width_chars":21.0}},{"sheet_name":"Summary","range":"A:A","size":{"kind":"width","width_chars":10.0}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let err = assert_error_code(
+        &[
+            "column-size-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("mixed sheet_name values")
+    );
+}
+
+#[test]
+fn phase_b_column_size_batch_rejects_hybrid_mixed_sheet_names() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("phase-b-column-hybrid-mixed-source.xlsx");
+    let ops_path = tmp.path().join("column-ops-hybrid-mixed-sheets.json");
+    write_fixture(&source_path);
+    write_ops_payload(
+        &ops_path,
+        r#"{"sheet_name":"Settings","ops":[{"sheet_name":"Summary","range":"A:A","size":{"kind":"width","width_chars":21.0}}]}"#,
+    );
+
+    let source = source_path.to_str().expect("source utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let err = assert_error_code(
+        &[
+            "column-size-batch",
+            source,
+            "--ops",
+            ops_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("mixed sheet_name values")
+    );
 }
 
 #[test]
