@@ -60,6 +60,8 @@ async fn recalculate_uses_formualizer_backend_and_updates_formula_cache() -> Res
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![CellEditInput::Shorthand("A1=11".to_string())],
+
+            formula_parse_policy: None,
         },
     )
     .await?;

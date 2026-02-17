@@ -95,6 +95,8 @@ async fn formula_edit_sets_recalc_needed_true() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![CellEditInput::Shorthand("B1==SUM(1,2)".to_string())],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -134,6 +136,8 @@ async fn recalculate_clears_recalc_needed() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![CellEditInput::Shorthand("A1=11".to_string())],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -183,6 +187,8 @@ async fn range_values_warns_when_stale_formulas_present() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![CellEditInput::Shorthand("A1=11".to_string())],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -196,6 +202,8 @@ async fn range_values_warns_when_stale_formulas_present() -> Result<()> {
             include_headers: Some(false),
             format: None,
             page_size: None,
+
+            include_formulas: None,
         },
     )
     .await?;

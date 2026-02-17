@@ -1568,6 +1568,8 @@ mod typed_errors_tests {
             edits: vec![tools::write_normalize::CellEditInput::Shorthand(
                 "A1".to_string(),
             )],
+
+            formula_parse_policy: None,
         };
 
         let err = tools::write_normalize::normalize_edit_batch(params).unwrap_err();

@@ -83,6 +83,8 @@ async fn rules_batch_set_data_validation_list_persists_and_is_idempotent() -> Re
             ops: vec![op.clone()],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -95,6 +97,8 @@ async fn rules_batch_set_data_validation_list_persists_and_is_idempotent() -> Re
             ops: vec![op],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -170,6 +174,8 @@ async fn rules_batch_preview_then_apply_staged_change() -> Result<()> {
             }],
             mode: Some(BatchMode::Preview),
             label: Some("add dropdown".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;

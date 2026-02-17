@@ -284,6 +284,7 @@ pub async fn create_workbook(
     })?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn edit(
     file: PathBuf,
     sheet: String,
@@ -1337,13 +1338,12 @@ fn parse_column_size_ops_payload(raw: &str) -> Result<ColumnSizeOpsPayload> {
                     .as_object()
                     .and_then(|entry| entry.get("sheet_name"))
                     .and_then(Value::as_str)
+                    && per_op_sheet != top_level_sheet
                 {
-                    if per_op_sheet != top_level_sheet {
-                        return Err(invalid_ops_payload(format!(
-                            "ops payload has mixed sheet_name values between top-level and ops[{index}] ('{}' vs '{}'); {guidance}",
-                            top_level_sheet, per_op_sheet
-                        )));
-                    }
+                    return Err(invalid_ops_payload(format!(
+                        "ops payload has mixed sheet_name values between top-level and ops[{index}] ('{}' vs '{}'); {guidance}",
+                        top_level_sheet, per_op_sheet
+                    )));
                 }
             }
         }
@@ -1699,6 +1699,7 @@ fn dry_run_response(
     })?)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_response(
     op_count: usize,
     applied_count: usize,

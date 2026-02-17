@@ -76,6 +76,8 @@ async fn rules_batch_add_conditional_format_persists_and_is_idempotent() -> Resu
             ops: vec![op.clone()],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -95,6 +97,8 @@ async fn rules_batch_add_conditional_format_persists_and_is_idempotent() -> Resu
             ops: vec![op],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -193,6 +197,8 @@ async fn rules_batch_conditional_format_preview_then_apply_staged_change() -> Re
             }],
             mode: Some(BatchMode::Preview),
             label: Some("cf".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -279,6 +285,8 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -312,6 +320,8 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -344,6 +354,8 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -396,6 +408,8 @@ async fn rules_batch_set_and_clear_conditional_formats() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
