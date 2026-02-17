@@ -4,7 +4,9 @@ use std::path::Path;
 
 pub fn normalize_shorthand_edit(entry: &str) -> Result<(CellEdit, Vec<CoreWarning>)> {
     let Some((address_raw, rhs_raw)) = entry.split_once('=') else {
-        bail!("invalid shorthand edit: '{entry}' (expected like 'A1=100' or 'B2==SUM(A1:A2)')");
+        bail!(
+            "invalid shorthand edit: '{entry}' (expected 'A1=100' for literal values or 'B2==SUM(A1:A2)' for formulas)"
+        );
     };
 
     let address = address_raw.trim();
