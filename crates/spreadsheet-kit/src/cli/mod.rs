@@ -449,7 +449,10 @@ pub enum Commands {
         #[arg(value_name = "DEST", help = "Destination workbook path")]
         dest: PathBuf,
     },
-    #[command(about = "Apply one or more shorthand cell edits to a sheet")]
+    #[command(
+        about = "Apply one or more shorthand cell edits to a sheet",
+        after_long_help = "Examples:\n  agent-spreadsheet edit workbook.xlsx Sheet1 A1=42 B2==SUM(A1:A10)\n\nCache note:\n  Formula edits (values starting with =) clear cached results.\n  Run recalculate to refresh computed values."
+    )]
     Edit {
         #[arg(value_name = "FILE", help = "Workbook path to modify")]
         file: PathBuf,
@@ -470,7 +473,7 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless transform operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --in-place\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force\n\nMode selection:\n  Choose exactly one of --dry-run, --in-place, or --output <PATH>."
+        after_long_help = "Examples:\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --in-place\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force\n\nMode selection:\n  Choose exactly one of --dry-run, --in-place, or --output <PATH>.\n\nCache note:\n  Formula writes (FillRange with is_formula, ReplaceInRange with include_formulas) clear cached results.\n  Run recalculate to refresh computed values."
     )]
     TransformBatch {
         #[arg(value_name = "FILE", help = "Workbook path to transform")]
@@ -561,7 +564,7 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless structure operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --dry-run\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
+        after_long_help = "Examples:\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --dry-run\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx\n\nCache note:\n  Structural operations that rewrite formula references (row/column insert/delete, sheet rename,\n  copy/move) clear cached formula results. Run recalculate to refresh computed values."
     )]
     StructureBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -655,7 +658,7 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless data validation and conditional format operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --dry-run\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
+        after_long_help = "Examples:\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --dry-run\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force\n\nNote:\n  Data-validation and conditional-format formulas are rule-level (not cell-level) and do not affect\n  cell formula caches. No recalculate is needed after rules-batch operations."
     )]
     RulesBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]

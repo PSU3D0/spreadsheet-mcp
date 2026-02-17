@@ -2611,6 +2611,7 @@ fn rewrite_formulas_for_sheet_rename(
 
             let new_formula = out.strip_prefix('=').unwrap_or(&out);
             cell.set_formula(new_formula.to_string());
+            cell.set_formula_result_default("");
         }
     }
 
@@ -3044,6 +3045,7 @@ fn rewrite_formulas_for_sheet_structure_change(
             if changed {
                 let new_formula = out.strip_prefix('=').unwrap_or(&out);
                 cell.set_formula(new_formula.to_string());
+                cell.set_formula_result_default("");
             }
         }
     }
@@ -3472,6 +3474,7 @@ pub(crate) fn apply_transform_ops_to_file(
 
                                 if *is_formula {
                                     cell.set_formula(value.clone());
+                                    cell.set_formula_result_default("");
                                     cells_formula_set += 1;
                                 } else {
                                     cell.set_value(value.clone());
@@ -3497,6 +3500,7 @@ pub(crate) fn apply_transform_ops_to_file(
 
                             if *is_formula {
                                 cell.set_formula(value.clone());
+                                cell.set_formula_result_default("");
                                 cells_formula_set += 1;
                             } else {
                                 cell.set_value(value.clone());
@@ -3572,6 +3576,7 @@ pub(crate) fn apply_transform_ops_to_file(
                                     }
                                     if let Some(next) = replace_value(&formula) {
                                         cell.set_formula(next);
+                                        cell.set_formula_result_default("");
                                         cells_formula_replaced += 1;
                                     }
                                     continue;
@@ -3611,6 +3616,7 @@ pub(crate) fn apply_transform_ops_to_file(
                                 }
                                 if let Some(next) = replace_value(&formula) {
                                     cell.set_formula(next);
+                                    cell.set_formula_result_default("");
                                     cells_formula_replaced += 1;
                                 }
                                 continue;

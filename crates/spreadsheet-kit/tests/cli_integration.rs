@@ -6033,3 +6033,159 @@ fn cli_rules_batch_dry_run_formula_diagnostics_parity() {
     assert_eq!(diagnostics["policy"], "warn");
     assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
 }
+
+#[test]
+fn transform_batch_fill_range_formula_clears_cache() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("fill-formula-cache.xlsx");
+    let ops_path = tmp.path().join("fill-formula-ops.json");
+
+    // Create workbook with a formula cell that has a stale cached result
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet");
+        sheet.get_cell_mut("A1").set_value_number(10.0);
+        sheet.get_cell_mut("A2").set_value_number(20.0);
+        let b1 = sheet.get_cell_mut("B1");
+        b1.set_formula("A1+1");
+        b1.get_cell_value_mut().set_formula_result_default("999"); // stale cache
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+
+    // FillRange with is_formula=true should clear the cache
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"B1:B2"},"value":"A1+100","is_formula":true,"overwrite_formulas":true}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops"));
+    let output = run_cli(&["transform-batch", file, "--ops", &ops_ref, "--in-place"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    // Read back and verify cache is cleared
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet");
+    let b1 = sheet.get_cell("B1").expect("B1");
+    assert_eq!(b1.get_formula().replace(' ', ""), "A1+100");
+    assert_eq!(
+        b1.get_value(),
+        "",
+        "expected formula cache to be cleared after FillRange"
+    );
+
+    let b2 = sheet.get_cell("B2").expect("B2");
+    assert_eq!(b2.get_formula().replace(' ', ""), "A1+100");
+    assert_eq!(
+        b2.get_value(),
+        "",
+        "expected formula cache to be cleared after FillRange"
+    );
+}
+
+#[test]
+fn transform_batch_replace_in_range_formula_clears_cache() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("replace-formula-cache.xlsx");
+    let ops_path = tmp.path().join("replace-formula-ops.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet");
+        let a1 = sheet.get_cell_mut("A1");
+        a1.set_formula("SUM(B1:B10)");
+        a1.get_cell_value_mut().set_formula_result_default("500"); // stale cache
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"replace_in_range","sheet_name":"Sheet1","target":{"kind":"range","range":"A1:A1"},"find":"SUM","replace":"AVERAGE","match_mode":"contains","include_formulas":true}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops"));
+    let output = run_cli(&["transform-batch", file, "--ops", &ops_ref, "--in-place"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet");
+    let a1 = sheet.get_cell("A1").expect("A1");
+    assert!(a1.get_formula().contains("AVERAGE"), "formula should be replaced");
+    assert_eq!(
+        a1.get_value(),
+        "",
+        "expected formula cache to be cleared after ReplaceInRange"
+    );
+}
+
+#[test]
+fn edit_batch_formula_clears_cache() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-formula-cache.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet");
+        let a1 = sheet.get_cell_mut("A1");
+        a1.set_formula("B1+C1");
+        a1.get_cell_value_mut().set_formula_result_default("old_value");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+
+    let file = workbook_path.to_str().expect("path");
+    let output = run_cli(&["edit", file, "Sheet1", "A1==SUM(B1:B5)"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet");
+    let a1 = sheet.get_cell("A1").expect("A1");
+    assert_eq!(a1.get_formula().replace(' ', ""), "SUM(B1:B5)");
+    assert_eq!(
+        a1.get_value(),
+        "",
+        "expected formula cache to be cleared after edit"
+    );
+}
+
+#[test]
+fn transform_batch_help_mentions_formula_cache() {
+    let output = run_cli(&["transform-batch", "--help"]);
+    let combined = format!(
+        "{}{}",
+        parse_stdout_text(&output),
+        String::from_utf8(output.stderr.clone()).expect("stderr utf8")
+    );
+    assert!(
+        combined.contains("Cache note") || combined.contains("cached results"),
+        "transform-batch help should mention formula cache behavior"
+    );
+}
+
+#[test]
+fn structure_batch_help_mentions_formula_cache() {
+    let output = run_cli(&["structure-batch", "--help"]);
+    let combined = format!(
+        "{}{}",
+        parse_stdout_text(&output),
+        String::from_utf8(output.stderr.clone()).expect("stderr utf8")
+    );
+    assert!(
+        combined.contains("Cache note") || combined.contains("cached results"),
+        "structure-batch help should mention formula cache behavior"
+    );
+}
+
+#[test]
+fn edit_help_mentions_formula_cache() {
+    let output = run_cli(&["edit", "--help"]);
+    let combined = format!(
+        "{}{}",
+        parse_stdout_text(&output),
+        String::from_utf8(output.stderr.clone()).expect("stderr utf8")
+    );
+    assert!(
+        combined.contains("Cache note") || combined.contains("cached results"),
+        "edit help should mention formula cache behavior"
+    );
+}
