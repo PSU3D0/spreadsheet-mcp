@@ -29,6 +29,12 @@ agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200
 # Profile column types and cardinality
 agent-spreadsheet table-profile data.xlsx --sheet "Sheet1"
 
+# Value search
+agent-spreadsheet find-value data.xlsx "Revenue" --mode value
+
+# Label lookup: match label cell and return adjacent value
+agent-spreadsheet find-value data.xlsx "Net Income" --mode label --label-direction below
+
 # Stateless transform dry-run
 agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run
 
@@ -53,6 +59,8 @@ For other high-traffic commands:
 Use `--compact` to minimize whitespace.
 Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.
 
+`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.
+
 ### CLI command reference (high-traffic)
 
 | Command | Description |
@@ -60,8 +68,10 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `read-table <file> [--sheet S] [--range R] [--table-format json\|values\|csv] [--limit N] [--offset N]` | Structured table read with deterministic offset pagination |
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic sheet paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
+| `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
 | `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless batch writes |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
+| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched caches) |
 | `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations |
 | `rules-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless validation/conditional-format operations |
 

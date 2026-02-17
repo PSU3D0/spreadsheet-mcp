@@ -77,8 +77,11 @@ agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
 # Read one or more raw ranges
 agent-spreadsheet range-values data.xlsx Sheet1 A1:C20
 
-# Search for labels/values
-agent-spreadsheet find-value data.xlsx "Revenue" --mode label
+# Search values directly (default mode is value)
+agent-spreadsheet find-value data.xlsx "Revenue" --mode value
+
+# Label lookup: match a label cell, then read an adjacent value
+agent-spreadsheet find-value data.xlsx "Net Income" --mode label --label-direction below
 
 # Describe workbook metadata
 agent-spreadsheet describe data.xlsx
@@ -117,6 +120,8 @@ agent-spreadsheet sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
 agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
 ```
 
+`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.
+
 All output is JSON by default.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
 
@@ -141,7 +146,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...]` | Raw cell values for one or more ranges |
-| `find-value <file> <query> [--sheet S] [--mode value\|label]` | Search cell values (`value`) or labels (`label`) |
+| `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
 | `scan-volatiles <file> [--sheet S] [--limit N] [--offset N]` | Scan formulas for volatile functions |
@@ -153,7 +158,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `edit <file> <sheet> <edits...>` | Apply cell edits (`A1=42`, `B2==SUM(...)`) |
 | `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless transform batch pipeline |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
-| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations |
+| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
 | `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations (sheet rows/columns) |
 | `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
 | `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
