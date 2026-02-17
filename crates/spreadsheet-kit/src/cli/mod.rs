@@ -451,13 +451,32 @@ pub enum Commands {
     },
     #[command(
         about = "Apply one or more shorthand cell edits to a sheet",
-        after_long_help = "Examples:\n  agent-spreadsheet edit workbook.xlsx Sheet1 A1=42 B2==SUM(A1:A10)\n\nCache note:\n  Formula edits (values starting with =) clear cached results.\n  Run recalculate to refresh computed values."
+        after_long_help = r#"Examples:
+  agent-spreadsheet edit workbook.xlsx Sheet1 A1=42 B2==SUM(A1:A10)
+  agent-spreadsheet edit workbook.xlsx Sheet1 --dry-run A1=42 B2==SUM(A1:A10)
+  agent-spreadsheet edit workbook.xlsx Sheet1 --output edited.xlsx --force A1=42 B2==SUM(A1:A10)
+
+Mode selection:
+  Default behavior (no mode flags): in-place edit of the source workbook.
+  Optional explicit modes: --dry-run, --in-place, or --output <PATH>.
+
+Cache note:
+  Formula edits (values starting with =) clear cached results.
+  Run recalculate to refresh computed values."#
     )]
     Edit {
         #[arg(value_name = "FILE", help = "Workbook path to modify")]
         file: PathBuf,
         #[arg(value_name = "SHEET", help = "Target sheet name")]
         sheet: String,
+        #[arg(long, help = "Validate edits without mutating any workbook")]
+        dry_run: bool,
+        #[arg(long, help = "Apply edits by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply edits to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
         #[arg(
             value_name = "EDIT",
             help = "Edit operations like A1=42 or B2==SUM(A1:A10)"
@@ -940,9 +959,25 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         Commands::Edit {
             file,
             sheet,
+            dry_run,
+            in_place,
+            output,
+            force,
             edits,
             formula_parse_policy,
-        } => commands::write::edit(file, sheet, edits, formula_parse_policy).await,
+        } => {
+            commands::write::edit(
+                file,
+                sheet,
+                edits,
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        }
         Commands::TransformBatch {
             file,
             ops,

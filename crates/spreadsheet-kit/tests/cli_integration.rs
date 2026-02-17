@@ -5260,6 +5260,120 @@ fn cli_copy_edit_diff_are_stateless_and_persisted() {
 }
 
 #[test]
+fn cli_edit_dry_run_reports_preview_and_preserves_source() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-dry-run.xlsx");
+    write_fixture(&workbook_path);
+
+    let before = fs::read(&workbook_path).expect("read source before dry-run");
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["edit", file, "Sheet1", "--dry-run", "B2=11", "C2==B2*3"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["edits_provided"].as_u64(), Some(2));
+    assert_eq!(payload["edits_validated"].as_u64(), Some(2));
+    assert!(payload["would_change"].as_bool().unwrap_or(false));
+
+    let affected = payload["affected_cells"]
+        .as_array()
+        .expect("affected_cells array");
+    assert!(affected.iter().any(|cell| cell.as_str() == Some("B2")));
+    assert!(affected.iter().any(|cell| cell.as_str() == Some("C2")));
+
+    let after = fs::read(&workbook_path).expect("read source after dry-run");
+    assert_eq!(before, after, "dry-run mutated source workbook");
+}
+
+#[test]
+fn cli_edit_output_writes_target_only() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("edit-output-source.xlsx");
+    let output_path = tmp.path().join("edit-output-target.xlsx");
+    write_fixture(&source_path);
+
+    let before_source = fs::read(&source_path).expect("read source before output mode");
+    let source = source_path.to_str().expect("source utf8");
+    let output = output_path.to_str().expect("output utf8");
+
+    let command = run_cli(&[
+        "edit", source, "Sheet1", "--output", output, "B2=17", "C2==B2*4",
+    ]);
+    assert!(command.status.success(), "stderr: {:?}", command.stderr);
+
+    let payload = parse_stdout_json(&command);
+    assert_eq!(payload["edits_applied"].as_u64(), Some(2));
+    assert_eq!(payload["file"].as_str(), Some(output));
+    assert_eq!(payload["source_path"].as_str(), Some(source));
+    assert_eq!(payload["target_path"].as_str(), Some(output));
+
+    let after_source = fs::read(&source_path).expect("read source after output mode");
+    assert_eq!(
+        before_source, after_source,
+        "source workbook changed during --output mode"
+    );
+
+    let output_book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
+    let output_sheet = output_book
+        .get_sheet_by_name("Sheet1")
+        .expect("output sheet exists");
+    assert_eq!(output_sheet.get_cell("B2").expect("B2").get_value(), "17");
+    assert_eq!(
+        output_sheet.get_cell("C2").expect("C2").get_formula(),
+        "B2*4"
+    );
+}
+
+#[test]
+fn cli_edit_mode_matrix_rejects_conflicts() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-mode-matrix.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    assert_invalid_argument(&["edit", file, "Sheet1", "--dry-run", "--in-place", "B2=1"]);
+    assert_invalid_argument(&[
+        "edit",
+        file,
+        "Sheet1",
+        "--dry-run",
+        "--output",
+        "out.xlsx",
+        "B2=1",
+    ]);
+    assert_invalid_argument(&[
+        "edit",
+        file,
+        "Sheet1",
+        "--in-place",
+        "--output",
+        "out.xlsx",
+        "B2=1",
+    ]);
+    assert_invalid_argument(&["edit", file, "Sheet1", "--force", "B2=1"]);
+    assert_invalid_argument(&["edit", file, "Sheet1", "--output", file, "B2=1"]);
+}
+
+#[test]
+fn cli_edit_dry_run_preflight_fails_for_missing_sheet() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-dry-run-missing-sheet.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let err = assert_error_code(
+        &["edit", file, "NoSuchSheet", "--dry-run", "A1=1"],
+        "COMMAND_FAILED",
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("NoSuchSheet")
+    );
+}
+
+#[test]
 fn cli_errors_use_machine_envelope() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("read.xlsx");
@@ -6281,7 +6395,7 @@ fn structure_batch_help_mentions_formula_cache() {
 }
 
 #[test]
-fn edit_help_mentions_formula_cache() {
+fn edit_help_mentions_formula_cache_and_modes() {
     let output = run_cli(&["edit", "--help"]);
     let combined = format!(
         "{}{}",
@@ -6291,5 +6405,11 @@ fn edit_help_mentions_formula_cache() {
     assert!(
         combined.contains("Cache note") || combined.contains("cached results"),
         "edit help should mention formula cache behavior"
+    );
+    assert!(
+        combined.contains("--dry-run")
+            && combined.contains("--in-place")
+            && combined.contains("--output"),
+        "edit help should mention dry-run/in-place/output modes"
     );
 }
