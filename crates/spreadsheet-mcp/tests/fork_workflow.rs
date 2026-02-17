@@ -164,6 +164,8 @@ async fn test_edit_batch_applies_values() -> Result<()> {
                 CellEditInput::Shorthand("B2==SUM(A1:A2)".to_string()),
                 input_edit("A3", "SUM(A1:A2)", true),
             ],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -212,6 +214,8 @@ async fn test_edit_batch_clears_cached_value_on_formula() -> Result<()> {
             fork_id: fork_response.fork_id.clone(),
             sheet_name: "Data".to_string(),
             edits: vec![input_edit("A1", "A1*2", true)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -263,6 +267,8 @@ async fn test_get_edits_returns_history() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![input_edit("A1", "10", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -273,6 +279,8 @@ async fn test_get_edits_returns_history() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![input_edit("B1", "A1*2", true)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -330,6 +338,8 @@ async fn test_get_changeset_detects_modifications() -> Result<()> {
                 input_edit("A1", "200", false),
                 input_edit("A2", "modified", false),
             ],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -406,6 +416,8 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![input_edit("A1", "10", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -416,6 +428,8 @@ async fn test_get_changeset_with_sheet_filter() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet2".to_string(),
             edits: vec![input_edit("A1", "20", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -554,6 +568,8 @@ async fn test_save_fork_overwrites_original() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Data".to_string(),
             edits: vec![input_edit("A1", "999", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -609,6 +625,8 @@ async fn test_save_fork_to_new_path() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Data".to_string(),
             edits: vec![input_edit("A1", "modified", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -685,6 +703,8 @@ async fn test_full_workflow_without_recalc() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Budget".to_string(),
             edits: vec![input_edit("B2", "1200", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -794,6 +814,8 @@ async fn test_edit_nonexistent_sheet_error() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "FakeSheet".to_string(),
             edits: vec![input_edit("A1", "test", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await;
@@ -858,6 +880,8 @@ async fn test_get_changeset_paging_limit_offset_and_summary_only() -> Result<()>
             }],
             mode: Some(spreadsheet_mcp::tools::param_enums::BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -949,6 +973,8 @@ async fn test_get_changeset_exclude_recalc_result() -> Result<()> {
             fork_id: fork.fork_id.clone(),
             sheet_name: "Sheet1".to_string(),
             edits: vec![input_edit("A1", "2", false)],
+
+            formula_parse_policy: None,
         },
     )
     .await?;

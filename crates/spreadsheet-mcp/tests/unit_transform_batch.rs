@@ -68,6 +68,8 @@ async fn transform_batch_clear_range_clears_values_keeps_formulas_by_default() -
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -136,6 +138,8 @@ async fn transform_batch_preview_stages_and_apply() -> Result<()> {
             }],
             mode: Some(BatchMode::Preview),
             label: Some("blank inputs".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -242,6 +246,8 @@ async fn transform_batch_region_target_resolves() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -313,6 +319,8 @@ async fn transform_batch_cells_target_skips_missing_and_handles_duplicates() -> 
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -391,6 +399,8 @@ async fn transform_batch_accepts_reversed_range() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -462,6 +472,8 @@ async fn transform_batch_noop_flags_do_not_change_cells() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -539,6 +551,8 @@ async fn transform_batch_counts_mixed_range() -> Result<()> {
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -609,6 +623,8 @@ async fn transform_batch_clear_formulas_only_removes_formula_keeps_literal_value
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -686,6 +702,8 @@ async fn transform_batch_fill_range_creates_cells_and_skips_formulas_by_default(
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -763,6 +781,8 @@ async fn transform_batch_replace_in_range_replaces_values_exact() -> Result<()> 
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -835,6 +855,8 @@ async fn transform_batch_replace_in_range_contains_case_sensitive() -> Result<()
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -904,6 +926,8 @@ async fn transform_batch_replace_in_range_skips_formulas_by_default() -> Result<
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -976,6 +1000,8 @@ async fn transform_batch_replace_in_range_can_mutate_formulas_when_enabled() -> 
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1043,6 +1069,8 @@ async fn transform_batch_fill_range_preview_stages_and_apply() -> Result<()> {
             }],
             mode: Some(BatchMode::Preview),
             label: Some("fill".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1128,6 +1156,8 @@ async fn transform_batch_replace_in_range_preview_stages_and_apply() -> Result<(
             }],
             mode: Some(BatchMode::Preview),
             label: Some("replace".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1211,6 +1241,8 @@ async fn transform_batch_replace_in_range_exact_case_insensitive() -> Result<()>
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1278,6 +1310,8 @@ async fn transform_batch_replace_in_range_contains_replaces_all_occurrences() ->
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1351,6 +1385,8 @@ async fn transform_batch_multiple_ops_last_wins() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -1415,6 +1451,8 @@ async fn transform_batch_replace_in_range_contains_rejects_case_insensitive() ->
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await
@@ -1471,6 +1509,8 @@ async fn transform_batch_fill_range_overwrite_formulas_removes_formula() -> Resu
             }],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;

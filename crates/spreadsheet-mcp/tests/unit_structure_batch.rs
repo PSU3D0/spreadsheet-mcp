@@ -67,6 +67,8 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -147,6 +149,8 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -216,6 +220,8 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -292,6 +298,8 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await
@@ -345,6 +353,8 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
             ],
             mode: Some(BatchMode::Preview),
             label: Some("insert col".to_string()),
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -430,6 +440,8 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
             ],
             mode: Some(BatchMode::Preview),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -491,6 +503,8 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -546,6 +560,8 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -598,6 +614,8 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+
+            formula_parse_policy: None,
         },
     )
     .await
