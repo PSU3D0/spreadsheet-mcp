@@ -1,6 +1,6 @@
 use crate::core::write::{normalize_object_edit, normalize_shorthand_edit};
 use crate::errors::InvalidParamsError;
-use crate::model::Warning;
+use crate::model::{FormulaParsePolicy, Warning};
 use crate::tools::fork::{CellEdit, EditBatchParams};
 use anyhow::Result;
 use schemars::JsonSchema;
@@ -11,6 +11,8 @@ pub struct EditBatchParamsInput {
     pub fork_id: String,
     pub sheet_name: String,
     pub edits: Vec<CellEditInput>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
