@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use spreadsheet_kit as spreadsheet_mcp;
-use spreadsheet_mcp::model::{SheetPageFormat, TraceDirection, WorkbookId};
+use spreadsheet_mcp::model::{FormulaParsePolicy, SheetPageFormat, TraceDirection, WorkbookId};
 use spreadsheet_mcp::state::AppState;
 use spreadsheet_mcp::tools::{
     DescribeWorkbookParams, FindFormulaParams, FormulaTraceParams, ListSheetsParams,
@@ -175,6 +175,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             summary_only: Some(false),
             include_addresses: None,
             addresses_limit: None,
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -195,6 +196,7 @@ async fn paging_and_stats_suite(state: Arc<AppState>, workbook_id: WorkbookId) -
             summary_only: Some(false),
             include_addresses: None,
             addresses_limit: None,
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -224,6 +226,7 @@ async fn formula_and_dependency_suite(state: Arc<AppState>, workbook_id: Workboo
             limit: None,
             page_size: Some(12),
             cursor: None,
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -542,6 +545,7 @@ async fn scan_volatiles_limit_offset_pagination_is_deterministic() -> Result<()>
             addresses_limit: None,
             limit: Some(1),
             offset: Some(0),
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -561,6 +565,7 @@ async fn scan_volatiles_limit_offset_pagination_is_deterministic() -> Result<()>
             addresses_limit: None,
             limit: Some(1),
             offset: Some(first_next),
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -579,6 +584,7 @@ async fn scan_volatiles_limit_offset_pagination_is_deterministic() -> Result<()>
             addresses_limit: None,
             limit: Some(1),
             offset: Some(first_next),
+            formula_parse_policy: None,
         },
     )
     .await?;
@@ -631,6 +637,7 @@ async fn scan_volatiles_skips_unparsable_formulas_instead_of_failing() -> Result
             addresses_limit: None,
             limit: Some(5),
             offset: Some(0),
+            formula_parse_policy: Some(FormulaParsePolicy::Warn),
         },
     )
     .await?;
@@ -641,6 +648,11 @@ async fn scan_volatiles_skips_unparsable_formulas_instead_of_failing() -> Result
             .iter()
             .any(|item| item.address == "B3" && item.function == "volatile")
     );
+    let diagnostics = response
+        .formula_parse_diagnostics
+        .as_ref()
+        .expect("expected formula parse diagnostics");
+    assert!(diagnostics.total_errors > 0);
 
     Ok(())
 }

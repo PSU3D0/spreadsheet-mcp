@@ -868,6 +868,9 @@ pub struct SheetFormulaMapParams {
     /// Maximum addresses to include per formula group (default: 15)
     #[serde(default)]
     pub addresses_limit: Option<u32>,
+    /// Formula parse policy: fail, warn (default), or off
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
@@ -986,7 +989,16 @@ pub async fn sheet_formula_map(
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
 
-    let graph = workbook.formula_graph(&params.sheet_name)?;
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::Warn);
+    let (graph, diagnostics) =
+        workbook.formula_graph_with_diagnostics(&params.sheet_name, policy)?;
+    let formula_parse_diagnostics = if diagnostics.total_errors > 0 {
+        Some(diagnostics)
+    } else {
+        None
+    };
     let all_groups = graph.groups();
     let mut groups = Vec::new();
 
@@ -1046,6 +1058,7 @@ pub async fn sheet_formula_map(
                 workbook_id: workbook.id.clone(),
                 sheet_name: params.sheet_name.clone(),
                 groups: groups[..count].to_vec(),
+                formula_parse_diagnostics: formula_parse_diagnostics.clone(),
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -1068,6 +1081,7 @@ pub async fn sheet_formula_map(
         workbook_id: workbook.id.clone(),
         sheet_name: params.sheet_name.clone(),
         groups,
+        formula_parse_diagnostics,
         next_offset,
     };
     Ok(response)
@@ -1086,6 +1100,9 @@ pub struct FormulaTraceParams {
     pub page_size: Option<usize>,
     #[serde(default)]
     pub cursor: Option<TraceCursor>,
+    /// Formula parse policy: fail, warn (default), or off
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 pub async fn formula_trace(
@@ -1093,7 +1110,16 @@ pub async fn formula_trace(
     params: FormulaTraceParams,
 ) -> Result<FormulaTraceResponse> {
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
-    let graph = workbook.formula_graph(&params.sheet_name)?;
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::Warn);
+    let (graph, diagnostics) =
+        workbook.formula_graph_with_diagnostics(&params.sheet_name, policy)?;
+    let formula_parse_diagnostics = if diagnostics.total_errors > 0 {
+        Some(diagnostics)
+    } else {
+        None
+    };
     let formula_lookup = build_formula_lookup(&graph);
     let depth = params.depth.unwrap_or(3).clamp(1, 5);
     let page_size = params
@@ -1125,6 +1151,7 @@ pub async fn formula_trace(
         direction: params.direction.clone(),
         layers,
         next_cursor,
+        formula_parse_diagnostics,
         notes,
     };
     Ok(response)
@@ -2741,6 +2768,9 @@ pub struct ScanVolatilesParams {
     /// Entry offset for pagination; use next_offset from previous response
     #[serde(default)]
     pub offset: Option<u32>,
+    /// Formula parse policy: fail, warn (default), or off
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 pub async fn scan_volatiles(
@@ -2755,6 +2785,10 @@ pub async fn scan_volatiles(
         .unwrap_or(matches!(output_profile, OutputProfile::TokenDense));
     let include_addresses = params.include_addresses.unwrap_or(!summary_only);
     let addresses_limit = params.addresses_limit.unwrap_or(15);
+    let policy = params
+        .formula_parse_policy
+        .unwrap_or(FormulaParsePolicy::Warn);
+    let mut combined_builder = FormulaParseDiagnosticsBuilder::new(policy);
     let max_items = config.max_items();
     let max_payload_bytes = config.max_payload_bytes();
 
@@ -2771,7 +2805,11 @@ pub async fn scan_volatiles(
 
     let mut items = Vec::new();
     for sheet_name in target_sheets {
-        let graph = workbook.formula_graph(&sheet_name)?;
+        let graph = workbook.formula_graph_with_diagnostics_builder(
+            &sheet_name,
+            policy,
+            &mut combined_builder,
+        )?;
         let mut groups = graph
             .groups()
             .into_iter()
@@ -2817,6 +2855,13 @@ pub async fn scan_volatiles(
         }
     }
 
+    let diagnostics = combined_builder.build();
+    let formula_parse_diagnostics = if diagnostics.total_errors > 0 {
+        Some(diagnostics)
+    } else {
+        None
+    };
+
     items.sort_by(|left, right| {
         left.sheet_name
             .cmp(&right.sheet_name)
@@ -2846,6 +2891,7 @@ pub async fn scan_volatiles(
             let response = VolatileScanResponse {
                 workbook_id: workbook.id.clone(),
                 items: page_items[..count].to_vec(),
+                formula_parse_diagnostics: formula_parse_diagnostics.clone(),
                 next_offset: None,
             };
             serde_json::to_vec(&response)
@@ -2869,6 +2915,7 @@ pub async fn scan_volatiles(
     let response = VolatileScanResponse {
         workbook_id: workbook.id.clone(),
         items: page_items,
+        formula_parse_diagnostics,
         next_offset,
     };
     Ok(response)

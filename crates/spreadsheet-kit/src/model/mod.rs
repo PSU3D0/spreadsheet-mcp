@@ -329,6 +329,8 @@ pub struct SheetFormulaMapResponse {
     pub sheet_name: String,
     pub groups: Vec<FormulaGroup>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }
 
@@ -353,6 +355,8 @@ pub struct FormulaTraceResponse {
     pub direction: TraceDirection,
     pub layers: Vec<TraceLayer>,
     pub next_cursor: Option<TraceCursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
     pub notes: Vec<String>,
 }
 
@@ -495,6 +499,8 @@ pub struct VolatileScanEntry {
 pub struct VolatileScanResponse {
     pub workbook_id: WorkbookId,
     pub items: Vec<VolatileScanEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }

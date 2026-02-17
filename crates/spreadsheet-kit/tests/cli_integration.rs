@@ -115,6 +115,27 @@ fn write_phase1_read_surface_fixture(path: &Path) {
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
 }
 
+fn write_formula_parse_failure_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+        sheet.get_cell_mut("A1").set_value("Input");
+        sheet.get_cell_mut("B1").set_value("Result");
+        sheet.get_cell_mut("C1").set_value("Trace");
+        // Intentionally malformed: one extra closing parenthesis.
+        sheet.get_cell_mut("B2").set_formula(
+            r#"IF(C70="","",IF(C70="N/A","",IF(C70="Unknown",0,IF(LEFT(C70,1)="0",0,IF(LEFT(C70,1)="1",25,IF(LEFT(C70,1)="2",50,IF(LEFT(C70,1)="3",75,IF(LEFT(C70,1)="4",100,"")))))))))"#,
+        );
+        sheet.get_cell_mut("B3").set_formula("NOW()");
+        sheet.get_cell_mut("A3").set_value_number(20.0);
+        sheet.get_cell_mut("C3").set_formula("A3+1");
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
 fn write_workbook_short_id_column_fixture(path: &Path) {
     let mut workbook = umya_spreadsheet::new_file();
     {
@@ -988,6 +1009,21 @@ fn cli_phase1_scan_volatiles_skips_unparsable_formulas_instead_of_failing() {
         }),
         "expected volatile match from valid formula"
     );
+
+    // Verify diagnostics are present in warn mode (default)
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        !diagnostics["groups"]
+            .as_array()
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+    );
 }
 
 #[test]
@@ -1019,6 +1055,188 @@ fn cli_formula_map_skips_unparsable_formulas_instead_of_failing() {
     assert!(
         !groups.is_empty(),
         "expected at least one parseable formula group"
+    );
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        !diagnostics["groups"]
+            .as_array()
+            .map(Vec::is_empty)
+            .unwrap_or(true)
+    );
+}
+
+#[test]
+fn cli_scan_volatiles_formula_parse_policy_fail_returns_error_envelope() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("scan-volatiles-parse-policy-fail.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "command should fail");
+
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+}
+
+#[test]
+fn cli_formula_map_formula_parse_policy_fail_returns_error_envelope() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-map-parse-policy-fail.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "formula-map",
+        file,
+        "Sheet1",
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "command should fail");
+
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+}
+
+#[test]
+fn cli_formula_trace_formula_parse_policy_warn_returns_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-trace-parse-policy-warn.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C3",
+        "precedents",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert!(payload["layers"].is_array());
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics object"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_formula_trace_formula_parse_policy_fail_returns_error_envelope() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-trace-parse-policy-fail.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "formula-trace",
+        file,
+        "Sheet1",
+        "C3",
+        "precedents",
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "command should fail");
+
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+}
+
+#[test]
+fn cli_scan_volatiles_diagnostics_deterministic_across_runs() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp
+        .path()
+        .join("scan-volatiles-diagnostics-deterministic.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let first = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+
+    let second = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    let second_payload = parse_stdout_json(&second);
+
+    assert_eq!(
+        first_payload["formula_parse_diagnostics"],
+        second_payload["formula_parse_diagnostics"]
+    );
+}
+
+#[test]
+fn cli_scan_volatiles_diagnostics_independent_of_pagination() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp
+        .path()
+        .join("scan-volatiles-diagnostics-pagination.xlsx");
+    write_formula_parse_failure_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let paged = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--formula-parse-policy",
+        "warn",
+        "--limit",
+        "1",
+    ]);
+    assert!(paged.status.success(), "stderr: {:?}", paged.stderr);
+    let paged_payload = parse_stdout_json(&paged);
+
+    let full = run_cli(&[
+        "scan-volatiles",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(full.status.success(), "stderr: {:?}", full.stderr);
+    let full_payload = parse_stdout_json(&full);
+
+    assert_eq!(
+        paged_payload["formula_parse_diagnostics"],
+        full_payload["formula_parse_diagnostics"]
     );
 }
 
