@@ -503,6 +503,8 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
+        "#### Formula write-path provenance (`write_path_provenance`)",
+        "`written_via`: write path (`edit`, `transform_batch`, `apply_formula_pattern`)",
         "Compact (single range):** flatten that entry to top-level fields",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
@@ -3804,6 +3806,10 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     assert!(formula.contains(
         "Updated formula cells clear cached results. Run recalculate to refresh computed values."
     ));
+    assert!(
+        formula.contains("write_path_provenance"),
+        "apply-formula-pattern help should mention provenance diagnostics"
+    );
 }
 
 #[test]
@@ -3956,6 +3962,18 @@ fn phase_a_apply_formula_pattern_positive_dry_run_and_output_target_only() {
     let dry_payload = parse_stdout_json(&dry_run);
     assert_eq!(dry_payload["op_count"].as_u64(), Some(1));
     assert!(dry_payload["would_change"].as_bool().unwrap_or(false));
+    assert_eq!(
+        dry_payload["write_path_provenance"]["written_via"],
+        Value::String("apply_formula_pattern".to_string())
+    );
+    let dry_targets = dry_payload["write_path_provenance"]["formula_targets"]
+        .as_array()
+        .expect("formula_targets array");
+    assert!(
+        dry_targets
+            .iter()
+            .any(|target| target.as_str() == Some("Sheet1!C2:C4"))
+    );
     let after_dry = fs::read(&source_path).expect("read source after dry-run");
     assert_eq!(before, after_dry, "dry-run mutated source file");
 
@@ -3974,6 +3992,10 @@ fn phase_a_apply_formula_pattern_positive_dry_run_and_output_target_only() {
     );
     let output_payload = parse_stdout_json(&output_run);
     assert!(output_payload["changed"].as_bool().unwrap_or(false));
+    assert_eq!(
+        output_payload["write_path_provenance"]["written_via"],
+        Value::String("apply_formula_pattern".to_string())
+    );
 
     let source_book =
         umya_spreadsheet::reader::xlsx::read(&source_path).expect("read source workbook");
@@ -6677,6 +6699,11 @@ fn transform_batch_fill_range_formula_clears_cache() {
     let ops_ref = format!("@{}", ops_path.to_str().expect("ops"));
     let output = run_cli(&["transform-batch", file, "--ops", &ops_ref, "--in-place"]);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(
+        payload["write_path_provenance"]["written_via"],
+        Value::String("transform_batch".to_string())
+    );
 
     // Read back and verify cache is cleared
     let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
@@ -6722,6 +6749,11 @@ fn transform_batch_replace_in_range_formula_clears_cache() {
     let ops_ref = format!("@{}", ops_path.to_str().expect("ops"));
     let output = run_cli(&["transform-batch", file, "--ops", &ops_ref, "--in-place"]);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(
+        payload["write_path_provenance"]["written_via"],
+        Value::String("transform_batch".to_string())
+    );
 
     let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read");
     let sheet = book.get_sheet_by_name("Sheet1").expect("sheet");
@@ -6768,6 +6800,48 @@ fn edit_batch_formula_clears_cache() {
 }
 
 #[test]
+fn edit_formula_write_emits_write_path_provenance() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-provenance-formula.xlsx");
+    write_fixture(&workbook_path);
+
+    let file = workbook_path.to_str().expect("path");
+    let output = run_cli(&["edit", file, "Sheet1", "C2==B2*7"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert_eq!(
+        payload["write_path_provenance"]["written_via"],
+        Value::String("edit".to_string())
+    );
+    let targets = payload["write_path_provenance"]["formula_targets"]
+        .as_array()
+        .expect("formula targets array");
+    assert!(
+        targets
+            .iter()
+            .any(|value| value.as_str() == Some("Sheet1!C2"))
+    );
+}
+
+#[test]
+fn edit_literal_write_omits_write_path_provenance() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-provenance-literal.xlsx");
+    write_fixture(&workbook_path);
+
+    let file = workbook_path.to_str().expect("path");
+    let output = run_cli(&["edit", file, "Sheet1", "B2=7"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert!(
+        payload.get("write_path_provenance").is_none(),
+        "literal-only edits should omit provenance metadata"
+    );
+}
+
+#[test]
 fn transform_batch_help_mentions_formula_cache() {
     let output = run_cli(&["transform-batch", "--help"]);
     let combined = format!(
@@ -6778,6 +6852,10 @@ fn transform_batch_help_mentions_formula_cache() {
     assert!(
         combined.contains("Cache note") || combined.contains("cached results"),
         "transform-batch help should mention formula cache behavior"
+    );
+    assert!(
+        combined.contains("write_path_provenance"),
+        "transform-batch help should mention provenance diagnostics"
     );
 }
 
@@ -6818,5 +6896,9 @@ fn edit_help_mentions_formula_cache_and_modes() {
             && combined.contains("double equals")
             && combined.contains("Single equals writes a literal"),
         "edit help should clearly explain formula shorthand syntax"
+    );
+    assert!(
+        combined.contains("write_path_provenance"),
+        "edit help should mention provenance diagnostics"
     );
 }
