@@ -31,6 +31,13 @@ struct CopyResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct CreateWorkbookResponse {
+    path: String,
+    sheets: Vec<String>,
+    overwritten: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct EditResponse {
     file: String,
     sheet: String,
@@ -190,6 +197,73 @@ pub async fn copy(source: PathBuf, dest: PathBuf) -> Result<Value> {
         source: source.display().to_string(),
         dest: dest.display().to_string(),
         bytes_copied,
+    })?)
+}
+
+pub async fn create_workbook(
+    path: PathBuf,
+    sheets: Option<Vec<String>>,
+    overwrite: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let path = runtime.normalize_destination_path(&path)?;
+
+    let existed = path.exists();
+    if existed {
+        if !overwrite {
+            bail!(
+                "file '{}' already exists; pass --overwrite to replace it",
+                path.display()
+            );
+        }
+        if !path.is_file() {
+            bail!("path '{}' is not a file", path.display());
+        }
+    }
+
+    let mut sheet_names = sheets.unwrap_or_else(|| vec!["Sheet1".to_string()]);
+    if sheet_names.is_empty() {
+        sheet_names.push("Sheet1".to_string());
+    }
+
+    let mut normalized_sheet_names = Vec::new();
+    for name in sheet_names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            bail!("sheet names must be non-empty");
+        }
+        if normalized_sheet_names
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(trimmed))
+        {
+            bail!("duplicate sheet name '{}'", trimmed);
+        }
+        normalized_sheet_names.push(trimmed.to_string());
+    }
+
+    let mut workbook = umya_spreadsheet::new_file();
+    let first_sheet_name = normalized_sheet_names
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("at least one sheet is required"))?;
+    workbook
+        .get_sheet_by_name_mut("Sheet1")
+        .ok_or_else(|| anyhow!("failed to initialize workbook default sheet"))?
+        .set_name(first_sheet_name.as_str());
+
+    for sheet_name in normalized_sheet_names.iter().skip(1) {
+        workbook
+            .new_sheet(sheet_name.as_str())
+            .map_err(|err| anyhow!("failed to create sheet '{}': {}", sheet_name, err))?;
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, &path)
+        .with_context(|| format!("failed to write workbook '{}'", path.display()))?;
+
+    Ok(serde_json::to_value(CreateWorkbookResponse {
+        path: path.display().to_string(),
+        sheets: normalized_sheet_names,
+        overwritten: existed,
     })?)
 }
 

@@ -224,6 +224,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N] [--formula-parse-policy P]` | Formula inventory summary |
 | `formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N] [--formula-parse-policy P]` | Trace formula dependencies with cursor continuation |
 | `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
+| `create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
 | `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42`, `B2==SUM(...)`) |
 | `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
