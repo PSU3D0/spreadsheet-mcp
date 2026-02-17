@@ -120,6 +120,38 @@ agent-spreadsheet sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
 agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
 ```
 
+#### Batch payload examples (JSON body passed via `--ops @file.json`)
+
+All batch payloads use a top-level envelope object. Most commands require `{"ops":[...]}`; `column-size-batch` requires `{"sheet_name":"...","ops":[...]}`.
+
+##### transform-batch payloads (`@transform_ops.json`)
+- Minimal: `{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B4"},"value":"0"}]}`
+- Advanced: `{"ops":[{"kind":"replace_in_range","sheet_name":"Sheet1","target":{"kind":"region","region_id":1},"find":"N/A","replace":"","match_mode":"contains","case_sensitive":false,"include_formulas":true}]}`
+
+##### style-batch payloads (`@style_ops.json`)
+- Minimal: `{"ops":[{"sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B2"},"patch":{"font":{"bold":true}}}]}`
+- Advanced: `{"ops":[{"sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2","B3"]},"patch":{"number_format":"$#,##0.00","alignment":{"horizontal":"right"}},"op_mode":"merge"}]}`
+
+##### apply-formula-pattern payloads (`@formula_ops.json`)
+- Minimal: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*2"}]}`
+- Advanced: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:E4","anchor_cell":"C2","base_formula":"B2*2","fill_direction":"both","relative_mode":"excel"}]}`
+
+##### structure-batch payloads (`@structure_ops.json`)
+- Minimal: `{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}`
+- Advanced: `{"ops":[{"kind":"copy_range","sheet_name":"Sheet1","dest_sheet_name":"Summary","src_range":"A1:C4","dest_anchor":"A1","include_styles":true,"include_formulas":true}]}`
+
+##### column-size-batch payloads (`@column_size_ops.json`)
+- Minimal: `{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}`
+- Advanced: `{"sheet_name":"Sheet1","ops":[{"target":{"kind":"columns","range":"A:C"},"size":{"kind":"auto","min_width_chars":8.0,"max_width_chars":24.0}}]}`
+
+##### sheet-layout-batch payloads (`@layout_ops.json`)
+- Minimal: `{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}`
+- Advanced: `{"ops":[{"kind":"set_page_setup","sheet_name":"Sheet1","orientation":"landscape","fit_to_width":1,"fit_to_height":1}]}`
+
+##### rules-batch payloads (`@rules_ops.json`)
+- Minimal: `{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}`
+- Advanced: `{"ops":[{"kind":"set_conditional_format","sheet_name":"Sheet1","target_range":"C2:C10","rule":{"kind":"expression","formula":"C2>100"},"style":{"fill_color":"#FFF2CC","bold":true}}]}`
+
 `apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.
 
 All output is JSON by default.

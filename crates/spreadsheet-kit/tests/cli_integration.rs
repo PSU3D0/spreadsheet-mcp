@@ -438,6 +438,10 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
         "transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force"
     ));
     assert!(transform.contains("Choose exactly one of --dry-run, --in-place, or --output <PATH>"),);
+    assert!(transform.contains("Payload examples (`--ops @transform_ops.json`):"));
+    assert!(transform.contains("\"kind\":\"fill_range\""));
+    assert!(transform.contains("\"kind\":\"replace_in_range\""));
+    assert!(transform.contains("Required envelope:"));
 }
 
 #[test]
@@ -448,11 +452,19 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "agent-spreadsheet read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
         "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
         "agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run",
+        "##### transform-batch payloads (`@transform_ops.json`)",
+        "##### style-batch payloads (`@style_ops.json`)",
+        "##### apply-formula-pattern payloads (`@formula_ops.json`)",
+        "##### structure-batch payloads (`@structure_ops.json`)",
+        "##### column-size-batch payloads (`@column_size_ops.json`)",
+        "##### sheet-layout-batch payloads (`@layout_ops.json`)",
+        "##### rules-batch payloads (`@rules_ops.json`)",
+        "top-level envelope object",
         "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "`range-values <file> <sheet> <range> [range...]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
-        "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
+        "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Compact (single range):** flatten that entry to top-level fields",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
@@ -569,7 +581,7 @@ fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
-        "`transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)`",
+        "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Canonical (default/omitted): return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.",
         "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
@@ -3591,6 +3603,9 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
             "style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
         )
     );
+    assert!(style.contains("Payload examples (`--ops @style_ops.json`):"));
+    assert!(style.contains("\"patch\":{\"font\":{\"bold\":true}}"));
+    assert!(style.contains("Required envelope:"));
 
     let formula_help = run_cli(&["apply-formula-pattern", "--help"]);
     assert!(
@@ -3606,6 +3621,9 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     assert!(
         formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run")
     );
+    assert!(formula.contains("Payload examples (`--ops @formula_ops.json`):"));
+    assert!(formula.contains("\"target_range\":\"C2:C4\""));
+    assert!(formula.contains("\"fill_direction\":\"both\""));
     assert!(formula.contains(
         "Updated formula cells clear cached results. Run recalculate to refresh computed values."
     ));
@@ -4129,6 +4147,9 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     assert!(structure.contains(
         "structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
     ));
+    assert!(structure.contains("Payload examples (`--ops @structure_ops.json`):"));
+    assert!(structure.contains("\"kind\":\"rename_sheet\""));
+    assert!(structure.contains("\"kind\":\"copy_range\""));
 
     let column_help = run_cli(&["column-size-batch", "--help"]);
     assert!(
@@ -4144,6 +4165,9 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     assert!(column.contains(
         "column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
     ));
+    assert!(column.contains("Payload examples (`--ops @column_size_ops.json`):"));
+    assert!(column.contains("\"sheet_name\":\"Sheet1\""));
+    assert!(column.contains("\"kind\":\"width\""));
 
     let layout_help = run_cli(&["sheet-layout-batch", "--help"]);
     assert!(
@@ -4155,6 +4179,9 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     assert!(layout.contains("Examples:"));
     assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run"));
     assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place"));
+    assert!(layout.contains("Payload examples (`--ops @layout_ops.json`):"));
+    assert!(layout.contains("\"kind\":\"freeze_panes\""));
+    assert!(layout.contains("\"kind\":\"set_page_setup\""));
 }
 
 #[test]
@@ -4673,6 +4700,76 @@ fn phase_b_negative_invalid_ops_payloads() {
 }
 
 #[test]
+fn invalid_ops_payload_errors_include_shape_and_minimal_example() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("invalid-ops-message.xlsx");
+    let transform_bad_path = tmp.path().join("transform-bad.json");
+    let column_bad_path = tmp.path().join("column-bad-shape.json");
+    let rules_bad_path = tmp.path().join("rules-bad.json");
+    write_fixture(&workbook_path);
+
+    // Not an object at all.
+    write_ops_payload(&transform_bad_path, r#"[]"#);
+    // Missing required top-level field `sheet_name`.
+    write_ops_payload(&column_bad_path, r#"{"ops":[]}"#);
+    // Missing required fields inside the op.
+    write_ops_payload(
+        &rules_bad_path,
+        r#"{"ops":[{"kind":"set_data_validation"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let transform_ref = format!("@{}", transform_bad_path.to_str().expect("ops utf8"));
+    let column_ref = format!("@{}", column_bad_path.to_str().expect("ops utf8"));
+    let rules_ref = format!("@{}", rules_bad_path.to_str().expect("ops utf8"));
+
+    let transform_err = assert_error_code(
+        &[
+            "transform-batch",
+            file,
+            "--ops",
+            transform_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    let transform_message = transform_err["message"].as_str().unwrap_or_default();
+    assert!(transform_message.contains("expected top-level shape:"));
+    assert!(transform_message.contains("minimal valid example:"));
+    assert!(transform_message.contains("\"kind\":\"fill_range\""));
+
+    let column_err = assert_error_code(
+        &[
+            "column-size-batch",
+            file,
+            "--ops",
+            column_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    let column_message = column_err["message"].as_str().unwrap_or_default();
+    assert!(column_message.contains("expected top-level shape:"));
+    assert!(column_message.contains("minimal valid example:"));
+    assert!(column_message.contains("\"sheet_name\":\"Sheet1\""));
+
+    let rules_err = assert_error_code(
+        &[
+            "rules-batch",
+            file,
+            "--ops",
+            rules_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+    let rules_message = rules_err["message"].as_str().unwrap_or_default();
+    assert!(rules_message.contains("expected top-level shape:"));
+    assert!(rules_message.contains("minimal valid example:"));
+    assert!(rules_message.contains("\"kind\":\"set_data_validation\""));
+}
+
+#[test]
 fn phase_b_safety_mode_matrix_for_structure_column_layout_commands() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("phase-b-safety.xlsx");
@@ -4869,6 +4966,9 @@ fn phase_c_help_examples_for_rules_command() {
             "rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
         )
     );
+    assert!(rules.contains("Payload examples (`--ops @rules_ops.json`):"));
+    assert!(rules.contains("\"kind\":\"set_data_validation\""));
+    assert!(rules.contains("\"kind\":\"set_conditional_format\""));
 }
 
 #[test]
