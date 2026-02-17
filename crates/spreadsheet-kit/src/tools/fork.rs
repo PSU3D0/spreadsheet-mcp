@@ -2364,7 +2364,8 @@ fn copy_or_move_range(
                             shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
                         }) {
                             Ok(shifted) => {
-                                let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                                let shifted =
+                                    shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
                                 dest_formula = Some(shifted);
                                 set_value = false;
                             }
@@ -2459,7 +2460,8 @@ fn copy_or_move_range(
                             shift_formula_ast(&ast, delta_col, delta_row, RelativeMode::Excel)
                         }) {
                             Ok(shifted) => {
-                                let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                                let shifted =
+                                    shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
                                 dest_formula = Some(shifted);
                                 set_value = false;
                             }
@@ -4692,7 +4694,12 @@ pub async fn apply_staged_change(
                 tokio::task::spawn_blocking({
                     let ops = payload.ops.clone();
                     let work_path = work_path.clone();
-                    move || crate::tools::rules_batch::apply_rules_ops_to_file(&work_path, &ops)
+                    let policy = payload.formula_parse_policy.unwrap_or(
+                        FormulaParsePolicy::default_for_command_class(CommandClass::BatchWrite),
+                    );
+                    move || {
+                        crate::tools::rules_batch::apply_rules_ops_to_file(&work_path, &ops, policy)
+                    }
                 })
                 .await??;
 

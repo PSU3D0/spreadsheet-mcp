@@ -1,4 +1,8 @@
 use crate::fork::{ChangeSummary, StagedChange, StagedOp};
+use crate::model::diagnostics::{
+    CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, validate_formula,
+};
 use crate::model::{FillDescriptor, WorkbookId};
 use crate::state::AppState;
 use crate::styles::descriptor_from_style;
@@ -25,6 +29,8 @@ pub struct RulesBatchParams {
     #[serde(default)]
     pub mode: Option<BatchMode>, // preview|apply (default apply)
     pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -150,11 +156,15 @@ pub struct RulesBatchResponse {
     pub change_id: Option<String>,
     pub ops_applied: usize,
     pub summary: ChangeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct RulesBatchStagedPayload {
     pub(crate) ops: Vec<RulesOp>,
+    #[serde(default)]
+    pub(crate) formula_parse_policy: Option<FormulaParsePolicy>,
 }
 
 pub async fn rules_batch(
@@ -184,6 +194,13 @@ pub async fn rules_batch(
         }
     }
 
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
+
     let mode = params.mode.unwrap_or_default();
 
     if mode.is_preview() {
@@ -195,7 +212,7 @@ pub async fn rules_batch(
         let snapshot_for_apply = snapshot_path.clone();
         let ops_for_apply = params.ops.clone();
         let apply_result = tokio::task::spawn_blocking(move || {
-            apply_rules_ops_to_file(&snapshot_for_apply, &ops_for_apply)
+            apply_rules_ops_to_file(&snapshot_for_apply, &ops_for_apply, policy)
         })
         .await??;
 
@@ -208,6 +225,7 @@ pub async fn rules_batch(
             kind: "rules_batch".to_string(),
             payload: serde_json::to_value(RulesBatchStagedPayload {
                 ops: params.ops.clone(),
+                formula_parse_policy: Some(policy),
             })?,
         };
         let staged = StagedChange {
@@ -226,12 +244,13 @@ pub async fn rules_batch(
             change_id: Some(change_id),
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
         })
     } else {
         let work_path_for_apply = work_path.clone();
         let ops_for_apply = params.ops.clone();
         let apply_result = tokio::task::spawn_blocking(move || {
-            apply_rules_ops_to_file(&work_path_for_apply, &ops_for_apply)
+            apply_rules_ops_to_file(&work_path_for_apply, &ops_for_apply, policy)
         })
         .await??;
 
@@ -248,6 +267,7 @@ pub async fn rules_batch(
             change_id: None,
             ops_applied: apply_result.ops_applied,
             summary,
+            formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
         })
     }
 }
@@ -255,9 +275,48 @@ pub async fn rules_batch(
 pub(crate) struct RulesApplyResult {
     pub(crate) ops_applied: usize,
     pub(crate) summary: ChangeSummary,
+    pub(crate) formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
-pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<RulesApplyResult> {
+/// Extract formula strings and field labels from a rules op for validation.
+/// Returns tuples of (sheet_name, field_label, formula_text).
+fn extract_rule_op_formulas(op: &RulesOp) -> Vec<(&str, &str, &str)> {
+    match op {
+        RulesOp::SetDataValidation {
+            sheet_name,
+            validation,
+            ..
+        } => {
+            let mut formulas = vec![(
+                sheet_name.as_str(),
+                "formula1",
+                validation.formula1.as_str(),
+            )];
+            if let Some(formula2) = &validation.formula2 {
+                formulas.push((sheet_name.as_str(), "formula2", formula2.as_str()));
+            }
+            formulas
+        }
+        RulesOp::AddConditionalFormat {
+            sheet_name, rule, ..
+        }
+        | RulesOp::SetConditionalFormat {
+            sheet_name, rule, ..
+        } => match rule {
+            ConditionalFormatRuleSpec::CellIs { formula, .. }
+            | ConditionalFormatRuleSpec::Expression { formula } => {
+                vec![(sheet_name.as_str(), "rule.formula", formula.as_str())]
+            }
+        },
+        RulesOp::ClearConditionalFormats { .. } => Vec::new(),
+    }
+}
+
+pub(crate) fn apply_rules_ops_to_file(
+    path: &Path,
+    ops: &[RulesOp],
+    policy: FormulaParsePolicy,
+) -> Result<RulesApplyResult> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
     let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
@@ -274,10 +333,59 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
     let mut conditional_formats_set_skipped: u64 = 0;
     let mut conditional_formats_cleared: u64 = 0;
 
+    let mut formula_parse_diagnostics_builder = FormulaParseDiagnosticsBuilder::new(policy);
+    let ops_to_apply: Vec<&RulesOp> = if policy == FormulaParsePolicy::Off {
+        ops.iter().collect()
+    } else {
+        let mut valid_ops = Vec::new();
+        for op in ops {
+            let formulas = extract_rule_op_formulas(op);
+            if formulas.is_empty() {
+                valid_ops.push(op);
+                continue;
+            }
+
+            let mut op_valid = true;
+            for (sheet_name, field, formula_text) in formulas {
+                let normalized = formula_text.trim();
+                let to_validate = normalized.strip_prefix('=').unwrap_or(normalized);
+                if to_validate.is_empty() {
+                    continue;
+                }
+
+                if let Err(err_msg) = validate_formula(to_validate) {
+                    if policy == FormulaParsePolicy::Fail {
+                        bail!(
+                            "{}{} in {}: {}",
+                            FORMULA_PARSE_FAILED_PREFIX,
+                            err_msg,
+                            field,
+                            formula_text
+                        );
+                    }
+                    formula_parse_diagnostics_builder.record_error(
+                        sheet_name,
+                        field,
+                        formula_text,
+                        &err_msg,
+                    );
+                    op_valid = false;
+                }
+            }
+
+            if op_valid {
+                valid_ops.push(op);
+            }
+        }
+        valid_ops
+    };
+
+    let ops_applied = ops_to_apply.len();
+
     let mut warned_not_parsed = false;
     let mut warned_cf_structure = false;
 
-    for op in ops {
+    for op in ops_to_apply {
         match op {
             RulesOp::SetDataValidation {
                 sheet_name,
@@ -291,7 +399,7 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
                 affected_sheets.insert(sheet_name.clone());
                 affected_bounds.push(target_range.clone());
 
-                if !warned_not_parsed {
+                if !warned_not_parsed && policy == FormulaParsePolicy::Off {
                     warnings.push(
                         "WARN_VALIDATION_FORMULA_NOT_PARSED: Validation formulas are applied verbatim (not parsed or validated)."
                             .to_string(),
@@ -397,8 +505,14 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
         conditional_formats_cleared,
     );
 
+    let formula_parse_diagnostics = if formula_parse_diagnostics_builder.has_errors() {
+        Some(formula_parse_diagnostics_builder.build())
+    } else {
+        None
+    };
+
     Ok(RulesApplyResult {
-        ops_applied: ops.len(),
+        ops_applied,
         summary: ChangeSummary {
             op_kinds: vec!["rules_batch".to_string()],
             affected_sheets: affected_sheets.into_iter().collect(),
@@ -407,6 +521,7 @@ pub(crate) fn apply_rules_ops_to_file(path: &Path, ops: &[RulesOp]) -> Result<Ru
             warnings,
             ..Default::default()
         },
+        formula_parse_diagnostics,
     })
 }
 
