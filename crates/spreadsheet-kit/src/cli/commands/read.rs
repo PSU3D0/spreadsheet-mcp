@@ -64,7 +64,12 @@ pub async fn sheet_overview(file: PathBuf, sheet: String) -> Result<Value> {
     Ok(serde_json::to_value(response)?)
 }
 
-pub async fn range_values(file: PathBuf, sheet: String, ranges: Vec<String>) -> Result<Value> {
+pub async fn range_values(
+    file: PathBuf,
+    sheet: String,
+    ranges: Vec<String>,
+    include_formulas: Option<bool>,
+) -> Result<Value> {
     if ranges.is_empty() {
         bail!("at least one range must be provided");
     }
@@ -78,6 +83,7 @@ pub async fn range_values(file: PathBuf, sheet: String, ranges: Vec<String>) -> 
             sheet_name: sheet,
             ranges,
             include_headers: None,
+            include_formulas,
             format: Some(TableOutputFormat::Json),
             page_size: None,
         },

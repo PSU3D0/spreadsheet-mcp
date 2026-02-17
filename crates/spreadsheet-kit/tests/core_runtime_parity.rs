@@ -130,6 +130,7 @@ fn cli_read_matches_mcp_tools_for_representative_commands() {
                 sheet_name: "Sheet1".to_string(),
                 ranges: vec!["A1:B3".to_string()],
                 include_headers: None,
+                include_formulas: None,
                 format: Some(spreadsheet_kit::model::TableOutputFormat::Json),
                 page_size: None,
             },

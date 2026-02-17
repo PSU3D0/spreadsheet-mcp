@@ -152,6 +152,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             sheet_name: "Inputs".into(),
             ranges: vec!["B2".into(), "B3:C3".into()],
             include_headers: Some(true),
+            include_formulas: None,
             format: None,
             page_size: None,
         },
