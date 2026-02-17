@@ -1,4 +1,5 @@
 use crate::cli::OutputFormat;
+use crate::model::{FORMULA_PARSE_FAILED, FORMULA_PARSE_FAILED_PREFIX};
 use anyhow::{Result, bail};
 use serde::Serialize;
 
@@ -115,6 +116,18 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             message,
             did_you_mean: Some("json".to_string()),
             try_this: Some("re-run with `--output-format json`".to_string()),
+        };
+    }
+
+    if message.starts_with(FORMULA_PARSE_FAILED_PREFIX) {
+        return ErrorEnvelope {
+            code: FORMULA_PARSE_FAILED.to_string(),
+            message,
+            did_you_mean: None,
+            try_this: Some(
+                "re-run with --formula-parse-policy warn to collect diagnostics instead of aborting"
+                    .to_string(),
+            ),
         };
     }
 
