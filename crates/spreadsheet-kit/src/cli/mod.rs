@@ -694,7 +694,8 @@ Payload examples (`--ops @column_size_ops.json`):
     {"sheet_name":"Sheet1","ops":[{"target":{"kind":"columns","range":"A:C"},"size":{"kind":"auto","min_width_chars":8.0,"max_width_chars":24.0}}]}
 
 Required envelope:
-  Top-level object with `sheet_name` and `ops`.
+  Preferred: top-level object with `sheet_name` and `ops`.
+  Also accepted: top-level `ops` where each op includes `sheet_name`.
   Each op requires `size.kind`; canonical form also includes `target.kind:"columns"`."#
     )]
     ColumnSizeBatch {

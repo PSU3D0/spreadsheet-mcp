@@ -75,6 +75,38 @@ struct ColumnSizeOpsPayload {
     ops: Vec<ColumnSizeOpInput>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ColumnSizeOpWithSheetInput {
+    Canonical {
+        sheet_name: String,
+        target: crate::tools::fork::ColumnTarget,
+        size: crate::tools::fork::ColumnSizeSpec,
+    },
+    Shorthand {
+        sheet_name: String,
+        range: String,
+        size: crate::tools::fork::ColumnSizeSpec,
+    },
+}
+
+impl ColumnSizeOpWithSheetInput {
+    fn sheet_name(&self) -> &str {
+        match self {
+            Self::Canonical { sheet_name, .. } | Self::Shorthand { sheet_name, .. } => sheet_name,
+        }
+    }
+
+    fn into_op_input(self) -> ColumnSizeOpInput {
+        match self {
+            Self::Canonical { target, size, .. } => {
+                ColumnSizeOpInput::Canonical(ColumnSizeOp { target, size })
+            }
+            Self::Shorthand { range, size, .. } => ColumnSizeOpInput::Shorthand { range, size },
+        }
+    }
+}
+
 const TRANSFORM_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<transform_kind>",...}]}"#;
 const TRANSFORM_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"A1:A1"},"value":"1"}]}"#;
 const STYLE_PAYLOAD_SHAPE: &str =
@@ -87,8 +119,12 @@ const STRUCTURE_PAYLOAD_MINIMAL_EXAMPLE: &str =
     r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#;
 const COLUMN_SIZE_PAYLOAD_SHAPE: &str =
     r#"{"sheet_name":"...","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
+const COLUMN_SIZE_PAYLOAD_ALTERNATE_SHAPE: &str =
+    r#"{"ops":[{"sheet_name":"...","range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
 const COLUMN_SIZE_PAYLOAD_MINIMAL_EXAMPLE: &str =
     r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
+const COLUMN_SIZE_PAYLOAD_ALTERNATE_EXAMPLE: &str =
+    r#"{"ops":[{"sheet_name":"Sheet1","range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
 const SHEET_LAYOUT_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<layout_kind>",...}]}"#;
 const SHEET_LAYOUT_PAYLOAD_MINIMAL_EXAMPLE: &str =
     r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#;
@@ -758,11 +794,7 @@ pub async fn column_size_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: ColumnSizeOpsPayload = parse_ops_payload(
-        &ops,
-        COLUMN_SIZE_PAYLOAD_SHAPE,
-        COLUMN_SIZE_PAYLOAD_MINIMAL_EXAMPLE,
-    )?;
+    let payload: ColumnSizeOpsPayload = parse_column_size_ops_payload(&ops)?;
     let (normalized_ops, base_warnings) =
         normalize_column_size_payload(payload.sheet_name.clone(), payload.ops)
             .map_err(|error| invalid_ops_payload(error.to_string()))?;
@@ -1119,15 +1151,7 @@ fn validate_batch_mode(
     ))
 }
 
-fn parse_ops_payload<T: DeserializeOwned>(
-    raw: &str,
-    expected_shape: &str,
-    minimal_example: &str,
-) -> Result<T> {
-    let guidance = format!(
-        "expected top-level shape: {expected_shape}; minimal valid example: {minimal_example}"
-    );
-
+fn parse_ops_payload_object(raw: &str, guidance: &str) -> Result<serde_json::Map<String, Value>> {
     let path = raw
         .strip_prefix('@')
         .ok_or_else(|| invalid_ops_payload("--ops must be provided as @<path>"))?;
@@ -1147,13 +1171,114 @@ fn parse_ops_payload<T: DeserializeOwned>(
         ))
     })?;
 
-    if !json_value.is_object() {
-        return Err(invalid_ops_payload(format!(
-            "ops payload must be a JSON object; {guidance}"
-        )));
+    let object = json_value.as_object().ok_or_else(|| {
+        invalid_ops_payload(format!("ops payload must be a JSON object; {guidance}"))
+    })?;
+
+    Ok(object.clone())
+}
+
+fn parse_column_size_ops_payload(raw: &str) -> Result<ColumnSizeOpsPayload> {
+    let guidance = format!(
+        "expected top-level shape: {} OR {}; minimal valid example: {} OR {}",
+        COLUMN_SIZE_PAYLOAD_SHAPE,
+        COLUMN_SIZE_PAYLOAD_ALTERNATE_SHAPE,
+        COLUMN_SIZE_PAYLOAD_MINIMAL_EXAMPLE,
+        COLUMN_SIZE_PAYLOAD_ALTERNATE_EXAMPLE,
+    );
+
+    let object = parse_ops_payload_object(raw, &guidance)?;
+
+    if object.contains_key("sheet_name") {
+        let top_level_sheet = object
+            .get("sheet_name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        if let (Some(top_level_sheet), Some(ops_array)) =
+            (top_level_sheet, object.get("ops").and_then(Value::as_array))
+        {
+            for (index, raw_entry) in ops_array.iter().enumerate() {
+                if let Some(per_op_sheet) = raw_entry
+                    .as_object()
+                    .and_then(|entry| entry.get("sheet_name"))
+                    .and_then(Value::as_str)
+                {
+                    if per_op_sheet != top_level_sheet {
+                        return Err(invalid_ops_payload(format!(
+                            "ops payload has mixed sheet_name values between top-level and ops[{index}] ('{}' vs '{}'); {guidance}",
+                            top_level_sheet, per_op_sheet
+                        )));
+                    }
+                }
+            }
+        }
+
+        return serde_json::from_value(Value::Object(object)).map_err(|error| {
+            invalid_ops_payload(format!(
+                "ops payload does not match required schema: {error}; {guidance}"
+            ))
+        });
     }
 
-    serde_json::from_value(json_value).map_err(|error| {
+    let ops_value = object.get("ops").ok_or_else(|| {
+        invalid_ops_payload(format!("ops payload must include 'ops'; {guidance}"))
+    })?;
+    let ops_array = ops_value.as_array().ok_or_else(|| {
+        invalid_ops_payload(format!(
+            "ops payload field 'ops' must be an array; {guidance}"
+        ))
+    })?;
+
+    let mut normalized_ops = Vec::with_capacity(ops_array.len());
+    let mut inferred_sheet_name: Option<String> = None;
+
+    for (index, raw_entry) in ops_array.iter().enumerate() {
+        let op_with_sheet: ColumnSizeOpWithSheetInput = serde_json::from_value(raw_entry.clone())
+            .map_err(|error| {
+            invalid_ops_payload(format!(
+                "ops payload does not match required schema at ops[{index}]: {error}; {guidance}"
+            ))
+        })?;
+
+        let sheet_name = op_with_sheet.sheet_name().to_string();
+        match &inferred_sheet_name {
+            Some(existing) if existing != &sheet_name => {
+                return Err(invalid_ops_payload(format!(
+                    "ops payload has mixed sheet_name values in per-op shape; found '{}' and '{}'; {guidance}",
+                    existing, sheet_name
+                )));
+            }
+            None => inferred_sheet_name = Some(sheet_name),
+            _ => {}
+        }
+
+        normalized_ops.push(op_with_sheet.into_op_input());
+    }
+
+    let sheet_name = inferred_sheet_name.ok_or_else(|| {
+        invalid_ops_payload(format!(
+            "ops payload must provide top-level sheet_name or per-op sheet_name values; {guidance}"
+        ))
+    })?;
+
+    Ok(ColumnSizeOpsPayload {
+        sheet_name,
+        ops: normalized_ops,
+    })
+}
+
+fn parse_ops_payload<T: DeserializeOwned>(
+    raw: &str,
+    expected_shape: &str,
+    minimal_example: &str,
+) -> Result<T> {
+    let guidance = format!(
+        "expected top-level shape: {expected_shape}; minimal valid example: {minimal_example}"
+    );
+    let object = parse_ops_payload_object(raw, &guidance)?;
+
+    serde_json::from_value(Value::Object(object)).map_err(|error| {
         invalid_ops_payload(format!(
             "ops payload does not match required schema: {error}; {guidance}"
         ))
