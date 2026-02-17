@@ -473,7 +473,27 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless transform operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --in-place\n  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force\n\nMode selection:\n  Choose exactly one of --dry-run, --in-place, or --output <PATH>.\n\nCache note:\n  Formula writes (FillRange with is_formula, ReplaceInRange with include_formulas) clear cached results.\n  Run recalculate to refresh computed values."
+        after_long_help = r#"Examples:
+  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run
+  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --in-place
+  agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force
+
+Mode selection:
+  Choose exactly one of --dry-run, --in-place, or --output <PATH>.
+
+Payload examples (`--ops @transform_ops.json`):
+  Minimal:
+    {"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B4"},"value":"0"}]}
+  Advanced:
+    {"ops":[{"kind":"replace_in_range","sheet_name":"Sheet1","target":{"kind":"region","region_id":1},"find":"N/A","replace":"","match_mode":"contains","case_sensitive":false,"include_formulas":true}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Each op requires a `kind` discriminator and command-specific required fields.
+
+Cache note:
+  Formula writes (FillRange with is_formula, ReplaceInRange with include_formulas) clear cached results.
+  Run recalculate to refresh computed values."#
     )]
     TransformBatch {
         #[arg(value_name = "FILE", help = "Workbook path to transform")]
@@ -509,7 +529,19 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless style operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --dry-run\n  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
+        after_long_help = r#"Examples:
+  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --dry-run
+  agent-spreadsheet style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force
+
+Payload examples (`--ops @style_ops.json`):
+  Minimal:
+    {"ops":[{"sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B2"},"patch":{"font":{"bold":true}}}]}
+  Advanced:
+    {"ops":[{"sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2","B3"]},"patch":{"number_format":"$#,##0.00","alignment":{"horizontal":"right"}},"op_mode":"merge"}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Style ops require `sheet_name`, `target`, and `patch` (no top-level op `kind`)."#
     )]
     StyleBatch {
         #[arg(value_name = "FILE", help = "Workbook path to style")]
@@ -535,7 +567,22 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless formula pattern operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place\n  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run\n\nCache note:\n  Updated formula cells clear cached results. Run recalculate to refresh computed values."
+        after_long_help = r#"Examples:
+  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place
+  agent-spreadsheet apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run
+
+Payload examples (`--ops @formula_ops.json`):
+  Minimal:
+    {"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*2"}]}
+  Advanced:
+    {"ops":[{"sheet_name":"Sheet1","target_range":"C2:E4","anchor_cell":"C2","base_formula":"B2*2","fill_direction":"both","relative_mode":"excel"}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Each op requires `sheet_name`, `target_range`, `anchor_cell`, and `base_formula`.
+
+Cache note:
+  Updated formula cells clear cached results. Run recalculate to refresh computed values."#
     )]
     ApplyFormulaPattern {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -564,7 +611,23 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless structure operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --dry-run\n  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx\n\nCache note:\n  Structural operations that rewrite formula references (row/column insert/delete, sheet rename,\n  copy/move) clear cached formula results. Run recalculate to refresh computed values."
+        after_long_help = r#"Examples:
+  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --dry-run
+  agent-spreadsheet structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx
+
+Payload examples (`--ops @structure_ops.json`):
+  Minimal:
+    {"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}
+  Advanced:
+    {"ops":[{"kind":"copy_range","sheet_name":"Sheet1","dest_sheet_name":"Summary","src_range":"A1:C4","dest_anchor":"A1","include_styles":true,"include_formulas":true}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Each op requires a `kind` discriminator and kind-specific required fields.
+
+Cache note:
+  Structural operations that rewrite formula references (row/column insert/delete, sheet rename,
+  copy/move) clear cached formula results. Run recalculate to refresh computed values."#
     )]
     StructureBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -600,7 +663,19 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless column sizing operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --in-place\n  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
+        after_long_help = r#"Examples:
+  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --in-place
+  agent-spreadsheet column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx
+
+Payload examples (`--ops @column_size_ops.json`):
+  Minimal:
+    {"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}
+  Advanced:
+    {"sheet_name":"Sheet1","ops":[{"target":{"kind":"columns","range":"A:C"},"size":{"kind":"auto","min_width_chars":8.0,"max_width_chars":24.0}}]}
+
+Required envelope:
+  Top-level object with `sheet_name` and `ops`.
+  Each op requires `size.kind`; canonical form also includes `target.kind:"columns"`."#
     )]
     ColumnSizeBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -629,7 +704,19 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless sheet layout operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run\n  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place"
+        after_long_help = r#"Examples:
+  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run
+  agent-spreadsheet sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place
+
+Payload examples (`--ops @layout_ops.json`):
+  Minimal:
+    {"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}
+  Advanced:
+    {"ops":[{"kind":"set_page_setup","sheet_name":"Sheet1","orientation":"landscape","fit_to_width":1,"fit_to_height":1}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Each op requires a `kind` discriminator plus kind-specific required fields."#
     )]
     SheetLayoutBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -658,7 +745,23 @@ pub enum Commands {
     },
     #[command(
         about = "Apply stateless data validation and conditional format operations from an @ops payload",
-        after_long_help = "Examples:\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --dry-run\n  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force\n\nNote:\n  Data-validation and conditional-format formulas are rule-level (not cell-level) and do not affect\n  cell formula caches. No recalculate is needed after rules-batch operations."
+        after_long_help = r##"Examples:
+  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --dry-run
+  agent-spreadsheet rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force
+
+Payload examples (`--ops @rules_ops.json`):
+  Minimal:
+    {"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}
+  Advanced:
+    {"ops":[{"kind":"set_conditional_format","sheet_name":"Sheet1","target_range":"C2:C10","rule":{"kind":"expression","formula":"C2>100"},"style":{"fill_color":"#FFF2CC","bold":true}}]}
+
+Required envelope:
+  Top-level object with an `ops` array.
+  Each op requires a `kind` discriminator and kind-specific required fields.
+
+Note:
+  Data-validation and conditional-format formulas are rule-level (not cell-level) and do not affect
+  cell formula caches. No recalculate is needed after rules-batch operations."##
     )]
     RulesBatch {
         #[arg(value_name = "FILE", help = "Workbook path to update")]

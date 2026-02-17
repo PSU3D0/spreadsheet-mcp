@@ -52,6 +52,26 @@ struct ColumnSizeOpsPayload {
     ops: Vec<ColumnSizeOpInput>,
 }
 
+const TRANSFORM_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<transform_kind>",...}]}"#;
+const TRANSFORM_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"fill_range","sheet_name":"Sheet1","target":{"kind":"range","range":"A1:A1"},"value":"1"}]}"#;
+const STYLE_PAYLOAD_SHAPE: &str =
+    r#"{"ops":[{"sheet_name":"...","target":{"kind":"range","range":"A1"},"patch":{...}}]}"#;
+const STYLE_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B2"},"patch":{"font":{"bold":true}}}]}"#;
+const APPLY_FORMULA_PATTERN_PAYLOAD_SHAPE: &str = r#"{"ops":[{"sheet_name":"...","target_range":"A1:A1","anchor_cell":"A1","base_formula":"..."}]}"#;
+const APPLY_FORMULA_PATTERN_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*2"}]}"#;
+const STRUCTURE_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<structure_kind>",...}]}"#;
+const STRUCTURE_PAYLOAD_MINIMAL_EXAMPLE: &str =
+    r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}"#;
+const COLUMN_SIZE_PAYLOAD_SHAPE: &str =
+    r#"{"sheet_name":"...","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
+const COLUMN_SIZE_PAYLOAD_MINIMAL_EXAMPLE: &str =
+    r#"{"sheet_name":"Sheet1","ops":[{"range":"A:A","size":{"kind":"width","width_chars":12.0}}]}"#;
+const SHEET_LAYOUT_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<layout_kind>",...}]}"#;
+const SHEET_LAYOUT_PAYLOAD_MINIMAL_EXAMPLE: &str =
+    r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#;
+const RULES_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<rules_kind>",...}]}"#;
+const RULES_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#;
+
 #[derive(Debug)]
 enum BatchMutationMode {
     DryRun,
@@ -194,7 +214,11 @@ pub async fn transform_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<TransformOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<TransformOp> = parse_ops_payload(
+        &ops,
+        TRANSFORM_PAYLOAD_SHAPE,
+        TRANSFORM_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
 
     let (state, workbook_id) = runtime.open_state_for_file(&source).await?;
     let workbook = state.open_workbook(&workbook_id).await?;
@@ -322,7 +346,8 @@ pub async fn style_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<StyleOpInput> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<StyleOpInput> =
+        parse_ops_payload(&ops, STYLE_PAYLOAD_SHAPE, STYLE_PAYLOAD_MINIMAL_EXAMPLE)?;
     let (normalized, base_warnings) = normalize_style_batch(StyleBatchParamsInput {
         fork_id: String::new(),
         ops: payload.ops,
@@ -426,8 +451,11 @@ pub async fn apply_formula_pattern(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<ApplyFormulaPatternOpInput> =
-        parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<ApplyFormulaPatternOpInput> = parse_ops_payload(
+        &ops,
+        APPLY_FORMULA_PATTERN_PAYLOAD_SHAPE,
+        APPLY_FORMULA_PATTERN_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
 
     let op_count = payload.ops.len();
     let operation_counts = summarize_formula_pattern_operation_counts(&payload.ops);
@@ -523,7 +551,11 @@ pub async fn structure_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<StructureOpInput> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<StructureOpInput> = parse_ops_payload(
+        &ops,
+        STRUCTURE_PAYLOAD_SHAPE,
+        STRUCTURE_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
     let (normalized, base_warnings) = normalize_structure_batch(StructureBatchParamsInput {
         fork_id: String::new(),
         ops: payload.ops,
@@ -635,8 +667,11 @@ pub async fn column_size_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: ColumnSizeOpsPayload =
-        parse_ops_payload(&ops, r#"{"sheet_name":"...","ops":[...]}"#)?;
+    let payload: ColumnSizeOpsPayload = parse_ops_payload(
+        &ops,
+        COLUMN_SIZE_PAYLOAD_SHAPE,
+        COLUMN_SIZE_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
     let (normalized_ops, base_warnings) =
         normalize_column_size_payload(payload.sheet_name.clone(), payload.ops)
             .map_err(|error| invalid_ops_payload(error.to_string()))?;
@@ -741,7 +776,11 @@ pub async fn sheet_layout_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<SheetLayoutOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<SheetLayoutOp> = parse_ops_payload(
+        &ops,
+        SHEET_LAYOUT_PAYLOAD_SHAPE,
+        SHEET_LAYOUT_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
 
     let op_count = payload.ops.len();
     let operation_counts = summarize_sheet_layout_operation_counts(&payload.ops);
@@ -829,7 +868,8 @@ pub async fn rules_batch(
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
 
-    let payload: OpsPayload<RulesOp> = parse_ops_payload(&ops, r#"{"ops":[...]}"#)?;
+    let payload: OpsPayload<RulesOp> =
+        parse_ops_payload(&ops, RULES_PAYLOAD_SHAPE, RULES_PAYLOAD_MINIMAL_EXAMPLE)?;
 
     let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
         CommandClass::BatchWrite,
@@ -951,7 +991,15 @@ fn validate_batch_mode(
     ))
 }
 
-fn parse_ops_payload<T: DeserializeOwned>(raw: &str, schema_hint: &str) -> Result<T> {
+fn parse_ops_payload<T: DeserializeOwned>(
+    raw: &str,
+    expected_shape: &str,
+    minimal_example: &str,
+) -> Result<T> {
+    let guidance = format!(
+        "expected top-level shape: {expected_shape}; minimal valid example: {minimal_example}"
+    );
+
     let path = raw
         .strip_prefix('@')
         .ok_or_else(|| invalid_ops_payload("--ops must be provided as @<path>"))?;
@@ -966,19 +1014,20 @@ fn parse_ops_payload<T: DeserializeOwned>(raw: &str, schema_hint: &str) -> Resul
     })?;
 
     let json_value: serde_json::Value = serde_json::from_str(&raw_payload).map_err(|error| {
-        invalid_ops_payload(format!("ops payload is not valid JSON: {}", error))
+        invalid_ops_payload(format!(
+            "ops payload is not valid JSON: {error}; {guidance}"
+        ))
     })?;
 
     if !json_value.is_object() {
-        return Err(invalid_ops_payload(
-            "ops payload must be a JSON object with top-level key 'ops'",
-        ));
+        return Err(invalid_ops_payload(format!(
+            "ops payload must be a JSON object; {guidance}"
+        )));
     }
 
     serde_json::from_value(json_value).map_err(|error| {
         invalid_ops_payload(format!(
-            "ops payload does not match required schema {}: {}",
-            schema_hint, error
+            "ops payload does not match required schema: {error}; {guidance}"
         ))
     })
 }
