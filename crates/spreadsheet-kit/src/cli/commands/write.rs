@@ -37,6 +37,29 @@ struct EditResponse {
     edits_applied: usize,
     recalc_needed: bool,
     warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    affected_cells: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditDryRunResponse {
+    file: String,
+    sheet: String,
+    edits_provided: usize,
+    edits_validated: usize,
+    would_change: bool,
+    recalc_needed: bool,
+    warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    affected_cells: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
@@ -71,6 +94,13 @@ const SHEET_LAYOUT_PAYLOAD_MINIMAL_EXAMPLE: &str =
     r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#;
 const RULES_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<rules_kind>",...}]}"#;
 const RULES_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#;
+
+#[derive(Debug)]
+enum EditMutationMode {
+    DryRun,
+    InPlace,
+    Output { target: PathBuf, force: bool },
+}
 
 #[derive(Debug)]
 enum BatchMutationMode {
@@ -131,6 +161,10 @@ pub async fn edit(
     file: PathBuf,
     sheet: String,
     edits: Vec<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
     formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     if edits.is_empty() {
@@ -138,7 +172,8 @@ pub async fn edit(
     }
 
     let runtime = StatelessRuntime;
-    let file = runtime.normalize_existing_file(&file)?;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
 
     let mut normalized_edits = Vec::with_capacity(edits.len());
     let mut warnings = Vec::new();
@@ -151,6 +186,7 @@ pub async fn edit(
             message: warning.message,
         }));
     }
+    let edits_provided = normalized_edits.len();
 
     let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
         CommandClass::SingleWrite,
@@ -189,16 +225,71 @@ pub async fn edit(
         (valid_edits, diagnostics)
     };
 
-    runtime.apply_edits(&file, &sheet, &edits_to_write)?;
+    let affected_cells = edits_to_write
+        .iter()
+        .map(|edit| edit.address.clone())
+        .collect::<Vec<_>>();
+    let changed = !edits_to_write.is_empty();
+    let sheet_name = sheet;
 
-    Ok(serde_json::to_value(EditResponse {
-        file: file.display().to_string(),
-        sheet,
-        edits_applied: edits_to_write.len(),
-        recalc_needed: true,
-        warnings,
-        formula_parse_diagnostics,
-    })?)
+    match mode {
+        EditMutationMode::DryRun => {
+            let _ = apply_to_temp_copy(&source, source.parent(), ".edit-", |path| {
+                runtime.apply_edits(path, &sheet_name, &edits_to_write)
+            })?;
+
+            Ok(serde_json::to_value(EditDryRunResponse {
+                file: source.display().to_string(),
+                sheet: sheet_name,
+                edits_provided,
+                edits_validated: edits_to_write.len(),
+                would_change: changed,
+                recalc_needed: false,
+                warnings,
+                affected_cells,
+                formula_parse_diagnostics,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            apply_in_place_with_temp(&source, ".edit-", |path| {
+                runtime.apply_edits(path, &sheet_name, &edits_to_write)
+            })?;
+
+            Ok(serde_json::to_value(EditResponse {
+                file: source.display().to_string(),
+                sheet: sheet_name,
+                edits_applied: edits_to_write.len(),
+                recalc_needed: true,
+                warnings,
+                affected_cells,
+                source_path: None,
+                target_path: None,
+                changed: Some(changed),
+                formula_parse_diagnostics,
+            })?)
+        }
+        EditMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            apply_to_output_with_temp(&source, &target, force, ".edit-", |path| {
+                runtime.apply_edits(path, &sheet_name, &edits_to_write)
+            })?;
+
+            Ok(serde_json::to_value(EditResponse {
+                file: target.display().to_string(),
+                sheet: sheet_name,
+                edits_applied: edits_to_write.len(),
+                recalc_needed: true,
+                warnings,
+                affected_cells,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                changed: Some(changed),
+                formula_parse_diagnostics,
+            })?)
+        }
+    }
 }
 
 pub async fn transform_batch(
@@ -946,6 +1037,43 @@ pub async fn rules_batch(
             )
         }
     }
+}
+
+fn validate_edit_mode(
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<EditMutationMode> {
+    if force && output.is_none() {
+        return Err(invalid_argument("--force requires --output <PATH>"));
+    }
+
+    if dry_run {
+        if in_place {
+            return Err(invalid_argument(
+                "--dry-run cannot be combined with --in-place",
+            ));
+        }
+        if output.is_some() {
+            return Err(invalid_argument(
+                "--dry-run cannot be combined with --output <PATH>",
+            ));
+        }
+        return Ok(EditMutationMode::DryRun);
+    }
+
+    if in_place && output.is_some() {
+        return Err(invalid_argument(
+            "--in-place cannot be combined with --output <PATH>",
+        ));
+    }
+
+    if let Some(target) = output {
+        return Ok(EditMutationMode::Output { target, force });
+    }
+
+    Ok(EditMutationMode::InPlace)
 }
 
 fn validate_batch_mode(
