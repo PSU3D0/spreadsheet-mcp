@@ -158,6 +158,27 @@ This doc captures ergonomic frictions observed in recent agent traces (fork/reca
 - Makes "make it readable" a one-call operation.
 - Reduces retries and screenshot churn.
 
+### 4d) Financial presentation defaults (practical starter profile)
+
+For generated financial workbooks, use a small default polish pass so first-open readability is acceptable in Excel + LibreOffice:
+
+- **Column A readability**
+  - Set explicit width (`24–36` chars depending on label verbosity).
+  - Left-align labels and enable wrap for long category names.
+  - Avoid very narrow defaults (`~8.38`) on label columns.
+
+- **Number format consistency**
+  - Currency: `"$"#,##0.00_);[Red]("$"#,##0.00)` (or locale-appropriate currency code).
+  - Percent: `0.0%` (or `0.00%` for tighter sensitivity).
+  - Integer/counts: `#,##0`.
+
+- **Starter sequence**
+  1. `column-size-batch` for key label/value columns.
+  2. `style-batch` for number formats + alignment.
+  3. `sheet-layout-batch` freeze panes once headers are stable.
+
+This keeps functional sheets readable without introducing a full theme/preset framework.
+
 ---
 
 ### 5) Recalc changeset noise / semantics aren’t obvious
