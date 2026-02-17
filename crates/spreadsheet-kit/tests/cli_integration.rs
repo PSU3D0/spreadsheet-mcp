@@ -5462,3 +5462,357 @@ fn cli_edit_valid_formula_succeeds_with_default_policy() {
         "no diagnostics for valid formula"
     );
 }
+
+// ─── 3204: structure-batch tokenizer policy + diagnostics tests ───
+
+#[test]
+fn cli_structure_batch_rename_with_malformed_formula_warn_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("structure-rename-warn.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value("Hello");
+        }
+        workbook.new_sheet("Sheet2").expect("add Sheet2");
+        {
+            let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
+            sheet.get_cell_mut("A1").set_value_number(10.0);
+            sheet
+                .get_cell_mut("B1")
+                .set_formula("SUM(\"Sheet1!A1:A10)");
+        }
+        umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Sheet1","new_name":"Renamed"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["applied_count"], 1);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics object");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_structure_batch_rename_with_malformed_formula_fail_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("structure-rename-fail.xlsx");
+    let output_path = tmp.path().join("structure-rename-fail-output.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value("Hello");
+        }
+        workbook.new_sheet("Sheet2").expect("add Sheet2");
+        {
+            let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
+            sheet.get_cell_mut("A1").set_value_number(10.0);
+            sheet
+                .get_cell_mut("B1")
+                .set_formula("SUM(\"Sheet1!A1:A10)");
+        }
+        umya_spreadsheet::writer::xlsx::write(&workbook, &source_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Sheet1","new_name":"Renamed"}]}"#,
+    );
+
+    let file = source_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        out,
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "should fail");
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+    assert!(!output_path.exists(), "output should not be created on fail");
+}
+
+#[test]
+fn cli_structure_batch_insert_rows_with_malformed_formula_warn_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("structure-insert-warn.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value_number(1.0);
+            sheet.get_cell_mut("A2").set_value_number(2.0);
+        }
+        workbook.new_sheet("Sheet2").expect("add Sheet2");
+        {
+            let sheet = workbook.get_sheet_by_name_mut("Sheet2").expect("Sheet2");
+            sheet
+                .get_cell_mut("A1")
+                .set_formula("SUM(\"Sheet1!A1:A10)");
+            sheet.get_cell_mut("B1").set_formula("Sheet1!A1+1");
+        }
+        umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":1,"count":2}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["applied_count"], 1);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics object");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_structure_batch_rename_defined_name_malformed_formula_warn_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("structure-defname-warn.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value_number(42.0);
+        }
+        let workbook_scoped_bad_range = {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet
+                .add_defined_name("BadRange", "=SUM(\"abc)")
+                .expect("defined name BadRange");
+            sheet
+                .get_defined_names()
+                .first()
+                .expect("sheet defined name")
+                .clone()
+        };
+        workbook.add_defined_names(workbook_scoped_bad_range);
+
+        umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Sheet1","new_name":"Data"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(diagnostics.is_object(), "expected formula_parse_diagnostics");
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+
+    let groups = diagnostics["groups"].as_array().expect("groups array");
+    assert!(!groups.is_empty(), "should have at least one error group");
+    let first_group = &groups[0];
+    assert_eq!(
+        first_group["sheet_name"],
+        "[DefinedName]",
+        "defined name errors should use [DefinedName] as sheet_name"
+    );
+}
+
+#[test]
+fn cli_structure_batch_no_malformed_formulas_no_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("structure-clean.xlsx");
+    write_fixture(&workbook_path);
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Results"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert!(
+        payload["formula_parse_diagnostics"].is_null(),
+        "should have no diagnostics when all formulas are valid"
+    );
+}
+
+#[test]
+fn cli_structure_batch_copy_range_with_malformed_formula_warn_mode_diagnostics() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("structure-copy-warn.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value_number(1.0);
+            sheet.get_cell_mut("A2").set_value_number(2.0);
+            // Malformed formula that parse_base_formula will fail on
+            sheet.get_cell_mut("B1").set_formula("SUM(A1:A2");
+        }
+        umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"copy_range","sheet_name":"Sheet1","src_range":"A1:B2","dest_anchor":"D1","include_styles":false,"include_formulas":true}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--formula-parse-policy",
+        "warn",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["applied_count"], 1);
+
+    let diagnostics = &payload["formula_parse_diagnostics"];
+    assert!(
+        diagnostics.is_object(),
+        "expected formula_parse_diagnostics for copy with malformed formula"
+    );
+    assert_eq!(diagnostics["policy"], "warn");
+    assert!(diagnostics["total_errors"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+fn cli_structure_batch_copy_range_with_malformed_formula_fail_mode_aborts() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("structure-copy-fail.xlsx");
+    let output_path = tmp.path().join("structure-copy-fail-output.xlsx");
+
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        {
+            let sheet = workbook
+                .get_sheet_by_name_mut("Sheet1")
+                .expect("default sheet");
+            sheet.get_cell_mut("A1").set_value_number(1.0);
+            sheet.get_cell_mut("B1").set_formula("SUM(A1:A2");
+        }
+        umya_spreadsheet::writer::xlsx::write(&workbook, &source_path).expect("write");
+    }
+
+    let ops_path = tmp.path().join("ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"copy_range","sheet_name":"Sheet1","src_range":"A1:B1","dest_anchor":"D1","include_styles":false,"include_formulas":true}]}"#,
+    );
+
+    let file = source_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops path utf8"));
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--output",
+        out,
+        "--formula-parse-policy",
+        "fail",
+    ]);
+    assert!(!output.status.success(), "should fail with fail policy");
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], "FORMULA_PARSE_FAILED");
+    assert!(
+        !output_path.exists(),
+        "output should not be created on fail mode abort"
+    );
+}
