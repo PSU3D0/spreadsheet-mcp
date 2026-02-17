@@ -135,6 +135,7 @@ All batch payloads use a top-level envelope object. Most commands require `{"ops
 ##### apply-formula-pattern payloads (`@formula_ops.json`)
 - Minimal: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*2"}]}`
 - Advanced: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:E4","anchor_cell":"C2","base_formula":"B2*2","fill_direction":"both","relative_mode":"excel"}]}`
+- `relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`
 
 ##### structure-batch payloads (`@structure_ops.json`)
 - Minimal: `{"ops":[{"kind":"rename_sheet","old_name":"Summary","new_name":"Dashboard"}]}`

@@ -599,6 +599,7 @@ Payload examples (`--ops @formula_ops.json`):
 Required envelope:
   Top-level object with an `ops` array.
   Each op requires `sheet_name`, `target_range`, `anchor_cell`, and `base_formula`.
+  `relative_mode` valid values: excel|abs_cols|abs_rows.
 
 Cache note:
   Updated formula cells clear cached results. Run recalculate to refresh computed values."#

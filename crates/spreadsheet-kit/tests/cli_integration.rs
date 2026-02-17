@@ -455,6 +455,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "##### transform-batch payloads (`@transform_ops.json`)",
         "##### style-batch payloads (`@style_ops.json`)",
         "##### apply-formula-pattern payloads (`@formula_ops.json`)",
+        "relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`",
         "##### structure-batch payloads (`@structure_ops.json`)",
         "##### column-size-batch payloads (`@column_size_ops.json`)",
         "##### sheet-layout-batch payloads (`@layout_ops.json`)",
@@ -3624,6 +3625,7 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     assert!(formula.contains("Payload examples (`--ops @formula_ops.json`):"));
     assert!(formula.contains("\"target_range\":\"C2:C4\""));
     assert!(formula.contains("\"fill_direction\":\"both\""));
+    assert!(formula.contains("relative_mode` valid values: excel|abs_cols|abs_rows"));
     assert!(formula.contains(
         "Updated formula cells clear cached results. Run recalculate to refresh computed values."
     ));
@@ -4005,6 +4007,37 @@ fn phase_a_negative_invalid_ops_payloads() {
         ],
         "INVALID_OPS_PAYLOAD",
     );
+}
+
+#[test]
+fn phase_a_invalid_relative_mode_reports_valid_literals_and_suggestion() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-a-invalid-relative-mode.xlsx");
+    let formula_bad_path = tmp.path().join("formula-bad-relative-mode.json");
+    write_fixture(&workbook_path);
+    write_ops_payload(
+        &formula_bad_path,
+        r#"{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*3","fill_direction":"down","relative_mode":"fully_relative"}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let formula_ref = format!("@{}", formula_bad_path.to_str().expect("ops utf8"));
+
+    let err = assert_error_code(
+        &[
+            "apply-formula-pattern",
+            file,
+            "--ops",
+            formula_ref.as_str(),
+            "--dry-run",
+        ],
+        "INVALID_OPS_PAYLOAD",
+    );
+
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(message.contains("invalid relative_mode 'fully_relative'"));
+    assert!(message.contains("Did you mean 'excel'?"));
+    assert!(message.contains("valid: excel|abs_cols|abs_rows"));
 }
 
 #[test]
@@ -5401,6 +5434,24 @@ fn cli_errors_use_machine_envelope() {
             .unwrap_or_default()
             .contains("list-sheets")
     );
+}
+
+#[test]
+fn docs_guardrail_relative_mode_literals_are_canonical() {
+    let readme = read_repo_doc("README.md");
+    let npm_readme = read_repo_doc("npm/agent-spreadsheet/README.md");
+
+    assert!(
+        readme.contains("relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`"),
+        "README should document canonical relative_mode literals"
+    );
+
+    for doc in [&readme, &npm_readme] {
+        assert!(
+            !doc.contains("fully_relative"),
+            "docs should not advertise invalid relative_mode literal fully_relative"
+        );
+    }
 }
 
 #[test]
