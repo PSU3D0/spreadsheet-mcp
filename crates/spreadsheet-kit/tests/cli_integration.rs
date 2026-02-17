@@ -371,6 +371,18 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(range.contains("--include-formulas"));
     assert!(range.contains("formulas matrix"));
 
+    let inspect_help = run_cli(&["inspect-cells", "--help"]);
+    assert!(
+        inspect_help.status.success(),
+        "stderr: {:?}",
+        inspect_help.stderr
+    );
+    let inspect = parse_stdout_text(&inspect_help);
+    assert!(
+        inspect.contains("Inspect one A1 range and return per-cell formula/value/style snapshots")
+    );
+    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C10"));
+
     let sheet_page_help = run_cli(&["sheet-page", "--help"]);
     assert!(
         sheet_page_help.status.success(),
@@ -468,6 +480,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
         "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
+        "`inspect-cells <file> <sheet> <range>`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Compact (single range):** flatten that entry to top-level fields",
@@ -3272,6 +3285,54 @@ fn cli_range_values_shape_compact_multi_range_preserves_next_start_row_without_f
             .iter()
             .any(|entry| entry.get("range").and_then(Value::as_str) == Some("B1:B2"))
     );
+}
+
+#[test]
+fn cli_inspect_cells_returns_unified_snapshot() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "B2:C2"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["sheet_name"], "Sheet1");
+    assert_eq!(payload["range"], "B2:C2");
+    assert_eq!(payload["truncated"], Value::Bool(false));
+
+    let cells = payload["cells"].as_array().expect("cells array");
+    assert_eq!(cells.len(), 2);
+
+    let b2 = cells
+        .iter()
+        .find(|cell| cell["address"] == "B2")
+        .expect("B2 snapshot");
+    assert!(b2["formula"].is_null());
+    assert!(b2.get("value").is_some());
+
+    let c2 = cells
+        .iter()
+        .find(|cell| cell["address"] == "C2")
+        .expect("C2 snapshot");
+    assert_eq!(c2["formula"], Value::String("B2*2".to_string()));
+}
+
+#[test]
+fn cli_inspect_cells_large_range_truncates_to_limits() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-large.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "A1:XFD10"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    assert_eq!(payload["truncated"], Value::Bool(true));
+    let cells = payload["cells"].as_array().expect("cells array");
+    assert!(!cells.is_empty());
+    assert!(cells.len() <= 10_000);
 }
 
 #[test]

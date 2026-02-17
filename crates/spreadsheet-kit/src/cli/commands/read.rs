@@ -14,8 +14,8 @@ use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
     DescribeWorkbookParams, FindFormulaParams, FindValueParams, FormulaSortBy, FormulaTraceParams,
-    ListSheetsParams, NamedRangesParams, RangeValuesParams, ReadTableParams, SampleMode,
-    ScanVolatilesParams, SheetFormulaMapParams, SheetOverviewParams, SheetPageParams,
+    InspectCellsParams, ListSheetsParams, NamedRangesParams, RangeValuesParams, ReadTableParams,
+    SampleMode, ScanVolatilesParams, SheetFormulaMapParams, SheetOverviewParams, SheetPageParams,
     SheetStatisticsParams, TableFilter, TableProfileParams,
 };
 
@@ -86,6 +86,22 @@ pub async fn range_values(
             include_formulas,
             format: Some(TableOutputFormat::Json),
             page_size: None,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn inspect_cells(file: PathBuf, sheet: String, range: String) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+    let response = tools::inspect_cells(
+        state,
+        InspectCellsParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: sheet,
+            range,
         },
     )
     .await?;

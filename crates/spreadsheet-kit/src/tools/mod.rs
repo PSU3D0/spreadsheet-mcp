@@ -748,6 +748,17 @@ pub struct RangeValuesParams {
     pub page_size: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectCellsParams {
+    /// Workbook ID or fork ID
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
+    pub sheet_name: String,
+    /// Single A1 range to inspect
+    pub range: String,
+}
+
 pub async fn sheet_page(
     state: Arc<AppState>,
     params: SheetPageParams,
@@ -3736,6 +3747,78 @@ pub async fn range_values(
         sheet_name: params.sheet_name,
         warnings,
         values,
+    })
+}
+
+pub async fn inspect_cells(
+    state: Arc<AppState>,
+    params: InspectCellsParams,
+) -> Result<InspectCellsResponse> {
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let config = state.config();
+    let max_cells = config.max_cells().unwrap_or(10_000);
+    let max_payload_bytes = config.max_payload_bytes();
+
+    let ((start_col, start_row), (end_col, end_row)) =
+        parse_range(&params.range).ok_or_else(|| {
+            anyhow!(
+                "invalid range '{}'; expected A1 notation like A1:C10",
+                params.range
+            )
+        })?;
+
+    let total_cells = ((end_col - start_col + 1) as usize) * ((end_row - start_row + 1) as usize);
+
+    let mut cells = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let mut cells = Vec::new();
+        'rows: for row in start_row..=end_row {
+            for col in start_col..=end_col {
+                if cells.len() >= max_cells {
+                    break 'rows;
+                }
+                if let Some(cell) = sheet.get_cell((col, row)) {
+                    cells.push(build_cell_snapshot(cell, true, true));
+                } else {
+                    cells.push(CellSnapshot {
+                        address: format!("{}{}", column_number_to_name(col), row),
+                        value: None,
+                        formula: None,
+                        cached_value: None,
+                        number_format: None,
+                        style_tags: Vec::new(),
+                        notes: Vec::new(),
+                    });
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(cells)
+    })??;
+
+    let mut truncated = cells.len() < total_cells;
+
+    let cell_limit = cap_rows_by_payload_bytes(cells.len(), max_payload_bytes, |count| {
+        let response = InspectCellsResponse {
+            workbook_id: workbook.id.clone(),
+            sheet_name: params.sheet_name.clone(),
+            range: params.range.clone(),
+            cells: cells[..count].to_vec(),
+            truncated: false,
+        };
+        serde_json::to_vec(&response)
+            .map(|payload| payload.len())
+            .unwrap_or(usize::MAX)
+    });
+    if cell_limit < cells.len() {
+        cells.truncate(cell_limit);
+        truncated = true;
+    }
+
+    Ok(InspectCellsResponse {
+        workbook_id: workbook.id.clone(),
+        sheet_name: params.sheet_name,
+        range: params.range,
+        cells,
+        truncated,
     })
 }
 

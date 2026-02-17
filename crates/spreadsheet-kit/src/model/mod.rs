@@ -929,6 +929,15 @@ pub struct RangeValuesEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InspectCellsResponse {
+    pub workbook_id: WorkbookId,
+    pub sheet_name: String,
+    pub range: String,
+    pub cells: Vec<CellSnapshot>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseWorkbookResponse {
     pub workbook_id: WorkbookId,
     pub message: String,

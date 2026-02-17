@@ -2,9 +2,9 @@ use anyhow::Result;
 use spreadsheet_kit as spreadsheet_mcp;
 use spreadsheet_mcp::model::{SheetPageFormat, TableOutputFormat};
 use spreadsheet_mcp::tools::{
-    FindValueParams, ListSheetsParams, RangeValuesParams, ReadTableParams, SheetOverviewParams,
-    SheetPageParams, TableProfileParams, find_value, list_workbooks, range_values, read_table,
-    sheet_overview, sheet_page, table_profile,
+    FindValueParams, InspectCellsParams, ListSheetsParams, RangeValuesParams, ReadTableParams,
+    SheetOverviewParams, SheetPageParams, TableProfileParams, find_value, inspect_cells,
+    list_workbooks, range_values, read_table, sheet_overview, sheet_page, table_profile,
 };
 use umya_spreadsheet::Spreadsheet;
 
@@ -161,6 +161,24 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
     let ranges_json = serde_json::to_value(&ranges)?;
     assert!(ranges_json.get("workbook_short_id").is_none());
     assert_eq!(ranges.values.len(), 2);
+
+    let inspected = inspect_cells(
+        state.clone(),
+        InspectCellsParams {
+            workbook_or_fork_id: workbook_id.clone(),
+            sheet_name: "Inputs".into(),
+            range: "B2:C3".into(),
+        },
+    )
+    .await?;
+    assert_eq!(inspected.range, "B2:C3");
+    assert_eq!(inspected.cells.len(), 4);
+    assert!(
+        inspected
+            .cells
+            .iter()
+            .any(|cell| cell.address == "B2" && cell.value.is_some())
+    );
 
     let values_only = sheet_page(
         state,
