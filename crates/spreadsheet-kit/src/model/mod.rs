@@ -914,6 +914,12 @@ pub struct RangeValuesEntry {
     pub range: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<Vec<Vec<Option<CellValue>>>>,
+    /// Formula text matrix aligned to `rows` when `include_formulas=true`.
+    ///
+    /// Each entry is `Some(formula_text)` for formula-driven cells and `None`
+    /// for literal/non-formula cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formulas: Option<Vec<Vec<Option<String>>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
     #[serde(skip_serializing_if = "Option::is_none")]

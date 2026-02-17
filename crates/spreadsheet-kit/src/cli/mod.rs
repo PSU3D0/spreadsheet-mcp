@@ -129,7 +129,7 @@ pub enum Commands {
     },
     #[command(
         about = "Read raw values for one or more A1 ranges",
-        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range."
+        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20 --include-formulas\n\nFormula semantics:\n  By default, range-values returns resolved cell values only.\n  Use --include-formulas to include a parallel formulas matrix for formula-driven cells.\n  In JSON output, formulas[row][col] is Some(formula_text) for formula cells and null for literal cells.\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range."
     )]
     RangeValues {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -141,6 +141,14 @@ pub enum Commands {
             help = "One or more A1 ranges (for example A1:C10)"
         )]
         ranges: Vec<String>,
+        #[arg(
+            long = "include-formulas",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include formula text matrix aligned with returned JSON rows (default false)"
+        )]
+        include_formulas: Option<bool>,
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
@@ -840,7 +848,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             file,
             sheet,
             ranges,
-        } => commands::read::range_values(file, sheet, ranges).await,
+            include_formulas,
+        } => commands::read::range_values(file, sheet, ranges, include_formulas).await,
         Commands::SheetPage {
             file,
             sheet,
@@ -1344,6 +1353,34 @@ mod tests {
                 assert_eq!(cursor_depth, Some(2));
                 assert_eq!(cursor_offset, Some(5));
                 assert!(matches!(direction, TraceDirectionArg::Dependents));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_values_include_formulas_flag() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-values",
+            "workbook.xlsx",
+            "Sheet1",
+            "A1:C10",
+            "--include-formulas",
+        ])
+        .expect("parse command");
+
+        match cli.command {
+            Commands::RangeValues {
+                file,
+                sheet,
+                ranges,
+                include_formulas,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(ranges, vec!["A1:C10".to_string()]);
+                assert_eq!(include_formulas, Some(true));
             }
             other => panic!("unexpected command: {other:?}"),
         }

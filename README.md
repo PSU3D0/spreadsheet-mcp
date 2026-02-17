@@ -196,6 +196,7 @@ Errors are grouped by structural pattern — formulas that differ only in cell r
 Shape policy:
 - **Canonical (default/omitted):** preserve the full response schema.
 - **range-values canonical:** return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).
+- **range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows` (formula cells have formula text; literal cells are `null`).
 - **Compact (single range):** flatten that entry to top-level fields (`range`, payload, and optional `next_start_row`).
 - **Compact (multiple ranges):** keep `values: [...]` with per-entry `range` for correlation.
 - **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
@@ -213,7 +214,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `describe <file>` | Workbook metadata |
 | `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
-| `range-values <file> <sheet> <range> [range...]` | Raw cell values for one or more ranges |
+| `range-values <file> <sheet> <range> [range...] [--include-formulas]` | Raw cell values, optionally with aligned formula text matrix |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |

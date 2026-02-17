@@ -368,6 +368,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(range.contains("Read raw values for one or more A1 ranges"));
     assert!(range.contains("Examples:"));
     assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
+    assert!(range.contains("--include-formulas"));
+    assert!(range.contains("formulas matrix"));
 
     let sheet_page_help = run_cli(&["sheet-page", "--help"]);
     assert!(
@@ -464,7 +466,8 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "top-level envelope object",
         "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
-        "`range-values <file> <sheet> <range> [range...]`",
+        "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
+        "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Compact (single range):** flatten that entry to top-level fields",
@@ -3032,6 +3035,58 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     assert!(compact_payload.get("values").is_none());
     assert_eq!(compact_payload["range"], "A1:C4");
     assert!(compact_payload.get("rows").is_some());
+}
+
+#[test]
+fn cli_range_values_include_formulas_returns_formula_matrix() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("range-values-include-formulas.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let with_formulas = run_cli(&[
+        "range-values",
+        file,
+        "Sheet1",
+        "C2:C4",
+        "--include-formulas",
+    ]);
+    assert!(
+        with_formulas.status.success(),
+        "stderr: {:?}",
+        with_formulas.stderr
+    );
+    let payload = parse_stdout_json(&with_formulas);
+    let entry = payload["values"]
+        .as_array()
+        .expect("values array")
+        .first()
+        .cloned()
+        .expect("range entry");
+
+    let formulas = entry["formulas"].as_array().expect("formulas matrix rows");
+    assert_eq!(formulas.len(), 3);
+    assert_eq!(formulas[0][0].as_str(), Some("B2*2"));
+    assert_eq!(formulas[1][0].as_str(), Some("B3*2"));
+    assert_eq!(formulas[2][0].as_str(), Some("B4*2"));
+
+    let default_output = run_cli(&["range-values", file, "Sheet1", "C2:C4"]);
+    assert!(
+        default_output.status.success(),
+        "stderr: {:?}",
+        default_output.stderr
+    );
+    let default_payload = parse_stdout_json(&default_output);
+    let default_entry = default_payload["values"]
+        .as_array()
+        .expect("values array")
+        .first()
+        .cloned()
+        .expect("range entry");
+    assert!(
+        default_entry.get("formulas").is_none(),
+        "default range-values output should not include formulas field"
+    );
 }
 
 #[test]
