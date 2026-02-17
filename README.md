@@ -215,6 +215,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...] [--include-formulas]` | Raw cell values, optionally with aligned formula text matrix |
+| `inspect-cells <file> <sheet> <range>` | Unified per-cell formula/value/cached/style snapshot for triage |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |

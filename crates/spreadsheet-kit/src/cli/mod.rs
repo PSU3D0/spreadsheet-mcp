@@ -129,7 +129,7 @@ pub enum Commands {
     },
     #[command(
         about = "Read raw values for one or more A1 ranges",
-        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20 --include-formulas\n\nFormula semantics:\n  By default, range-values returns resolved cell values only.\n  Use --include-formulas to include a parallel formulas matrix for formula-driven cells.\n  In JSON output, formulas[row][col] is Some(formula_text) for formula cells and null for literal cells.\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range."
+        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20 --include-formulas\n\nFormula semantics:\n  By default, range-values returns resolved cell values only.\n  Use --include-formulas to include a parallel formulas matrix for formula-driven cells.\n  In JSON output, formulas[row][col] is Some(formula_text) for formula cells and null for literal cells.\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range.\n\nRelated:\n  Use inspect-cells when you need formula + value + style metadata in one response."
     )]
     RangeValues {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -149,6 +149,23 @@ pub enum Commands {
             help = "Include formula text matrix aligned with returned JSON rows (default false)"
         )]
         include_formulas: Option<bool>,
+    },
+    #[command(
+        about = "Inspect one A1 range and return per-cell formula/value/style snapshots",
+        after_long_help = "Examples:
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C10
+  agent-spreadsheet inspect-cells data.xlsx \"Q1 Actuals\" D4:F12
+
+inspect-cells is a triage-friendly read surface that combines formula text, value/cached_value, and style metadata per cell.
+For broader discovery, pair with range-values, find-formula, and formula-trace."
+    )]
+    InspectCells {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name containing the range")]
+        sheet: String,
+        #[arg(value_name = "RANGE", help = "Single A1 range to inspect")]
+        range: String,
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
@@ -308,7 +325,7 @@ pub enum Commands {
     },
     #[command(
         about = "Find formulas containing a text query with pagination",
-        after_long_help = "Examples:\n  agent-spreadsheet find-formula data.xlsx SUM(\n  agent-spreadsheet find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50"
+        after_long_help = "Examples:\n  agent-spreadsheet find-formula data.xlsx SUM(\n  agent-spreadsheet find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50\n\nRelated:\n  Use inspect-cells for per-cell formula/value/cached/style snapshots in a target range."
     )]
     FindFormula {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -389,7 +406,7 @@ pub enum Commands {
     },
     #[command(
         about = "Trace formula precedents or dependents from one origin cell",
-        after_long_help = "Examples:\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --depth 2\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 dependents --page-size 25\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --cursor-depth 1 --cursor-offset 25\n\nContinuation:\n  Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset to continue paged traces."
+        after_long_help = "Examples:\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --depth 2\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 dependents --page-size 25\n  agent-spreadsheet formula-trace data.xlsx Sheet1 C2 precedents --cursor-depth 1 --cursor-offset 25\n\nContinuation:\n  Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset to continue paged traces.\n\nRelated:\n  Use inspect-cells for a local per-cell triage view that includes formula/value/cached/style metadata."
     )]
     FormulaTrace {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -850,6 +867,9 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             ranges,
             include_formulas,
         } => commands::read::range_values(file, sheet, ranges, include_formulas).await,
+        Commands::InspectCells { file, sheet, range } => {
+            commands::read::inspect_cells(file, sheet, range).await
+        }
         Commands::SheetPage {
             file,
             sheet,
@@ -1381,6 +1401,27 @@ mod tests {
                 assert_eq!(sheet, "Sheet1");
                 assert_eq!(ranges, vec!["A1:C10".to_string()]);
                 assert_eq!(include_formulas, Some(true));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_inspect_cells_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "inspect-cells",
+            "workbook.xlsx",
+            "Sheet1",
+            "A1:C10",
+        ])
+        .expect("parse command");
+
+        match cli.command {
+            Commands::InspectCells { file, sheet, range } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(range, "A1:C10");
             }
             other => panic!("unexpected command: {other:?}"),
         }
