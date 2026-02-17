@@ -3,9 +3,9 @@ use crate::config::RecalcBackendKind;
 use crate::fork::{ChangeSummary, EditOp, StagedChange, StagedOp};
 use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{
-    AlignmentPatch, BordersPatch, CommandClass, FillPatch, FontPatch, FormulaParseDiagnostics,
-    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, PatternFillPatch,
-    FORMULA_PARSE_FAILED_PREFIX, StylePatch, Warning, WorkbookId, validate_formula,
+    AlignmentPatch, BordersPatch, CommandClass, FORMULA_PARSE_FAILED_PREFIX, FillPatch, FontPatch,
+    FormulaParseDiagnostics, FormulaParseDiagnosticsBuilder, FormulaParsePolicy, PatternFillPatch,
+    StylePatch, Warning, WorkbookId, validate_formula,
 };
 use crate::recalc::RecalcBackend;
 use crate::security::sanitize_filename_component;
@@ -99,11 +99,12 @@ pub async fn edit_batch(
     state: Arc<AppState>,
     params: EditBatchParamsInput,
 ) -> Result<EditBatchResponse> {
-    let policy = params
-        .formula_parse_policy
-        .unwrap_or(FormulaParsePolicy::default_for_command_class(
-            CommandClass::BatchWrite,
-        ));
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
     let (params, warnings) = normalize_edit_batch(params)?;
 
     let (edits_to_write, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
@@ -388,11 +389,12 @@ pub async fn transform_batch(
 
     let resolved_ops = resolve_transform_ops_for_workbook(&workbook, &params.ops)?;
 
-    let policy = params
-        .formula_parse_policy
-        .unwrap_or(FormulaParsePolicy::default_for_command_class(
-            CommandClass::BatchWrite,
-        ));
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
 
     let (ops_to_apply, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
         (resolved_ops, None)
@@ -1760,11 +1762,12 @@ pub async fn structure_batch(
     params: StructureBatchParamsInput,
 ) -> Result<StructureBatchResponse> {
     let (params, warnings) = normalize_structure_batch(params)?;
-    let policy = params
-        .formula_parse_policy
-        .unwrap_or(FormulaParsePolicy::default_for_command_class(
-            CommandClass::BatchWrite,
-        ));
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
     let alias_warnings: Vec<String> = warnings
         .into_iter()
         .map(|warning| format!("{}: {}", warning.code, warning.message))
@@ -4837,9 +4840,9 @@ pub async fn screenshot_sheet(
         let _ = workbook_path;
         let _ = output_path;
         let _ = bounds;
-        return Err(anyhow!(
+        Err(anyhow!(
             "screenshot backend unavailable (build without recalc-libreoffice feature)"
-        ));
+        ))
     }
 
     #[cfg(feature = "recalc-libreoffice")]

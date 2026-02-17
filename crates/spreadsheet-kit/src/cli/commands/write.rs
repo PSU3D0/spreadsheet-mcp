@@ -132,10 +132,9 @@ pub async fn edit(
         }));
     }
 
-    let policy = formula_parse_policy
-        .unwrap_or(FormulaParsePolicy::default_for_command_class(
-            CommandClass::SingleWrite,
-        ));
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
+        CommandClass::SingleWrite,
+    ));
 
     let (edits_to_write, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
         (normalized_edits, None)
@@ -534,11 +533,12 @@ pub async fn structure_batch(
     })
     .map_err(|error| invalid_ops_payload(error.to_string()))?;
 
-    let policy = normalized
-        .formula_parse_policy
-        .unwrap_or(FormulaParsePolicy::default_for_command_class(
-            CommandClass::BatchWrite,
-        ));
+    let policy =
+        normalized
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
 
     let op_count = normalized.ops.len();
     let operation_counts = summarize_structure_operation_counts(&normalized.ops);

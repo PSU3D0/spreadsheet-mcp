@@ -86,6 +86,7 @@ pub async fn range_values(file: PathBuf, sheet: String, ranges: Vec<String>) -> 
     Ok(serde_json::to_value(response)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn sheet_page(
     file: PathBuf,
     sheet: String,
@@ -135,6 +136,7 @@ pub async fn describe(file: PathBuf) -> Result<Value> {
     Ok(serde_json::to_value(response)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn read_table(
     file: PathBuf,
     sheet: Option<String>,
@@ -356,6 +358,7 @@ pub async fn formula_map(
     Ok(serde_json::to_value(response)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn formula_trace(
     file: PathBuf,
     sheet: String,
@@ -528,12 +531,12 @@ fn validate_read_table_arguments(
 ) -> Result<()> {
     validate_positive_limit(limit, "--limit")?;
 
-    if offset.unwrap_or(0) > 0 {
-        if let Some(TableSampleModeArg::Last | TableSampleModeArg::Distributed) = sample_mode {
-            return Err(invalid_argument(
-                "--offset greater than 0 requires --sample-mode first",
-            ));
-        }
+    if offset.unwrap_or(0) > 0
+        && let Some(TableSampleModeArg::Last | TableSampleModeArg::Distributed) = sample_mode
+    {
+        return Err(invalid_argument(
+            "--offset greater than 0 requires --sample-mode first",
+        ));
     }
 
     Ok(())
