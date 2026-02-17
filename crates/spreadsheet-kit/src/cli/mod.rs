@@ -511,7 +511,10 @@ Formula shorthand:
 
 Cache note:
   Formula edits (values starting with =) clear cached results.
-  Run recalculate to refresh computed values."#
+  Run recalculate to refresh computed values.
+
+Diagnostics note:
+  Formula writes include write_path_provenance (written_via + formula_targets)."#
     )]
     Edit {
         #[arg(value_name = "FILE", help = "Workbook path to modify")]
@@ -561,7 +564,10 @@ Required envelope:
 
 Cache note:
   Formula writes (FillRange with is_formula, ReplaceInRange with include_formulas) clear cached results.
-  Run recalculate to refresh computed values."#
+  Run recalculate to refresh computed values.
+
+Diagnostics note:
+  Formula writes include write_path_provenance (written_via + formula_targets)."#
     )]
     TransformBatch {
         #[arg(value_name = "FILE", help = "Workbook path to transform")]
@@ -651,7 +657,10 @@ Required envelope:
   `relative_mode` valid values: excel|abs_cols|abs_rows.
 
 Cache note:
-  Updated formula cells clear cached results. Run recalculate to refresh computed values."#
+  Updated formula cells clear cached results. Run recalculate to refresh computed values.
+
+Diagnostics note:
+  Formula writes include write_path_provenance (written_via + formula_targets)."#
     )]
     ApplyFormulaPattern {
         #[arg(value_name = "FILE", help = "Workbook path to update")]

@@ -250,6 +250,16 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `recalculate <file>` | Recalculate formulas via backend |
 | `diff <original> <modified>` | Diff two workbook versions |
 
+#### Formula write-path provenance (`write_path_provenance`)
+Formula-writing commands emit optional provenance metadata for troubleshooting:
+- `written_via`: write path (`edit`, `transform_batch`, `apply_formula_pattern`)
+- `formula_targets`: sheet/cell or sheet/range targets touched by formula writes
+
+Debug compare workflow (same-target by write path):
+1. Apply the same formula target via two paths (for example `edit` vs `apply-formula-pattern`).
+2. Compare `write_path_provenance.written_via` and `formula_targets` in responses.
+3. Use `inspect-cells` plus `recalculate` to compare resulting behavior.
+
 ---
 
 ## Quickstart: MCP Server
