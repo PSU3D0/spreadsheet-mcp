@@ -505,6 +505,10 @@ Mode selection:
   Default behavior (no mode flags): in-place edit of the source workbook.
   Optional explicit modes: --dry-run, --in-place, or --output <PATH>.
 
+Formula shorthand:
+  Use double equals for formulas, e.g. C2==SUM(A1:A10).
+  Single equals writes a literal value/text, e.g. C2=SUM(A1:A10).
+
 Cache note:
   Formula edits (values starting with =) clear cached results.
   Run recalculate to refresh computed values."#

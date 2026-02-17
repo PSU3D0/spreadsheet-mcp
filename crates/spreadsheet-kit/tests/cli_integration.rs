@@ -5572,6 +5572,29 @@ fn cli_create_workbook_rejects_existing_file_without_overwrite() {
 }
 
 #[test]
+fn cli_edit_invalid_shorthand_error_suggests_formula_double_equals() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("edit-invalid-shorthand.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["edit", file, "Sheet1", "A1"]);
+    assert!(!output.status.success(), "expected non-zero status");
+    let error = parse_stderr_json(&output);
+    assert_eq!(
+        error["code"],
+        Value::String("INVALID_EDIT_SYNTAX".to_string())
+    );
+
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(message.contains("invalid shorthand edit"));
+    assert!(
+        message.contains("double equals") || message.contains("==SUM"),
+        "error should include corrective formula shorthand hint: {message}"
+    );
+}
+
+#[test]
 fn cli_copy_edit_diff_are_stateless_and_persisted() {
     let tmp = tempdir().expect("tempdir");
     let original = tmp.path().join("original.xlsx");
@@ -6789,5 +6812,11 @@ fn edit_help_mentions_formula_cache_and_modes() {
             && combined.contains("--in-place")
             && combined.contains("--output"),
         "edit help should mention dry-run/in-place/output modes"
+    );
+    assert!(
+        combined.contains("Formula shorthand")
+            && combined.contains("double equals")
+            && combined.contains("Single equals writes a literal"),
+        "edit help should clearly explain formula shorthand syntax"
     );
 }

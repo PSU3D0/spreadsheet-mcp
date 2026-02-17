@@ -239,7 +239,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
 | `create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
-| `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42`, `B2==SUM(...)`) |
+| `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
 | `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
 | `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |

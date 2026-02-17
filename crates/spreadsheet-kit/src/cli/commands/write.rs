@@ -137,6 +137,8 @@ const SHEET_LAYOUT_PAYLOAD_MINIMAL_EXAMPLE: &str =
     r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#;
 const RULES_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<rules_kind>",...}]}"#;
 const RULES_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#;
+const EDIT_FORMULA_HINT: &str =
+    "Tip: formulas in edit shorthand use double equals, e.g. A1==SUM(B1:B5).";
 
 #[derive(Debug)]
 enum EditMutationMode {
@@ -289,7 +291,12 @@ pub async fn edit(
     let mut warnings = Vec::new();
     for (idx, entry) in edits.into_iter().enumerate() {
         let (edit, entry_warnings) = crate::core::write::normalize_shorthand_edit(&entry)
-            .with_context(|| format!("invalid shorthand edit at index {}", idx))?;
+            .with_context(|| {
+                format!(
+                    "invalid shorthand edit at index {}. {}",
+                    idx, EDIT_FORMULA_HINT
+                )
+            })?;
         normalized_edits.push(edit);
         warnings.extend(entry_warnings.into_iter().map(|warning| Warning {
             code: warning.code,
