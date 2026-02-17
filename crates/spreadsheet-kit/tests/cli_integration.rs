@@ -358,6 +358,17 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(diff.contains("Examples:"));
     assert!(diff.contains("diff baseline.xlsx candidate.xlsx"));
 
+    let create_help = run_cli(&["create-workbook", "--help"]);
+    assert!(
+        create_help.status.success(),
+        "stderr: {:?}",
+        create_help.stderr
+    );
+    let create = parse_stdout_text(&create_help);
+    assert!(create.contains("Create a new workbook at a destination path"));
+    assert!(create.contains("create-workbook new.xlsx"));
+    assert!(create.contains("--sheets"));
+
     let range_help = run_cli(&["range-values", "--help"]);
     assert!(
         range_help.status.success(),
@@ -481,6 +492,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
         "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
         "`inspect-cells <file> <sheet> <range>`",
+        "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Compact (single range):** flatten that entry to top-level fields",
@@ -5462,6 +5474,55 @@ fn phase_c_rules_batch_maps_write_failures_and_preserves_source() {
 
     let after = fs::read(&source_path).expect("read source after write failure");
     assert_eq!(before, after, "source workbook changed after write failure");
+}
+
+#[test]
+fn cli_create_workbook_bootstraps_read_write_flow() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("bootstrap.xlsx");
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let create = run_cli(&["create-workbook", file, "--sheets", "Inputs,Calc,Output"]);
+    assert!(create.status.success(), "stderr: {:?}", create.stderr);
+    let payload = parse_stdout_json(&create);
+    assert_eq!(payload["path"], Value::String(file.to_string()));
+    assert_eq!(payload["overwritten"], Value::Bool(false));
+
+    let list = run_cli(&["list-sheets", file]);
+    assert!(list.status.success(), "stderr: {:?}", list.stderr);
+    let list_payload = parse_stdout_json(&list);
+    let sheet_names: Vec<_> = list_payload["sheets"]
+        .as_array()
+        .expect("sheets array")
+        .iter()
+        .filter_map(|entry| entry["name"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(sheet_names, vec!["Inputs", "Calc", "Output"]);
+
+    let edit = run_cli(&["edit", file, "Inputs", "A1=42"]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    #[cfg(feature = "recalc")]
+    {
+        let recalc = run_cli(&["recalculate", file]);
+        assert!(recalc.status.success(), "stderr: {:?}", recalc.stderr);
+    }
+}
+
+#[test]
+fn cli_create_workbook_rejects_existing_file_without_overwrite() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("existing.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["create-workbook", file]);
+    assert!(!output.status.success(), "expected non-zero status");
+    let error = parse_stderr_json(&output);
+    assert_eq!(error["code"], Value::String("COMMAND_FAILED".to_string()));
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"));
+    assert!(message.contains("--overwrite"));
 }
 
 #[test]

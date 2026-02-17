@@ -467,6 +467,26 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
         #[arg(long, value_name = "SHEET", help = "Optional sheet to profile")]
         sheet: Option<String>,
     },
+    #[command(
+        about = "Create a new workbook at a destination path",
+        after_long_help = "Examples:
+  agent-spreadsheet create-workbook new.xlsx
+  agent-spreadsheet create-workbook model.xlsx --sheets Inputs,Calc,Output
+  agent-spreadsheet create-workbook model.xlsx --overwrite"
+    )]
+    CreateWorkbook {
+        #[arg(value_name = "PATH", help = "Destination workbook path")]
+        path: PathBuf,
+        #[arg(
+            long,
+            value_name = "SHEETS",
+            value_delimiter = ',',
+            help = "Comma-separated sheet names (default: Sheet1)"
+        )]
+        sheets: Option<Vec<String>>,
+        #[arg(long, help = "Overwrite destination file when it exists")]
+        overwrite: bool,
+    },
     #[command(about = "Copy a workbook to a new path for safe edits")]
     Copy {
         #[arg(value_name = "SOURCE", help = "Original workbook path")]
@@ -986,6 +1006,11 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         }
         Commands::Describe { file } => commands::read::describe(file).await,
         Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
+        Commands::CreateWorkbook {
+            path,
+            sheets,
+            overwrite,
+        } => commands::write::create_workbook(path, sheets, overwrite).await,
         Commands::Copy { source, dest } => commands::write::copy(source, dest).await,
         Commands::Edit {
             file,
@@ -1476,6 +1501,39 @@ mod tests {
                 assert_eq!(include_styles, Some(true));
                 assert_eq!(include_header, Some(true));
                 assert!(matches!(format, SheetPageFormatArg::Compact));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_create_workbook_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "create-workbook",
+            "workbook.xlsx",
+            "--sheets",
+            "Inputs,Calc,Output",
+            "--overwrite",
+        ])
+        .expect("parse create-workbook");
+
+        match cli.command {
+            Commands::CreateWorkbook {
+                path,
+                sheets,
+                overwrite,
+            } => {
+                assert_eq!(path, PathBuf::from("workbook.xlsx"));
+                assert_eq!(
+                    sheets,
+                    Some(vec![
+                        "Inputs".to_string(),
+                        "Calc".to_string(),
+                        "Output".to_string(),
+                    ])
+                );
+                assert!(overwrite);
             }
             other => panic!("unexpected command: {other:?}"),
         }
