@@ -7,7 +7,8 @@ use crate::cli::{
     TableSampleModeArg, TraceDirectionArg,
 };
 use crate::model::{
-    FindMode, LabelDirection, SheetPageFormat, TableOutputFormat, TraceCursor, TraceDirection,
+    FindMode, FormulaParsePolicy, LabelDirection, SheetPageFormat, TableOutputFormat, TraceCursor,
+    TraceDirection,
 };
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
@@ -280,6 +281,7 @@ pub async fn scan_volatiles(
     sheet: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     validate_positive_limit(limit, "--limit")?;
 
@@ -300,6 +302,7 @@ pub async fn scan_volatiles(
             addresses_limit: None,
             limit,
             offset,
+            formula_parse_policy,
         },
     )
     .await?;
@@ -329,6 +332,7 @@ pub async fn formula_map(
     sheet: String,
     limit: Option<u32>,
     sort_by: Option<FormulaSort>,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
@@ -345,6 +349,7 @@ pub async fn formula_map(
             summary_only: None,
             include_addresses: None,
             addresses_limit: None,
+            formula_parse_policy,
         },
     )
     .await?;
@@ -360,6 +365,7 @@ pub async fn formula_trace(
     page_size: Option<usize>,
     cursor_depth: Option<u32>,
     cursor_offset: Option<usize>,
+    formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
     validate_formula_trace_arguments(depth, page_size)?;
     let cursor = build_trace_cursor(cursor_depth, cursor_offset)?;
@@ -378,6 +384,7 @@ pub async fn formula_trace(
             limit: None,
             page_size,
             cursor,
+            formula_parse_policy,
         },
     )
     .await?;

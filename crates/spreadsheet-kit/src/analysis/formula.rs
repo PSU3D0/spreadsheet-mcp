@@ -1,6 +1,8 @@
-use crate::model::FormulaGroup;
+use crate::model::{
+    FORMULA_PARSE_FAILED_PREFIX, FormulaGroup, FormulaParseDiagnosticsBuilder, FormulaParsePolicy,
+};
 use crate::utils::column_number_to_name;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use formualizer_parse::{
     ASTNode,
     parser::{BatchParser, CollectPolicy, ReferenceType},
@@ -112,7 +114,12 @@ struct RangeDependentEntry {
 }
 
 impl FormulaGraph {
-    pub fn build(sheet: &Worksheet, atlas: &FormulaAtlas) -> Result<Self> {
+    pub fn build(
+        sheet: &Worksheet,
+        atlas: &FormulaAtlas,
+        policy: FormulaParsePolicy,
+        mut diagnostics: Option<&mut FormulaParseDiagnosticsBuilder>,
+    ) -> Result<Self> {
         let sheet_name = sheet.get_name().to_string();
         let mut precedents_build: HashMap<String, HashSet<String>> = HashMap::new();
         let mut dependents_build: HashMap<String, HashSet<String>> = HashMap::new();
@@ -159,7 +166,38 @@ impl FormulaGraph {
                                     fallback_error = %fallback_err,
                                     "skipping unparsable formula cell"
                                 );
-                                None
+
+                                match policy {
+                                    FormulaParsePolicy::Off => None,
+                                    FormulaParsePolicy::Warn => {
+                                        if let Some(diag) = diagnostics.as_deref_mut() {
+                                            diag.record_error(
+                                                &sheet_name,
+                                                &address,
+                                                &formula_with_prefix,
+                                                &fallback_err.to_string(),
+                                            );
+                                        }
+                                        None
+                                    }
+                                    FormulaParsePolicy::Fail => {
+                                        if let Some(diag) = diagnostics.as_deref_mut() {
+                                            diag.record_error(
+                                                &sheet_name,
+                                                &address,
+                                                &formula_with_prefix,
+                                                &fallback_err.to_string(),
+                                            );
+                                        }
+                                        return Err(anyhow!(
+                                            "{}sheet '{}' cell {}: {}",
+                                            FORMULA_PARSE_FAILED_PREFIX,
+                                            sheet_name,
+                                            address,
+                                            fallback_err
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }

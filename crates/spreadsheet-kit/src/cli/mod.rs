@@ -2,6 +2,7 @@ pub mod commands;
 pub mod errors;
 pub mod output;
 
+use crate::model::FormulaParsePolicy;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::Value;
@@ -334,6 +335,13 @@ pub enum Commands {
         limit: Option<u32>,
         #[arg(long, value_name = "N", help = "Entry offset for continuation")]
         offset: Option<u32>,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
         about = "Compute per-sheet statistics for density and column types",
@@ -363,6 +371,13 @@ pub enum Commands {
             help = "Sort groups by complexity or count"
         )]
         sort_by: Option<FormulaSort>,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
         about = "Trace formula precedents or dependents from one origin cell",
@@ -404,6 +419,13 @@ pub enum Commands {
             help = "Continuation cursor offset (must be paired with --cursor-depth)"
         )]
         cursor_offset: Option<usize>,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail, warn (default), or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(about = "Describe workbook-level metadata and sheet counts")]
     Describe {
@@ -742,7 +764,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             limit,
             offset,
-        } => commands::read::scan_volatiles(file, sheet, limit, offset).await,
+            formula_parse_policy,
+        } => commands::read::scan_volatiles(file, sheet, limit, offset, formula_parse_policy).await,
         Commands::SheetStatistics { file, sheet } => {
             commands::read::sheet_statistics(file, sheet).await
         }
@@ -751,7 +774,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             limit,
             sort_by,
-        } => commands::read::formula_map(file, sheet, limit, sort_by).await,
+            formula_parse_policy,
+        } => commands::read::formula_map(file, sheet, limit, sort_by, formula_parse_policy).await,
         Commands::FormulaTrace {
             file,
             sheet,
@@ -761,6 +785,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             page_size,
             cursor_depth,
             cursor_offset,
+            formula_parse_policy,
         } => {
             commands::read::formula_trace(
                 file,
@@ -771,6 +796,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                 page_size,
                 cursor_depth,
                 cursor_offset,
+                formula_parse_policy,
             )
             .await
         }
@@ -1401,11 +1427,13 @@ mod tests {
                 sheet,
                 limit,
                 offset,
+                formula_parse_policy,
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
                 assert_eq!(limit, Some(10));
                 assert_eq!(offset, Some(5));
+                assert!(formula_parse_policy.is_none());
             }
             other => panic!("unexpected command: {other:?}"),
         }

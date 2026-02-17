@@ -192,7 +192,14 @@ fn formula_graph_extracts_precedents() {
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
     let atlas = FormulaAtlas::default();
     let graph = ctx
-        .with_sheet("Sheet1", |sheet| FormulaGraph::build(sheet, &atlas))
+        .with_sheet("Sheet1", |sheet| {
+            FormulaGraph::build(
+                sheet,
+                &atlas,
+                spreadsheet_mcp::model::FormulaParsePolicy::Warn,
+                None,
+            )
+        })
         .unwrap()
         .unwrap();
 
@@ -246,7 +253,14 @@ fn large_range_dependents_found_via_containment() {
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
     let atlas = FormulaAtlas::default();
     let graph = ctx
-        .with_sheet("Sheet1", |sheet| FormulaGraph::build(sheet, &atlas))
+        .with_sheet("Sheet1", |sheet| {
+            FormulaGraph::build(
+                sheet,
+                &atlas,
+                spreadsheet_mcp::model::FormulaParsePolicy::Warn,
+                None,
+            )
+        })
         .unwrap()
         .unwrap();
 
@@ -294,7 +308,14 @@ fn cross_sheet_dependents_traced() {
     let atlas = FormulaAtlas::default();
 
     let calc_graph = ctx
-        .with_sheet("Calc", |sheet| FormulaGraph::build(sheet, &atlas))
+        .with_sheet("Calc", |sheet| {
+            FormulaGraph::build(
+                sheet,
+                &atlas,
+                spreadsheet_mcp::model::FormulaParsePolicy::Warn,
+                None,
+            )
+        })
         .unwrap()
         .unwrap();
 
@@ -336,7 +357,14 @@ fn dependents_are_deduplicated() {
     let ctx = WorkbookContext::load(&workspace.config().into(), &path).unwrap();
     let atlas = FormulaAtlas::default();
     let graph = ctx
-        .with_sheet("Sheet1", |sheet| FormulaGraph::build(sheet, &atlas))
+        .with_sheet("Sheet1", |sheet| {
+            FormulaGraph::build(
+                sheet,
+                &atlas,
+                spreadsheet_mcp::model::FormulaParsePolicy::Warn,
+                None,
+            )
+        })
         .unwrap()
         .unwrap();
 

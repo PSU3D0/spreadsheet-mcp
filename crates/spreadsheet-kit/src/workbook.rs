@@ -6,7 +6,8 @@ use crate::analysis::{
 use crate::caps::BackendCaps;
 use crate::config::ServerConfig;
 use crate::model::{
-    NamedItemKind, NamedRangeDescriptor, SheetClassification, SheetOverviewResponse, SheetSummary,
+    FormulaParseDiagnostics, FormulaParseDiagnosticsBuilder, FormulaParsePolicy, NamedItemKind,
+    NamedRangeDescriptor, SheetClassification, SheetOverviewResponse, SheetSummary,
     WorkbookDescription, WorkbookId, WorkbookListResponse,
 };
 use crate::tools::filters::WorkbookFilter;
@@ -354,7 +355,30 @@ impl WorkbookContext {
 
     pub fn formula_graph(&self, sheet_name: &str) -> Result<FormulaGraph> {
         self.with_sheet(sheet_name, |sheet| {
-            FormulaGraph::build(sheet, &self.formula_atlas)
+            FormulaGraph::build(sheet, &self.formula_atlas, FormulaParsePolicy::Warn, None)
+        })?
+    }
+
+    pub fn formula_graph_with_diagnostics(
+        &self,
+        sheet_name: &str,
+        policy: FormulaParsePolicy,
+    ) -> Result<(FormulaGraph, FormulaParseDiagnostics)> {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let graph = self.with_sheet(sheet_name, |sheet| {
+            FormulaGraph::build(sheet, &self.formula_atlas, policy, Some(&mut builder))
+        })??;
+        Ok((graph, builder.build()))
+    }
+
+    pub(crate) fn formula_graph_with_diagnostics_builder(
+        &self,
+        sheet_name: &str,
+        policy: FormulaParsePolicy,
+        builder: &mut FormulaParseDiagnosticsBuilder,
+    ) -> Result<FormulaGraph> {
+        self.with_sheet(sheet_name, |sheet| {
+            FormulaGraph::build(sheet, &self.formula_atlas, policy, Some(builder))
         })?
     }
 
