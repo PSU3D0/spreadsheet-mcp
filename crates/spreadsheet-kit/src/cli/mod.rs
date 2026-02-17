@@ -169,7 +169,7 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
-        after_long_help = "Examples:\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format full --columns A,C:E --include-styles\n\nPagination loop:\n  1) Run without --start-row.\n  2) If next_start_row is present, pass it to --start-row for the next request.\n  3) Stop when next_start_row is omitted."
+        after_long_help = "Examples:\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201\n  agent-spreadsheet sheet-page data.xlsx Sheet1 --format full --columns A,C:E --include-styles\n\nMachine contract:\n  - Inspect the top-level format field first.\n  - format=full: consume top-level rows/header_row/next_start_row.\n  - format=compact: consume compact.headers/compact.header_row/compact.rows plus next_start_row.\n  - format=values_only: consume values_only.rows plus next_start_row.\n  - Global --shape compact preserves the active sheet-page branch (no flattening).\n\nPagination loop:\n  1) Run without --start-row.\n  2) If next_start_row is present, pass it to --start-row for the next request.\n  3) Stop when next_start_row is omitted.\n\nMachine continuation example:\n  Request page 1, read next_start_row, then request page 2 with --start-row <next_start_row>."
     )]
     SheetPage {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
