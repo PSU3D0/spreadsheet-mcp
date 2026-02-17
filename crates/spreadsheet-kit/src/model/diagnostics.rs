@@ -1,3 +1,4 @@
+use formualizer_parse::tokenizer::{TokenStream, TokenSubType, TokenType};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -69,6 +70,7 @@ pub struct FormulaParseDiagnosticsBuilder {
 struct GroupAccumulator {
     error_code: String,
     error_message: String,
+    formula_preview: String,
     count: usize,
     sample_addresses: Vec<String>,
 }
@@ -84,13 +86,16 @@ impl FormulaParseDiagnosticsBuilder {
 
     pub fn record_error(&mut self, sheet: &str, address: &str, formula: &str, error: &str) {
         let formula_preview = truncate_formula_preview(formula);
-        let key = (sheet.to_string(), error.to_string(), formula_preview);
+        let normalized_formula = normalize_formula_for_grouping(formula);
+        let normalized_error = normalize_error_for_grouping(error);
+        let key = (sheet.to_string(), normalized_error, normalized_formula);
 
         self.total_errors += 1;
 
         let group = self.groups.entry(key).or_insert_with(|| GroupAccumulator {
             error_code: FORMULA_PARSE_FAILED.to_string(),
             error_message: error.to_string(),
+            formula_preview,
             count: 0,
             sample_addresses: Vec::new(),
         });
@@ -108,11 +113,11 @@ impl FormulaParseDiagnosticsBuilder {
             .into_iter()
             .take(MAX_GROUPS)
             .map(
-                |((sheet_name, _error_message, formula_preview), group)| FormulaParseErrorGroup {
+                |((sheet_name, _error_message, _normalized_key), group)| FormulaParseErrorGroup {
                     error_code: group.error_code,
                     error_message: group.error_message,
                     sheet_name,
-                    formula_preview,
+                    formula_preview: group.formula_preview,
                     count: group.count,
                     sample_addresses: group.sample_addresses,
                 },
@@ -149,6 +154,114 @@ fn truncate_formula_preview(formula: &str) -> String {
     let mut result = formula[..end].to_string();
     result.push('…');
     result
+}
+
+/// Normalize a formula for grouping by replacing cell/range references with
+/// `$REF`. This collapses formulas that differ only in cell addresses (e.g.
+/// `=IF(C4="",...)` and `=IF(C5="",...)`) into the same group key.
+fn normalize_formula_for_grouping(formula: &str) -> String {
+    if let Ok(stream) = TokenStream::new(formula) {
+        let mut out = String::with_capacity(formula.len());
+        if formula.starts_with('=') {
+            out.push('=');
+        }
+        for span in &stream.spans {
+            if span.token_type == TokenType::Operand && span.subtype == TokenSubType::Range {
+                out.push_str("$REF");
+            } else if let Some(val) = stream.source().get(span.start..span.end) {
+                out.push_str(val);
+            }
+        }
+        return truncate_formula_preview(&out);
+    }
+
+    // Fallback for unparsable formulas: use a simple regex-style substitution
+    // to replace cell-like references (e.g. A1, $C$10, Sheet1!B2:C5).
+    normalize_refs_regex(formula)
+}
+
+/// Regex-free cell reference normalization for malformed formulas.
+/// Replaces patterns like A1, $B$2, C10, AA100 with $REF.
+fn normalize_refs_regex(formula: &str) -> String {
+    let bytes = formula.as_bytes();
+    let mut out = String::with_capacity(formula.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Skip dollar signs that prefix column/row references
+        let start = i;
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic() {
+            // possible absolute ref like $A$1
+        }
+
+        // Try to match a cell reference: optional $, 1-3 alpha, optional $, 1+ digit
+        let mut j = i;
+        // skip leading $
+        if j < bytes.len() && bytes[j] == b'$' {
+            j += 1;
+        }
+        // require 1-3 alpha chars (column)
+        let col_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_alphabetic() && j - col_start < 4 {
+            j += 1;
+        }
+        let col_len = j - col_start;
+        if col_len >= 1 && col_len <= 3 {
+            // skip optional $ before row
+            if j < bytes.len() && bytes[j] == b'$' {
+                j += 1;
+            }
+            // require 1+ digits (row)
+            let row_start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let row_len = j - row_start;
+            if row_len >= 1 {
+                // Ensure this isn't part of a larger identifier (e.g. function name)
+                let preceded_by_alpha =
+                    start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+                let followed_by_alpha =
+                    j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_');
+                if !preceded_by_alpha && !followed_by_alpha {
+                    out.push_str("$REF");
+                    i = j;
+                    continue;
+                }
+            }
+        }
+
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+
+    truncate_formula_preview(&out)
+}
+
+/// Normalize an error message for grouping by replacing position numbers
+/// with a placeholder. E.g. "at position 161" → "at position N".
+fn normalize_error_for_grouping(error: &str) -> String {
+    let mut out = String::with_capacity(error.len());
+    let bytes = error.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Look for "position " followed by digits
+        if i + 9 <= bytes.len() && &bytes[i..i + 9] == b"position " {
+            out.push_str("position ");
+            i += 9;
+            // skip digits
+            if i < bytes.len() && bytes[i].is_ascii_digit() {
+                out.push('N');
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Validate a single formula string using the project's formula parser.
@@ -307,12 +420,14 @@ mod tests {
     fn test_groups_truncated_at_50() {
         let mut builder = FormulaParseDiagnosticsBuilder::new(FormulaParsePolicy::Warn);
 
+        // Use structurally distinct formulas (different function names) so they
+        // don't collapse under reference normalization.
         for i in 0..60 {
             builder.record_error(
                 "Sheet1",
                 "A1",
-                &format!("=SOME_LONG_FORMULA_{i}"),
-                "unexpected token",
+                &format!("=FUNC{i}(A1)"),
+                &format!("error variant {i}"),
             );
         }
 
@@ -382,5 +497,84 @@ mod tests {
     fn test_validate_formula_invalid() {
         assert!(validate_formula("SUM(A1:A10").is_err()); // unclosed paren
         assert!(validate_formula("SUM(A1:A10))").is_err()); // extra closing paren
+    }
+
+    #[test]
+    fn test_grouping_normalizes_cell_references() {
+        // Formulas that differ only in cell references should group together.
+        // This is the exact scenario from the Production_Readiness workbook.
+        let mut builder = FormulaParseDiagnosticsBuilder::new(FormulaParsePolicy::Warn);
+        builder.record_error(
+            "Assessments",
+            "D4",
+            "=IF(C4=\"\",\"\",IF(C4=\"N/A\",\"\",0))",
+            "parse error at position 42",
+        );
+        builder.record_error(
+            "Assessments",
+            "D5",
+            "=IF(C5=\"\",\"\",IF(C5=\"N/A\",\"\",0))",
+            "parse error at position 42",
+        );
+        builder.record_error(
+            "Assessments",
+            "D10",
+            "=IF(C10=\"\",\"\",IF(C10=\"N/A\",\"\",0))",
+            "parse error at position 42",
+        );
+
+        let diagnostics = builder.build();
+        // All three should collapse into ONE group (same structure, same error)
+        assert_eq!(diagnostics.total_errors, 3);
+        assert_eq!(diagnostics.groups.len(), 1);
+
+        let group = &diagnostics.groups[0];
+        assert_eq!(group.count, 3);
+        assert_eq!(
+            group.sample_addresses,
+            vec!["D4", "D5", "D10"]
+        );
+        // formula_preview should show the first formula encountered (human-readable, not normalized)
+        assert!(group.formula_preview.contains("C4"));
+    }
+
+    #[test]
+    fn test_grouping_different_structure_not_collapsed() {
+        // Formulas with genuinely different structure should NOT collapse.
+        let mut builder = FormulaParseDiagnosticsBuilder::new(FormulaParsePolicy::Warn);
+        builder.record_error(
+            "Sheet1",
+            "A1",
+            "=SUM(A1:A10)",
+            "unexpected token",
+        );
+        builder.record_error(
+            "Sheet1",
+            "A2",
+            "=AVERAGE(B1:B10)",
+            "unexpected token",
+        );
+
+        let diagnostics = builder.build();
+        assert_eq!(diagnostics.groups.len(), 2);
+    }
+
+    #[test]
+    fn test_normalize_formula_for_grouping() {
+        // Direct unit test for the normalization function
+        let n1 = normalize_formula_for_grouping("=IF(C4=\"\",\"\",0)");
+        let n2 = normalize_formula_for_grouping("=IF(C5=\"\",\"\",0)");
+        let n3 = normalize_formula_for_grouping("=IF(C100=\"\",\"\",0)");
+        assert_eq!(n1, n2);
+        assert_eq!(n2, n3);
+
+        // Different structure should differ
+        let n4 = normalize_formula_for_grouping("=SUM(A1:A10)");
+        let n5 = normalize_formula_for_grouping("=AVERAGE(A1:A10)");
+        assert_ne!(n4, n5);
+
+        // Unparsable formula falls back to truncated preview
+        let bad = normalize_formula_for_grouping("=SUM(A1:A10))");
+        assert!(!bad.is_empty());
     }
 }
