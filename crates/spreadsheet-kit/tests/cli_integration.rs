@@ -172,6 +172,22 @@ fn parse_stdout_text(output: &std::process::Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout utf8")
 }
 
+fn normalize_path_for_assert(path: &str) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+}
+
+fn assert_json_path_eq(payload: &Value, key: &str, expected: &str) {
+    let actual = payload[key]
+        .as_str()
+        .unwrap_or_else(|| panic!("{key} should be a path string, payload={payload}"));
+    let actual_norm = normalize_path_for_assert(actual);
+    let expected_norm = normalize_path_for_assert(expected);
+    assert_eq!(
+        actual_norm, expected_norm,
+        "path mismatch for {key}: actual={actual:?}, expected={expected:?}"
+    );
+}
+
 fn assert_invalid_argument(args: &[&str]) -> Value {
     assert_error_code(args, "INVALID_ARGUMENT")
 }
@@ -3463,8 +3479,8 @@ fn cli_transform_batch_in_place_applies_atomically() {
     assert_eq!(payload["applied_count"].as_u64(), Some(1));
     assert!(payload["warnings"].is_array());
     assert!(payload["changed"].as_bool().unwrap_or(false));
-    assert_eq!(payload["source_path"].as_str(), Some(file));
-    assert_eq!(payload["target_path"].as_str(), Some(file));
+    assert_json_path_eq(&payload, "source_path", file);
+    assert_json_path_eq(&payload, "target_path", file);
 
     let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
     let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
@@ -3550,7 +3566,7 @@ fn cli_transform_batch_output_and_force_modes_apply_with_overwrite_checks() {
     ]);
     assert!(forced.status.success(), "stderr: {:?}", forced.stderr);
     let forced_payload = parse_stdout_json(&forced);
-    assert_eq!(forced_payload["target_path"].as_str(), Some(output));
+    assert_json_path_eq(&forced_payload, "target_path", output);
 
     let overwritten = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output");
     let overwritten_sheet = overwritten
@@ -3862,8 +3878,8 @@ fn phase_a_style_batch_positive_dry_run_and_output_target_only() {
         output_run.stderr
     );
     let output_payload = parse_stdout_json(&output_run);
-    assert_eq!(output_payload["target_path"].as_str(), Some(output));
-    assert_eq!(output_payload["source_path"].as_str(), Some(source));
+    assert_json_path_eq(&output_payload, "target_path", output);
+    assert_json_path_eq(&output_payload, "source_path", source);
     assert!(output_payload["changed"].as_bool().unwrap_or(false));
 
     let source_after = fs::read(&source_path).expect("read source after output mode");
@@ -5777,8 +5793,8 @@ fn cli_edit_output_writes_target_only() {
     let payload = parse_stdout_json(&command);
     assert_eq!(payload["edits_applied"].as_u64(), Some(2));
     assert_eq!(payload["file"].as_str(), Some(output));
-    assert_eq!(payload["source_path"].as_str(), Some(source));
-    assert_eq!(payload["target_path"].as_str(), Some(output));
+    assert_json_path_eq(&payload, "source_path", source);
+    assert_json_path_eq(&payload, "target_path", output);
 
     let after_source = fs::read(&source_path).expect("read source after output mode");
     assert_eq!(
