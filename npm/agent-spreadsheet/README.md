@@ -61,6 +61,10 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 
 `apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.
 
+### Formula parse policy
+
+Commands that tokenize or validate formulas accept `--formula-parse-policy <fail|warn|off>`. Default is `fail` for `edit` (single-write) and `warn` for batch/analysis commands. When `warn`, the response includes a `formula_parse_diagnostics` object with errors grouped by structural pattern (cell references normalized). See the [root README](https://github.com/PSU3D0/spreadsheet-mcp#formula-parse-policy) for details.
+
 ### CLI command reference (high-traffic)
 
 | Command | Description |
@@ -69,11 +73,11 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic sheet paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
-| `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless batch writes |
-| `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
-| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched caches) |
-| `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations |
-| `rules-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless validation/conditional-format operations |
+| `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless batch writes |
+| `style-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH)` | Stateless style operations |
+| `apply-formula-pattern <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH)` | Stateless formula fill/pattern operations (clears touched caches) |
+| `structure-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless structure operations |
+| `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
 
 ## Platform support
 

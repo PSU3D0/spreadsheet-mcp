@@ -125,6 +125,40 @@ agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xls
 All output is JSON by default.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
 
+### Formula parse policy
+
+Commands that tokenize or validate formulas accept `--formula-parse-policy <fail|warn|off>`:
+
+| Mode | Behavior | Default for |
+| --- | --- | --- |
+| **fail** | Abort on any formula parse error | `edit` (single-write) |
+| **warn** | Continue; attach `formula_parse_diagnostics` to the response | `scan-volatiles`, `formula-map`, `formula-trace`, `transform-batch`, `structure-batch`, `rules-batch` |
+| **off** | Silently skip parse errors | — |
+
+When the policy is `warn` (or `fail` with errors), the response includes a `formula_parse_diagnostics` object:
+
+```json
+{
+  "formula_parse_diagnostics": {
+    "policy": "warn",
+    "total_errors": 400,
+    "groups_truncated": false,
+    "groups": [
+      {
+        "error_code": "FORMULA_PARSE_FAILED",
+        "error_message": "No matching opener for closer at position 161",
+        "sheet_name": "Assessments",
+        "formula_preview": "=IF(C4=\"\",\"\",IF(C4=\"N/A\",…",
+        "count": 400,
+        "sample_addresses": ["D4", "D5", "D10", "D11", "D12"]
+      }
+    ]
+  }
+}
+```
+
+Errors are grouped by structural pattern — formulas that differ only in cell references (e.g., `=IF(C4=…)` and `=IF(C5=…)`) collapse into a single group with a count and sample addresses.
+
 Shape policy:
 - **Canonical (default/omitted):** preserve the full response schema.
 - **range-values canonical:** return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).
@@ -149,20 +183,20 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
-| `scan-volatiles <file> [--sheet S] [--limit N] [--offset N]` | Scan formulas for volatile functions |
+| `scan-volatiles <file> [--sheet S] [--limit N] [--offset N] [--formula-parse-policy P]` | Scan formulas for volatile functions |
 | `sheet-statistics <file> <sheet>` | Per-sheet density and type stats |
-| `formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N]` | Formula inventory summary |
-| `formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N]` | Trace formula dependencies with cursor continuation |
+| `formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N] [--formula-parse-policy P]` | Formula inventory summary |
+| `formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N] [--formula-parse-policy P]` | Trace formula dependencies with cursor continuation |
 | `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
-| `edit <file> <sheet> <edits...>` | Apply cell edits (`A1=42`, `B2==SUM(...)`) |
-| `transform-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Generic stateless transform batch pipeline |
+| `edit <file> <sheet> <edits...> [--formula-parse-policy P]` | Apply cell edits (`A1=42`, `B2==SUM(...)`) |
+| `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
 | `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
-| `structure-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless structure operations (sheet rows/columns) |
+| `structure-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless structure operations (sheet rows/columns) |
 | `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
 | `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
-| `rules-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless validation/conditional-format operations |
+| `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
 | `recalculate <file>` | Recalculate formulas via backend |
 | `diff <original> <modified>` | Diff two workbook versions |
 
