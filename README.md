@@ -260,6 +260,14 @@ Debug compare workflow (same-target by write path):
 2. Compare `write_path_provenance.written_via` and `formula_targets` in responses.
 3. Use `inspect-cells` plus `recalculate` to compare resulting behavior.
 
+#### Financial presentation starter defaults
+- Keep label columns (often column A) explicitly sized (roughly `24–36` chars) to prevent clipping.
+- Apply consistent number formats by semantic type:
+  - Currency: `"$"#,##0.00_);[Red]("$"#,##0.00)`
+  - Percent: `0.0%`
+  - Integer/count: `#,##0`
+- Apply `sheet-layout-batch` freeze panes after header layout stabilizes.
+
 ---
 
 ## Quickstart: MCP Server

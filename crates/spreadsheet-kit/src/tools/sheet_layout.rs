@@ -12,7 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use umya_spreadsheet::{
-    Break, Coordinate, Pane, PaneStateValues, PaneValues, SheetView, SheetViews, Worksheet,
+    Break, Coordinate, Pane, PaneStateValues, PaneValues, Selection, SheetView, SheetViews,
+    Worksheet,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -475,11 +476,27 @@ fn apply_freeze_panes(
     }
     pane.set_top_left_cell(coord);
     pane.set_state(PaneStateValues::Frozen);
-    pane.set_active_pane(active_pane_for_freeze(freeze_rows, freeze_cols));
+    let active_pane = active_pane_for_freeze(freeze_rows, freeze_cols);
+    pane.set_active_pane(active_pane.clone());
+
+    // LibreOffice interop: clear sheetView@topLeftCell so pane.topLeftCell is authoritative.
+    // Some files arrive with a pre-existing view topLeftCell; keeping both can cause viewport
+    // quirks in LO.
+    view.set_top_left_cell("");
     view.set_pane(pane);
 
-    // Also set the sheetView attribute for consistency with Excel.
-    view.set_top_left_cell(inferred);
+    // Keep selection aligned with the frozen active pane.
+    view.get_selection_mut().clear();
+    let mut selection = Selection::default();
+    selection.set_pane(active_pane);
+
+    let mut active_cell = Coordinate::default();
+    active_cell.set_coordinate(&inferred);
+    selection.set_active_cell(active_cell);
+    selection
+        .get_sequence_of_references_mut()
+        .set_sqref(inferred.as_str());
+    view.set_selection(selection);
 
     Ok(())
 }

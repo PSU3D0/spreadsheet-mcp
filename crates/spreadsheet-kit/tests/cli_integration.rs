@@ -505,6 +505,9 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "#### Formula write-path provenance (`write_path_provenance`)",
         "`written_via`: write path (`edit`, `transform_batch`, `apply_formula_pattern`)",
+        "#### Financial presentation starter defaults",
+        "Keep label columns (often column A) explicitly sized",
+        "Percent: `0.0%`",
         "Compact (single range):** flatten that entry to top-level fields",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
@@ -4841,12 +4844,74 @@ fn phase_b_sheet_layout_batch_positive_dry_run_and_in_place() {
     let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
     let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
     let views = sheet.get_sheets_views().get_sheet_view_list();
-    let pane = views
-        .first()
-        .and_then(|view| view.get_pane())
-        .expect("pane");
+    let view = views.first().expect("sheet view");
+    let pane = view.get_pane().expect("pane");
     assert_eq!(*pane.get_horizontal_split(), 1.0);
     assert_eq!(*pane.get_vertical_split(), 1.0);
+    assert_eq!(pane.get_top_left_cell().to_string(), "B2");
+    assert_eq!(
+        view.get_top_left_cell(),
+        "",
+        "sheetView topLeftCell should remain unset for LO compatibility"
+    );
+
+    let selection = view.get_selection().first().expect("selection");
+    assert_eq!(selection.get_sequence_of_references().get_sqref(), "B2");
+    assert_eq!(
+        selection.get_active_cell().map(|coord| coord.to_string()),
+        Some("B2".to_string())
+    );
+}
+
+#[test]
+fn phase_b_sheet_layout_batch_clears_preexisting_sheet_view_top_left_cell() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("phase-b-layout-preexisting-top-left.xlsx");
+    let ops_path = tmp.path().join("layout-preexisting-top-left-ops.json");
+    write_fixture(&workbook_path);
+
+    {
+        let mut book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+        let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+        let view = sheet
+            .get_sheet_views_mut()
+            .get_sheet_view_list_mut()
+            .first_mut()
+            .expect("sheet view");
+        view.set_top_left_cell("C3");
+        umya_spreadsheet::writer::xlsx::write(&book, &workbook_path).expect("write workbook");
+    }
+
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"freeze_panes","sheet_name":"Sheet1","freeze_rows":1,"freeze_cols":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let ops_ref = format!("@{}", ops_path.to_str().expect("ops utf8"));
+
+    let in_place = run_cli(&[
+        "sheet-layout-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(in_place.status.success(), "stderr: {:?}", in_place.stderr);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&workbook_path).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet exists");
+    let view = sheet
+        .get_sheets_views()
+        .get_sheet_view_list()
+        .first()
+        .expect("sheet view");
+    assert_eq!(
+        view.get_top_left_cell(),
+        "",
+        "preexisting sheetView topLeftCell should be cleared for LO compatibility"
+    );
+    let pane = view.get_pane().expect("pane");
     assert_eq!(pane.get_top_left_cell().to_string(), "B2");
 }
 
@@ -4887,13 +4952,16 @@ fn phase_b_sheet_layout_batch_positive_output_mutates_target_only() {
     let output_sheet = output_book
         .get_sheet_by_name("Sheet1")
         .expect("sheet exists");
-    let pane = output_sheet
+    let view = output_sheet
         .get_sheets_views()
         .get_sheet_view_list()
         .first()
-        .and_then(|view| view.get_pane())
-        .expect("pane");
+        .expect("sheet view");
+    let pane = view.get_pane().expect("pane");
     assert_eq!(pane.get_top_left_cell().to_string(), "B2");
+    assert_eq!(view.get_top_left_cell(), "");
+    let selection = view.get_selection().first().expect("selection");
+    assert_eq!(selection.get_sequence_of_references().get_sqref(), "B2");
 }
 
 #[test]
