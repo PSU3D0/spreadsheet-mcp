@@ -570,14 +570,19 @@ Diagnostics note:
   Formula writes include write_path_provenance (written_via + formula_targets)."#
     )]
     TransformBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to transform")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to transform",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(
@@ -593,6 +598,11 @@ Diagnostics note:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
         #[arg(
             long = "formula-parse-policy",
             value_enum,
@@ -618,14 +628,19 @@ Required envelope:
   Style ops require `sheet_name`, `target`, and `patch` (no top-level op `kind`)."#
     )]
     StyleBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to style")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to style",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(long, help = "Apply style ops by atomically replacing the source file")]
@@ -638,6 +653,11 @@ Required envelope:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
     },
     #[command(
         about = "Apply stateless formula pattern operations from an @ops payload",
@@ -663,14 +683,19 @@ Diagnostics note:
   Formula writes include write_path_provenance (written_via + formula_targets)."#
     )]
     ApplyFormulaPattern {
-        #[arg(value_name = "FILE", help = "Workbook path to update")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to update",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(
@@ -686,6 +711,11 @@ Diagnostics note:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
     },
     #[command(
         about = "Apply stateless structure operations from an @ops payload",
@@ -708,14 +738,19 @@ Cache note:
   copy/move) clear cached formula results. Run recalculate to refresh computed values."#
     )]
     StructureBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to update")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to update",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(
@@ -731,6 +766,11 @@ Cache note:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
         #[arg(
             long = "formula-parse-policy",
             value_enum,
@@ -757,14 +797,19 @@ Required envelope:
   Each op requires `size.kind`; canonical form also includes `target.kind:"columns"`."#
     )]
     ColumnSizeBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to update")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to update",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(
@@ -780,6 +825,11 @@ Required envelope:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
     },
     #[command(
         about = "Apply stateless sheet layout operations from an @ops payload",
@@ -798,14 +848,19 @@ Required envelope:
   Each op requires a `kind` discriminator plus kind-specific required fields."#
     )]
     SheetLayoutBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to update")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to update",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(
@@ -821,6 +876,11 @@ Required envelope:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
     },
     #[command(
         about = "Apply stateless data validation and conditional format operations from an @ops payload",
@@ -843,14 +903,19 @@ Note:
   cell formula caches. No recalculate is needed after rules-batch operations."##
     )]
     RulesBatch {
-        #[arg(value_name = "FILE", help = "Workbook path to update")]
-        file: PathBuf,
+        #[arg(
+            value_name = "FILE",
+            help = "Workbook path to update",
+            required_unless_present = "print_schema"
+        )]
+        file: Option<PathBuf>,
         #[arg(
             long,
             value_name = "OPS_REF",
-            help = "Ops payload file reference (@path)"
+            help = "Ops payload file reference (@path)",
+            required_unless_present = "print_schema"
         )]
-        ops: String,
+        ops: Option<String>,
         #[arg(long, help = "Validate ops and report summary without mutating files")]
         dry_run: bool,
         #[arg(long, help = "Apply rules ops by atomically replacing the source file")]
@@ -863,6 +928,11 @@ Note:
         output: Option<PathBuf>,
         #[arg(long, help = "Allow overwriting --output when it already exists")]
         force: bool,
+        #[arg(
+            long = "print-schema",
+            help = "Print the full JSON schema for the --ops payload and exit"
+        )]
+        print_schema: bool,
         #[arg(
             long = "formula-parse-policy",
             value_enum,
@@ -1054,18 +1124,31 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
+            print_schema,
             formula_parse_policy,
         } => {
-            commands::write::transform_batch(
-                file,
-                ops,
-                dry_run,
-                in_place,
-                output,
-                force,
-                formula_parse_policy,
-            )
-            .await
+            if print_schema {
+                commands::write::batch_payload_schema(
+                    commands::write::BatchSchemaCommand::Transform,
+                )
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: transform-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: transform-batch requires --ops @<path>")
+                })?;
+                commands::write::transform_batch(
+                    file,
+                    ops,
+                    dry_run,
+                    in_place,
+                    output,
+                    force,
+                    formula_parse_policy,
+                )
+                .await
+            }
         }
         Commands::StyleBatch {
             file,
@@ -1074,7 +1157,20 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::style_batch(file, ops, dry_run, in_place, output, force).await,
+            print_schema,
+        } => {
+            if print_schema {
+                commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Style)
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: style-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: style-batch requires --ops @<path>")
+                })?;
+                commands::write::style_batch(file, ops, dry_run, in_place, output, force).await
+            }
+        }
         Commands::ApplyFormulaPattern {
             file,
             ops,
@@ -1082,9 +1178,24 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
+            print_schema,
         } => {
-            commands::write::apply_formula_pattern(file, ops, dry_run, in_place, output, force)
-                .await
+            if print_schema {
+                commands::write::batch_payload_schema(
+                    commands::write::BatchSchemaCommand::ApplyFormulaPattern,
+                )
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: apply-formula-pattern requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "invalid argument: apply-formula-pattern requires --ops @<path>"
+                    )
+                })?;
+                commands::write::apply_formula_pattern(file, ops, dry_run, in_place, output, force)
+                    .await
+            }
         }
         Commands::StructureBatch {
             file,
@@ -1093,18 +1204,31 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
+            print_schema,
             formula_parse_policy,
         } => {
-            commands::write::structure_batch(
-                file,
-                ops,
-                dry_run,
-                in_place,
-                output,
-                force,
-                formula_parse_policy,
-            )
-            .await
+            if print_schema {
+                commands::write::batch_payload_schema(
+                    commands::write::BatchSchemaCommand::Structure,
+                )
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: structure-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: structure-batch requires --ops @<path>")
+                })?;
+                commands::write::structure_batch(
+                    file,
+                    ops,
+                    dry_run,
+                    in_place,
+                    output,
+                    force,
+                    formula_parse_policy,
+                )
+                .await
+            }
         }
         Commands::ColumnSizeBatch {
             file,
@@ -1113,7 +1237,23 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::column_size_batch(file, ops, dry_run, in_place, output, force).await,
+            print_schema,
+        } => {
+            if print_schema {
+                commands::write::batch_payload_schema(
+                    commands::write::BatchSchemaCommand::ColumnSize,
+                )
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: column-size-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: column-size-batch requires --ops @<path>")
+                })?;
+                commands::write::column_size_batch(file, ops, dry_run, in_place, output, force)
+                    .await
+            }
+        }
         Commands::SheetLayoutBatch {
             file,
             ops,
@@ -1121,7 +1261,23 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
-        } => commands::write::sheet_layout_batch(file, ops, dry_run, in_place, output, force).await,
+            print_schema,
+        } => {
+            if print_schema {
+                commands::write::batch_payload_schema(
+                    commands::write::BatchSchemaCommand::SheetLayout,
+                )
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: sheet-layout-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: sheet-layout-batch requires --ops @<path>")
+                })?;
+                commands::write::sheet_layout_batch(file, ops, dry_run, in_place, output, force)
+                    .await
+            }
+        }
         Commands::RulesBatch {
             file,
             ops,
@@ -1129,18 +1285,29 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             in_place,
             output,
             force,
+            print_schema,
             formula_parse_policy,
         } => {
-            commands::write::rules_batch(
-                file,
-                ops,
-                dry_run,
-                in_place,
-                output,
-                force,
-                formula_parse_policy,
-            )
-            .await
+            if print_schema {
+                commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Rules)
+            } else {
+                let file = file.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: rules-batch requires <FILE>")
+                })?;
+                let ops = ops.ok_or_else(|| {
+                    anyhow::anyhow!("invalid argument: rules-batch requires --ops @<path>")
+                })?;
+                commands::write::rules_batch(
+                    file,
+                    ops,
+                    dry_run,
+                    in_place,
+                    output,
+                    force,
+                    formula_parse_policy,
+                )
+                .await
+            }
         }
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
@@ -1574,14 +1741,16 @@ mod tests {
                 in_place,
                 output,
                 force,
+                print_schema,
                 formula_parse_policy,
             } => {
-                assert_eq!(file, PathBuf::from("workbook.xlsx"));
-                assert_eq!(ops, "@ops.json");
+                assert_eq!(file, Some(PathBuf::from("workbook.xlsx")));
+                assert_eq!(ops, Some("@ops.json".to_string()));
                 assert!(!dry_run);
                 assert!(!in_place);
                 assert_eq!(output, Some(PathBuf::from("out.xlsx")));
                 assert!(force);
+                assert!(!print_schema);
                 assert_eq!(formula_parse_policy, None);
             }
             other => panic!("unexpected command: {other:?}"),
@@ -1608,13 +1777,15 @@ mod tests {
                 in_place,
                 output,
                 force,
+                print_schema,
             } => {
-                assert_eq!(file, PathBuf::from("workbook.xlsx"));
-                assert_eq!(ops, "@style.json");
+                assert_eq!(file, Some(PathBuf::from("workbook.xlsx")));
+                assert_eq!(ops, Some("@style.json".to_string()));
                 assert!(dry_run);
                 assert!(!in_place);
                 assert!(output.is_none());
                 assert!(!force);
+                assert!(!print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1640,13 +1811,15 @@ mod tests {
                 in_place,
                 output,
                 force,
+                print_schema,
             } => {
-                assert_eq!(file, PathBuf::from("workbook.xlsx"));
-                assert_eq!(ops, "@formula.json");
+                assert_eq!(file, Some(PathBuf::from("workbook.xlsx")));
+                assert_eq!(ops, Some("@formula.json".to_string()));
                 assert!(!dry_run);
                 assert!(in_place);
                 assert!(output.is_none());
                 assert!(!force);
+                assert!(!print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1666,11 +1839,16 @@ mod tests {
         .expect("parse structure-batch");
         match structure.command {
             Commands::StructureBatch {
-                file, ops, output, ..
+                file,
+                ops,
+                output,
+                print_schema,
+                ..
             } => {
-                assert_eq!(file, PathBuf::from("workbook.xlsx"));
-                assert_eq!(ops, "@structure.json");
+                assert_eq!(file, Some(PathBuf::from("workbook.xlsx")));
+                assert_eq!(ops, Some("@structure.json".to_string()));
                 assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+                assert!(!print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1685,9 +1863,15 @@ mod tests {
         ])
         .expect("parse column-size-batch");
         match column.command {
-            Commands::ColumnSizeBatch { ops, in_place, .. } => {
-                assert_eq!(ops, "@columns.json");
+            Commands::ColumnSizeBatch {
+                ops,
+                in_place,
+                print_schema,
+                ..
+            } => {
+                assert_eq!(ops, Some("@columns.json".to_string()));
                 assert!(in_place);
+                assert!(!print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1702,9 +1886,15 @@ mod tests {
         ])
         .expect("parse sheet-layout-batch");
         match layout.command {
-            Commands::SheetLayoutBatch { ops, dry_run, .. } => {
-                assert_eq!(ops, "@layout.json");
+            Commands::SheetLayoutBatch {
+                ops,
+                dry_run,
+                print_schema,
+                ..
+            } => {
+                assert_eq!(ops, Some("@layout.json".to_string()));
                 assert!(dry_run);
+                assert!(!print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1732,15 +1922,140 @@ mod tests {
                 in_place,
                 output,
                 force,
+                print_schema,
                 formula_parse_policy,
             } => {
-                assert_eq!(file, PathBuf::from("workbook.xlsx"));
-                assert_eq!(ops, "@rules.json");
+                assert_eq!(file, Some(PathBuf::from("workbook.xlsx")));
+                assert_eq!(ops, Some("@rules.json".to_string()));
                 assert!(!dry_run);
                 assert!(!in_place);
                 assert_eq!(output, Some(PathBuf::from("rules.xlsx")));
                 assert!(force);
+                assert!(!print_schema);
                 assert!(formula_parse_policy.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_batch_print_schema_flags_without_file_or_ops() {
+        let transform =
+            Cli::try_parse_from(["agent-spreadsheet", "transform-batch", "--print-schema"])
+                .expect("parse transform-batch --print-schema");
+        match transform.command {
+            Commands::TransformBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let style = Cli::try_parse_from(["agent-spreadsheet", "style-batch", "--print-schema"])
+            .expect("parse style-batch --print-schema");
+        match style.command {
+            Commands::StyleBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let formula = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "apply-formula-pattern",
+            "--print-schema",
+        ])
+        .expect("parse apply-formula-pattern --print-schema");
+        match formula.command {
+            Commands::ApplyFormulaPattern {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let structure =
+            Cli::try_parse_from(["agent-spreadsheet", "structure-batch", "--print-schema"])
+                .expect("parse structure-batch --print-schema");
+        match structure.command {
+            Commands::StructureBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let column =
+            Cli::try_parse_from(["agent-spreadsheet", "column-size-batch", "--print-schema"])
+                .expect("parse column-size-batch --print-schema");
+        match column.command {
+            Commands::ColumnSizeBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let layout =
+            Cli::try_parse_from(["agent-spreadsheet", "sheet-layout-batch", "--print-schema"])
+                .expect("parse sheet-layout-batch --print-schema");
+        match layout.command {
+            Commands::SheetLayoutBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let rules = Cli::try_parse_from(["agent-spreadsheet", "rules-batch", "--print-schema"])
+            .expect("parse rules-batch --print-schema");
+        match rules.command {
+            Commands::RulesBatch {
+                file,
+                ops,
+                print_schema,
+                ..
+            } => {
+                assert!(file.is_none());
+                assert!(ops.is_none());
+                assert!(print_schema);
             }
             other => panic!("unexpected command: {other:?}"),
         }

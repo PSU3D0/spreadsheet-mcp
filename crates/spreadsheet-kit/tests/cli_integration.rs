@@ -245,6 +245,33 @@ fn assert_batch_mode_matrix(command: &str, file: &str, ops_ref: &str) {
 }
 
 #[test]
+fn batch_commands_support_print_schema() {
+    for command in [
+        "transform-batch",
+        "style-batch",
+        "apply-formula-pattern",
+        "structure-batch",
+        "column-size-batch",
+        "sheet-layout-batch",
+        "rules-batch",
+    ] {
+        let output = run_cli(&[command, "--print-schema"]);
+        assert!(
+            output.status.success(),
+            "{command} --print-schema failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let payload = parse_stdout_json(&output);
+        assert_eq!(payload["schema_kind"], "ops_payload", "payload={payload}");
+        assert!(
+            payload["schema"].is_object(),
+            "expected schema object for {command}, payload={payload}"
+        );
+    }
+}
+
+#[test]
 fn cli_help_surfaces_include_descriptions_and_examples() {
     let root_help = run_cli(&["--help"]);
     assert!(root_help.status.success(), "stderr: {:?}", root_help.stderr);

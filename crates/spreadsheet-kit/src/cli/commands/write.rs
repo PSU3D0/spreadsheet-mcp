@@ -15,6 +15,7 @@ use crate::tools::fork::{
 use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
 use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
 use anyhow::{Context, Result, anyhow, bail};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -82,18 +83,18 @@ struct EditDryRunResponse {
     write_path_provenance: Option<WritePathProvenance>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct OpsPayload<T> {
     ops: Vec<T>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ColumnSizeOpsPayload {
     sheet_name: String,
     ops: Vec<ColumnSizeOpInput>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum ColumnSizeOpWithSheetInput {
     Canonical {
@@ -150,6 +151,58 @@ const RULES_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<rules_kind>",...}]}"#;
 const RULES_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#;
 const EDIT_FORMULA_HINT: &str =
     "Tip: formulas in edit shorthand use double equals, e.g. A1==SUM(B1:B5).";
+
+#[allow(dead_code)]
+#[derive(Debug, JsonSchema)]
+struct ColumnSizeOpsPerOpPayload {
+    ops: Vec<ColumnSizeOpWithSheetInput>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, JsonSchema)]
+#[serde(untagged)]
+enum ColumnSizeOpsSchemaPayload {
+    Canonical(ColumnSizeOpsPayload),
+    PerOp(ColumnSizeOpsPerOpPayload),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BatchSchemaCommand {
+    Transform,
+    Style,
+    ApplyFormulaPattern,
+    Structure,
+    ColumnSize,
+    SheetLayout,
+    Rules,
+}
+
+pub fn batch_payload_schema(command: BatchSchemaCommand) -> Result<Value> {
+    let schema_value = match command {
+        BatchSchemaCommand::Transform => {
+            serde_json::to_value(schema_for!(OpsPayload<TransformOp>))?
+        }
+        BatchSchemaCommand::Style => serde_json::to_value(schema_for!(OpsPayload<StyleOpInput>))?,
+        BatchSchemaCommand::ApplyFormulaPattern => {
+            serde_json::to_value(schema_for!(OpsPayload<ApplyFormulaPatternOpInput>))?
+        }
+        BatchSchemaCommand::Structure => {
+            serde_json::to_value(schema_for!(OpsPayload<StructureOpInput>))?
+        }
+        BatchSchemaCommand::ColumnSize => {
+            serde_json::to_value(schema_for!(ColumnSizeOpsSchemaPayload))?
+        }
+        BatchSchemaCommand::SheetLayout => {
+            serde_json::to_value(schema_for!(OpsPayload<SheetLayoutOp>))?
+        }
+        BatchSchemaCommand::Rules => serde_json::to_value(schema_for!(OpsPayload<RulesOp>))?,
+    };
+
+    Ok(serde_json::json!({
+        "schema_kind": "ops_payload",
+        "schema": schema_value,
+    }))
+}
 
 #[derive(Debug)]
 enum EditMutationMode {
