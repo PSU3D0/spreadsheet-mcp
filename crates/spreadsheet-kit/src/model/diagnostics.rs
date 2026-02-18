@@ -1,4 +1,7 @@
-use formualizer_parse::tokenizer::{TokenStream, TokenSubType, TokenType};
+use formualizer_parse::parser::ParserError;
+use formualizer_parse::tokenizer::{
+    RecoveryAction, TokenDiagnostic, TokenStream, TokenSubType, TokenType,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -238,38 +241,144 @@ fn normalize_refs_regex(formula: &str) -> String {
     truncate_formula_preview(&out)
 }
 
-/// Normalize an error message for grouping by replacing position numbers
-/// with a placeholder. E.g. "at position 161" → "at position N".
+/// Normalize an error message for grouping by replacing numeric position/range
+/// fields with placeholders.
 fn normalize_error_for_grouping(error: &str) -> String {
     let mut out = String::with_capacity(error.len());
     let bytes = error.as_bytes();
     let mut i = 0;
+
     while i < bytes.len() {
-        // Look for "position " followed by digits
+        // Normalize "position <digits>" -> "position N"
         if i + 9 <= bytes.len() && &bytes[i..i + 9] == b"position " {
             out.push_str("position ");
             i += 9;
-            // skip digits
             if i < bytes.len() && bytes[i].is_ascii_digit() {
                 out.push('N');
                 while i < bytes.len() && bytes[i].is_ascii_digit() {
                     i += 1;
                 }
+                continue;
             }
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
+        }
+
+        // Normalize "bytes <digits>..<digits>" -> "bytes N..N"
+        if i + 6 <= bytes.len() && &bytes[i..i + 6] == b"bytes " {
+            let mut cursor = i + 6;
+            if cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                out.push_str("bytes N");
+                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                    cursor += 1;
+                }
+                if cursor + 2 <= bytes.len() && &bytes[cursor..cursor + 2] == b".." {
+                    cursor += 2;
+                    out.push_str("..N");
+                    while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                        cursor += 1;
+                    }
+                }
+                i = cursor;
+                continue;
+            }
+        }
+
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+
+    out
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormulaParseFailure {
+    pub parser_message: String,
+    pub parser_position: Option<usize>,
+    pub tokenizer: Option<TokenizerRecovery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenizerRecovery {
+    pub message: String,
+    pub recovery: RecoveryAction,
+    pub span_start: usize,
+    pub span_end: usize,
+}
+
+impl FormulaParseFailure {
+    fn from_parser_error(formula: &str, err: &ParserError) -> Self {
+        let tokenizer = first_tokenizer_recovery(formula);
+        Self {
+            parser_message: err.message.clone(),
+            parser_position: err.position,
+            tokenizer,
         }
     }
-    out
+
+    fn render_message(&self) -> String {
+        let parser_message = match self.parser_position {
+            Some(pos) => format!("parse error at position {pos}: {}", self.parser_message),
+            None => format!("parse error: {}", self.parser_message),
+        };
+
+        if let Some(tokenizer) = &self.tokenizer {
+            format!(
+                "{parser_message} (tokenizer recovery {:?} at bytes {}..{}: {})",
+                tokenizer.recovery, tokenizer.span_start, tokenizer.span_end, tokenizer.message
+            )
+        } else {
+            parser_message
+        }
+    }
+}
+
+impl std::fmt::Display for FormulaParseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render_message())
+    }
+}
+
+impl std::error::Error for FormulaParseFailure {}
+
+fn first_tokenizer_recovery(formula: &str) -> Option<TokenizerRecovery> {
+    let stream = TokenStream::new_best_effort(formula);
+    let diagnostic = stream.diagnostics_ref().first()?;
+    Some(tokenizer_recovery_from_diagnostic(diagnostic))
+}
+
+fn tokenizer_recovery_from_diagnostic(diagnostic: &TokenDiagnostic) -> TokenizerRecovery {
+    TokenizerRecovery {
+        message: diagnostic.message.clone(),
+        recovery: diagnostic.recovery,
+        span_start: diagnostic.span.start,
+        span_end: diagnostic.span.end,
+    }
+}
+
+fn normalize_formula_input(formula: &str) -> String {
+    let trimmed = formula.trim();
+    if trimmed.starts_with('=') {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    }
+}
+
+pub fn validate_formula_detailed(formula: &str) -> Result<(), FormulaParseFailure> {
+    let formula_in = normalize_formula_input(formula);
+    formualizer_parse::parse(&formula_in)
+        .map(|_| ())
+        .map_err(|err| FormulaParseFailure::from_parser_error(&formula_in, &err))
+}
+
+pub fn format_formula_parse_failure(formula: &str, err: &ParserError) -> String {
+    let formula_in = normalize_formula_input(formula);
+    FormulaParseFailure::from_parser_error(&formula_in, err).to_string()
 }
 
 /// Validate a single formula string using the project's formula parser.
 /// Returns Ok(()) if valid, Err(error_message) if invalid.
 pub fn validate_formula(formula: &str) -> Result<(), String> {
-    crate::formula::pattern::parse_base_formula(formula)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    validate_formula_detailed(formula).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -497,6 +606,27 @@ mod tests {
     fn test_validate_formula_invalid() {
         assert!(validate_formula("SUM(A1:A10").is_err()); // unclosed paren
         assert!(validate_formula("SUM(A1:A10))").is_err()); // extra closing paren
+    }
+
+    #[test]
+    fn test_validate_formula_detailed_includes_recovery_context() {
+        let err = validate_formula_detailed("SUM(A1:A10")
+            .expect_err("unterminated formula should return parse diagnostics");
+        let rendered = err.to_string();
+        assert!(rendered.contains("parse error"));
+        assert!(rendered.contains("tokenizer recovery"));
+        assert!(rendered.contains("bytes "));
+    }
+
+    #[test]
+    fn test_normalize_error_for_grouping_normalizes_bytes_ranges() {
+        let n1 = normalize_error_for_grouping(
+            "parse error at position 14 (tokenizer recovery UnmatchedOpener at bytes 1..9: x)",
+        );
+        let n2 = normalize_error_for_grouping(
+            "parse error at position 29 (tokenizer recovery UnmatchedOpener at bytes 7..15: x)",
+        );
+        assert_eq!(n1, n2);
     }
 
     #[test]

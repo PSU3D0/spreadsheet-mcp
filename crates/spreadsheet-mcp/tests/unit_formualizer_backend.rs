@@ -91,6 +91,84 @@ async fn recalculate_uses_formualizer_backend_and_updates_formula_cache() -> Res
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn recalculate_one_pass_updates_non_last_sheet_formula_chains() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("formualizer_one_pass_multisheet.xlsx", |book| {
+        let sheet1 = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet1.get_cell_mut("A1").set_value_number(10);
+        for (addr, formula) in [
+            ("A2", "A1+10"),
+            ("A3", "A2+10"),
+            ("A4", "A3+1"),
+            ("A5", "SUM(A3:A4)"),
+        ] {
+            let cell = sheet1.get_cell_mut(addr);
+            cell.set_formula(formula);
+            cell.get_cell_value_mut().set_formula_result_default("0");
+        }
+
+        book.new_sheet("Sheet2").expect("add Sheet2");
+        let sheet2 = book.get_sheet_by_name_mut("Sheet2").unwrap();
+        sheet2.get_cell_mut("A1").set_value_number(10);
+        for (addr, formula) in [
+            ("A2", "A1+10"),
+            ("A3", "A2+10"),
+            ("A4", "A3+1"),
+            ("A5", "SUM(A3:A4)"),
+        ] {
+            let cell = sheet2.get_cell_mut(addr);
+            cell.set_formula(formula);
+            cell.get_cell_value_mut().set_formula_result_default("0");
+        }
+    });
+
+    let config = Arc::new(workspace.config_with(|cfg| {
+        cfg.recalc_enabled = true;
+        cfg.recalc_backend = RecalcBackendKind::Formualizer;
+    }));
+    let state = Arc::new(AppState::new(config));
+
+    let workbook_id = first_workbook_id(state.clone()).await?;
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let recalc = recalculate(
+        state.clone(),
+        RecalculateParams {
+            fork_id: fork.fork_id.clone(),
+            timeout_ms: 30_000,
+            backend: Some(RecalcBackendKind::Formualizer),
+        },
+    )
+    .await?;
+
+    assert_eq!(recalc.backend, "formualizer");
+    assert!(recalc.cells_evaluated.unwrap_or_default() >= 8);
+
+    let fork_ctx = state
+        .fork_registry()
+        .expect("fork registry")
+        .get_fork(&fork.fork_id)?;
+    let saved = umya_spreadsheet::reader::xlsx::read(&fork_ctx.work_path)?;
+
+    for sheet_name in ["Sheet1", "Sheet2"] {
+        let sheet = saved
+            .get_sheet_by_name(sheet_name)
+            .unwrap_or_else(|| panic!("{sheet_name} exists"));
+        assert_eq!(sheet.get_cell("A3").expect("A3 exists").get_value(), "30");
+        assert_eq!(sheet.get_cell("A4").expect("A4 exists").get_value(), "31");
+        assert_eq!(sheet.get_cell("A5").expect("A5 exists").get_value(), "61");
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn recalculate_populates_eval_errors() -> Result<()> {
     let workspace = support::TestWorkspace::new();
     workspace.create_workbook("formualizer_eval_errors.xlsx", |book| {

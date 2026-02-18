@@ -1139,6 +1139,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adf306621163f6997b71f10095ba6258a099d3bf27f91dcc7e172a8c697d822e"
 dependencies = [
+ "formualizer-eval",
  "formualizer-workbook",
 ]
 
