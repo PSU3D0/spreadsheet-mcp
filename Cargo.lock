@@ -1135,18 +1135,18 @@ dependencies = [
 
 [[package]]
 name = "formualizer"
-version = "0.3.5"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2457bab34ba8ee134bdf1e2ccb516fc21ffda158f9405511dbd4d89e1ccdcf96"
+checksum = "adf306621163f6997b71f10095ba6258a099d3bf27f91dcc7e172a8c697d822e"
 dependencies = [
  "formualizer-workbook",
 ]
 
 [[package]]
 name = "formualizer-common"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a9c865c4b596bc8db6533d14e24162d042d4837d93120301247928dc2cbd79d"
+checksum = "176e2b5c9e1af59c107439036882f96d73d9b7ca24b02d178ae6ebfa75ffa8de"
 dependencies = [
  "chrono",
  "serde",
@@ -1154,9 +1154,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-eval"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7165734f32426c1d9a72784b404c9c7db2b58b528270ec9beae3442eea61d8e4"
+checksum = "2b33779ee0c3adc6c8140cee0e78b532d03c96a807a80b5eef017576521da057"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1181,9 +1181,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-macros"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4884104d2ec4515b38dd22e03522e61b626ccc7db43d2bed2b3589018efbd655"
+checksum = "34f92f8bdb5590c432365c6c73f244fbfeb97080710b395a06d79ac9dface4f5"
 dependencies = [
  "formualizer-common",
  "proc-macro2",
@@ -1193,9 +1193,9 @@ dependencies = [
 
 [[package]]
 name = "formualizer-parse"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "484f3cb3409c1fda8541cb1604582f2153a0d48611153f2ab9178bfdcceccfde"
+checksum = "025c2cc80235f7aa939085d79ee19db67dd6b140e51da98391472877b0b29622"
 dependencies = [
  "formualizer-common",
  "once_cell",
@@ -1204,11 +1204,12 @@ dependencies = [
 
 [[package]]
 name = "formualizer-workbook"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "080dce1598366de4e91830595366ed5d494dda88a89495495349131421ec2ab3"
+checksum = "43c1c532605afe0308212fda3fdfd409e47c4fa5c1663f2870a8c863309e76ba"
 dependencies = [
  "chrono",
+ "csv",
  "formualizer-common",
  "formualizer-eval",
  "formualizer-parse",
@@ -1219,6 +1220,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "umya-spreadsheet",
+ "zip 0.6.6",
 ]
 
 [[package]]
