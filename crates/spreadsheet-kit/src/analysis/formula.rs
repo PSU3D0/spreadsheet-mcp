@@ -1,5 +1,6 @@
 use crate::model::{
     FORMULA_PARSE_FAILED_PREFIX, FormulaGroup, FormulaParseDiagnosticsBuilder, FormulaParsePolicy,
+    format_formula_parse_failure,
 };
 use crate::utils::column_number_to_name;
 use anyhow::{Context, Result, anyhow};
@@ -158,12 +159,17 @@ impl FormulaGraph {
                         match fallback {
                             Ok(ast) => Some(ast),
                             Err(fallback_err) => {
+                                let parse_error = format_formula_parse_failure(
+                                    &formula_with_prefix,
+                                    &fallback_err,
+                                );
+
                                 tracing::warn!(
                                     sheet = %sheet_name,
                                     address = %address,
                                     formula = %formula_with_prefix,
                                     batch_error = %batch_err,
-                                    fallback_error = %fallback_err,
+                                    fallback_error = %parse_error,
                                     "skipping unparsable formula cell"
                                 );
 
@@ -175,7 +181,7 @@ impl FormulaGraph {
                                                 &sheet_name,
                                                 &address,
                                                 &formula_with_prefix,
-                                                &fallback_err.to_string(),
+                                                &parse_error,
                                             );
                                         }
                                         None
@@ -186,7 +192,7 @@ impl FormulaGraph {
                                                 &sheet_name,
                                                 &address,
                                                 &formula_with_prefix,
-                                                &fallback_err.to_string(),
+                                                &parse_error,
                                             );
                                         }
                                         return Err(anyhow!(
@@ -194,7 +200,7 @@ impl FormulaGraph {
                                             FORMULA_PARSE_FAILED_PREFIX,
                                             sheet_name,
                                             address,
-                                            fallback_err
+                                            parse_error
                                         ));
                                     }
                                 }
