@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/spreadsheet-kit",
+    "crates/spreadsheet-kit-wasm",
     "crates/spreadsheet-mcp",
 ]
 resolver = "2"

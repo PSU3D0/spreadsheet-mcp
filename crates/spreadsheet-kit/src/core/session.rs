@@ -239,11 +239,16 @@ impl WorkbookSession {
     }
 
     /// Serialize the current in-memory workbook state back to XLSX bytes.
-    pub fn into_bytes(self) -> Result<Vec<u8>> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         umya_spreadsheet::writer::xlsx::write_writer(&self.spreadsheet, &mut bytes)
             .context("failed to serialize workbook to bytes")?;
         Ok(bytes)
+    }
+
+    /// Serialize and consume the current in-memory workbook state.
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
+        self.to_bytes()
     }
 
     fn sheet_by_name(&self, sheet_name: &str) -> Result<&Worksheet> {
