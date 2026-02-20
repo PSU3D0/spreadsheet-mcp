@@ -5,22 +5,43 @@
 | Surface | Crate name | npm name | Binary name |
 | --- | --- | --- | --- |
 | Core primitives | `spreadsheet-kit` | — | — |
+| WASM adapter/runtime | `spreadsheet-kit-wasm` | `spreadsheet-kit-wasm` (planned distribution package) | — |
 | MCP server | `spreadsheet-mcp` | — | `spreadsheet-mcp` |
 | CLI | `spreadsheet-kit` | `agent-spreadsheet` | `agent-spreadsheet` |
+| JS SDK backend abstraction | — | `spreadsheet-kit-sdk` | — |
 
 The workspace umbrella name is **spreadsheet-kit**. The GitHub repo is `PSU3D0/spreadsheet-mcp` (historical — predates the workspace split).
 
 ## Versioning
 
 - `spreadsheet-kit` — follows semver independently (currently 0.1.x)
-- `spreadsheet-mcp` — follows semver independently (currently 0.9.x)
+- `spreadsheet-kit-wasm` — follows semver independently, but tracks shared core contract changes closely
+- `spreadsheet-mcp` — follows semver independently (currently 0.10.x)
 - `agent-spreadsheet` (npm) — version is kept in sync with the release tag
+- `spreadsheet-kit-sdk` (npm) — follows semver independently with capability negotiation at runtime
 
-The release workflow publishes crates in dependency order (`spreadsheet-kit` → `spreadsheet-mcp`) and then publishes the npm package.
+Release ordering for tranche-35 surfaces:
+
+1. publish core crates in dependency order (`spreadsheet-kit` → `spreadsheet-kit-wasm` → `spreadsheet-mcp`)
+2. publish npm packages (`agent-spreadsheet`, `spreadsheet-kit-sdk`, and `spreadsheet-kit-wasm` when enabled)
+3. run smoke tests against SDK MCP + WASM backends before final release promotion
+
+### Compatibility notes (SDK/MCP/WASM)
+
+| SDK line | MCP compatibility | WASM compatibility | Notes |
+| --- | --- | --- | --- |
+| `0.1.x` | compatible with `spreadsheet-mcp` `0.10.x` when required capabilities are present | compatible with tranche-35 `spreadsheet-kit-wasm` exports | Capability checks are the source of truth for mixed-version safety |
+
+Policy:
+
+- Shared core contracts follow semver discipline.
+- Adapter-only additions should be additive and non-breaking.
+- SDK callers must branch on `backend.getCapabilities()` before backend-specific flows (`supportsForkLifecycle`, `supportsStaging`, etc.).
+- Capability removals/deprecations require explicit migration notes and release callouts.
 
 ## Release artifacts
 
-GitHub Releases include binaries for both surfaces:
+GitHub Releases include native binaries for operator/server surfaces:
 
 | Asset pattern | Binary |
 | --- | --- |
@@ -28,6 +49,14 @@ GitHub Releases include binaries for both surfaces:
 | `agent-spreadsheet-{target}` | CLI |
 
 Targets: `linux-x86_64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64(.exe)`
+
+WASM + SDK artifacts are published as package artifacts:
+
+| Artifact | Surface |
+| --- | --- |
+| crate `spreadsheet-kit-wasm` | Rust/WASM adapter crate |
+| npm `spreadsheet-kit-sdk` | JS SDK backend abstraction |
+| npm `spreadsheet-kit-wasm` (planned) | JS/WASM runtime distribution |
 
 ## Default features
 
@@ -45,7 +74,7 @@ Published to `ghcr.io/psu3d0/spreadsheet-mcp`:
 | `latest` | Slim read-only image (~15 MB), `spreadsheet-mcp` binary only |
 | `full` | Full image (~800 MB), includes LibreOffice + recalc macros |
 
-## npm install flow
+## `agent-spreadsheet` npm install flow
 
 1. `npm install` triggers `postinstall` → `scripts/install.js`
 2. Script resolves platform triple (linux-x64, darwin-x64, darwin-arm64, win32-x64)
@@ -63,4 +92,5 @@ Override download source with `AGENT_SPREADSHEET_DOWNLOAD_BASE_URL`. Use a pre-b
 | `crates/spreadsheet-kit/README.md` | Crate consumers | Scope, types, what's excluded |
 | `crates/spreadsheet-mcp/README.md` | MCP users | Quickstart configs, feature summary, link to root |
 | `crates/spreadsheet-kit/README.md` | CLI users | `agent-spreadsheet` binary usage and command surface |
-| `npm/agent-spreadsheet/README.md` | npm users | Install, platform matrix, troubleshooting, env vars |
+| `npm/agent-spreadsheet/README.md` | npm CLI users | Install, platform matrix, troubleshooting, env vars |
+| `npm/spreadsheet-kit-sdk/README.md` | npm SDK users | Backend abstraction, capabilities, typed errors |
