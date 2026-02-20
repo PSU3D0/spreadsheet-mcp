@@ -1,0 +1,247 @@
+const { freezeCapabilities, MCP_CAPABILITIES } = require("./capabilities")
+const { requireCapability, requiredString } = require("./backend")
+const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
+
+function normalizeSheetNames(items) {
+  return items.map((item) => {
+    if (typeof item === "string") {
+      return item
+    }
+    if (item && typeof item === "object" && typeof item.name === "string") {
+      return item.name
+    }
+    throw new SpreadsheetSdkError("invalid sheet summary in list_sheets response", {
+      code: "INVALID_RESPONSE",
+      backend: "mcp",
+      operation: "list_sheets"
+    })
+  })
+}
+
+function normalizeListSheetsResult(result) {
+  if (Array.isArray(result)) {
+    return normalizeSheetNames(result)
+  }
+  if (result && typeof result === "object") {
+    if (Array.isArray(result.sheets)) {
+      return normalizeSheetNames(result.sheets)
+    }
+    if (Array.isArray(result.sheet_names)) {
+      return normalizeSheetNames(result.sheet_names)
+    }
+  }
+  throw new SpreadsheetSdkError("invalid list_sheets response", {
+    code: "INVALID_RESPONSE",
+    backend: "mcp",
+    operation: "list_sheets"
+  })
+}
+
+function normalizeRangeValuesResult(result, fallbackSheetName) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid range_values response", {
+      code: "INVALID_RESPONSE",
+      backend: "mcp",
+      operation: "range_values"
+    })
+  }
+
+  const sheetName = typeof result.sheetName === "string"
+    ? result.sheetName
+    : typeof result.sheet_name === "string"
+      ? result.sheet_name
+      : fallbackSheetName
+
+  const values = Array.isArray(result.values) ? result.values : []
+  return { sheetName, values }
+}
+
+class McpBackend {
+  /**
+   * @param {{
+   *   transport: { invoke?: (operation: string, params?: Record<string, unknown>) => unknown, [k: string]: unknown },
+   *   capabilities?: import("./capabilities").BackendCapabilities
+   * }} params
+   */
+  constructor(params) {
+    if (!params || !params.transport || typeof params.transport !== "object") {
+      throw new SpreadsheetSdkError("McpBackend requires a transport object", {
+        code: "INVALID_ARGUMENT",
+        backend: "mcp"
+      })
+    }
+
+    this.kind = "mcp"
+    this._transport = params.transport
+    this._capabilities = freezeCapabilities(params.capabilities || MCP_CAPABILITIES)
+  }
+
+  getCapabilities() {
+    return this._capabilities
+  }
+
+  async listSheets(input = {}) {
+    requireCapability(this, "supportsListSheets", "listSheets")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const result = await this._call("list_sheets", {
+      ...input,
+      workbook_id: workbookId
+    })
+    return normalizeListSheetsResult(result)
+  }
+
+  async rangeValues(input = {}) {
+    requireCapability(this, "supportsRangeValues", "rangeValues")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+    const ranges = input.ranges
+
+    const result = await this._call("range_values", {
+      ...input,
+      workbook_id: workbookId,
+      sheet_name: sheetName,
+      ranges
+    })
+    return normalizeRangeValuesResult(result, sheetName)
+  }
+
+  async sheetPage(input = {}) {
+    requireCapability(this, "supportsSheetPage", "sheetPage")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    return this._call("sheet_page", {
+      ...input,
+      workbook_id: workbookId
+    })
+  }
+
+  async gridExport(input = {}) {
+    requireCapability(this, "supportsGridExport", "gridExport")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    return this._call("grid_export", {
+      ...input,
+      workbook_id: workbookId
+    })
+  }
+
+  async transformBatch(input = {}) {
+    requireCapability(this, "supportsTransformBatch", "transformBatch")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    return this._call("transform_batch", {
+      ...input,
+      workbook_id: workbookId
+    })
+  }
+
+  async createFork(input = {}) {
+    requireCapability(this, "supportsForkLifecycle", "createFork")
+    const workbookOrForkId = requiredString(
+      input.workbookOrForkId || input.workbook_or_fork_id || input.workbookId || input.workbook_id,
+      "workbookOrForkId"
+    )
+
+    return this._call("create_fork", {
+      ...input,
+      workbook_or_fork_id: workbookOrForkId
+    })
+  }
+
+  async listForks(input = {}) {
+    requireCapability(this, "supportsForkLifecycle", "listForks")
+    return this._call("list_forks", input)
+  }
+
+  async saveFork(input = {}) {
+    requireCapability(this, "supportsForkLifecycle", "saveFork")
+    return this._call("save_fork", input)
+  }
+
+  async discardFork(input = {}) {
+    requireCapability(this, "supportsForkLifecycle", "discardFork")
+    return this._call("discard_fork", input)
+  }
+
+  async listStagedChanges(input = {}) {
+    requireCapability(this, "supportsStaging", "listStagedChanges")
+    return this._call("list_staged_changes", input)
+  }
+
+  async applyStagedChange(input = {}) {
+    requireCapability(this, "supportsStaging", "applyStagedChange")
+    return this._call("apply_staged_change", input)
+  }
+
+  async discardStagedChange(input = {}) {
+    requireCapability(this, "supportsStaging", "discardStagedChange")
+    return this._call("discard_staged_change", input)
+  }
+
+  async createSession() {
+    requireCapability(this, "supportsSessionLifecycle", "createSession")
+    throw new SpreadsheetSdkError("createSession is not implemented for MCP backend", {
+      code: "UNSUPPORTED",
+      backend: this.kind,
+      operation: "createSession"
+    })
+  }
+
+  async exportWorkbook() {
+    requireCapability(this, "supportsExportWorkbook", "exportWorkbook")
+    throw new SpreadsheetSdkError("exportWorkbook is not implemented for MCP backend", {
+      code: "UNSUPPORTED",
+      backend: this.kind,
+      operation: "exportWorkbook"
+    })
+  }
+
+  async disposeSession() {
+    requireCapability(this, "supportsSessionLifecycle", "disposeSession")
+    throw new SpreadsheetSdkError("disposeSession is not implemented for MCP backend", {
+      code: "UNSUPPORTED",
+      backend: this.kind,
+      operation: "disposeSession"
+    })
+  }
+
+  async _call(operation, params) {
+    try {
+      if (typeof this._transport[operation] === "function") {
+        return await this._transport[operation](params)
+      }
+      if (typeof this._transport.invoke === "function") {
+        return await this._transport.invoke(operation, params)
+      }
+      throw new SpreadsheetSdkError(
+        `mcp transport does not implement '${operation}' or invoke()`,
+        {
+          code: "INVALID_ARGUMENT",
+          backend: this.kind,
+          operation
+        }
+      )
+    } catch (error) {
+      throw normalizeBackendError(error, {
+        backend: this.kind,
+        operation
+      })
+    }
+  }
+}
+
+module.exports = {
+  McpBackend
+}
