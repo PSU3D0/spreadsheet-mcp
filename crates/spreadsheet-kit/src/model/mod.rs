@@ -770,6 +770,7 @@ pub struct ConditionalFormatSummary {
 pub struct ManifestStubResponse {
     pub workbook_id: WorkbookId,
     pub slug: String,
+    pub manifest_yaml: String,
     pub sheets: Vec<ManifestSheetStub>,
 }
 
@@ -983,4 +984,100 @@ pub struct VbaModuleSourceResponse {
     pub total_lines: u32,
     pub truncated: bool,
     pub source: String,
+}
+
+// ── layout-page ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutMode {
+    #[default]
+    Values,
+    Formulas,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutRender {
+    #[default]
+    Json,
+    Ascii,
+    Both,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutPageColumnInfo {
+    /// Column letter (e.g., "A")
+    pub col: String,
+    /// 1-based column index
+    pub index: u32,
+    /// Column width in Excel character units (capped at max_col_width)
+    pub width_chars: f64,
+    /// True when no explicit width was set (using the Excel default of 8.43)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_default_width: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutCellBorders {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<String>,
+}
+
+impl LayoutCellBorders {
+    pub fn is_empty(&self) -> bool {
+        self.top.is_none() && self.bottom.is_none() && self.left.is_none() && self.right.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutCellInfo {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    /// Explicit horizontal alignment: "left", "center", "right"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align_h: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borders: Option<LayoutCellBorders>,
+    /// True when this cell is the top-left of a merged range
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_start: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutRowInfo {
+    pub row: u32,
+    pub cells: Vec<LayoutCellInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutPageResponse {
+    pub workbook_id: WorkbookId,
+    pub sheet_name: String,
+    /// The effective range that was rendered
+    pub range: String,
+    pub columns: Vec<LayoutPageColumnInfo>,
+    /// Merged cell ranges that overlap the rendered region (e.g., ["B1:C1"])
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_cells: Vec<String>,
+    pub rows: Vec<LayoutRowInfo>,
+    /// ASCII art render (present when render=ascii or render=both)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ascii_render: Option<String>,
+    /// True when the requested range was capped to the row/column limits
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }

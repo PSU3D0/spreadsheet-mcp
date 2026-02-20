@@ -70,12 +70,91 @@ pub enum TraceDirectionArg {
     Dependents,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LayoutModeArg {
+    Values,
+    Formulas,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LayoutRenderArg {
+    Json,
+    Ascii,
+    Both,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SheetportManifestCommands {
+    #[command(
+        about = "Discover candidate SheetPort ports from workbook structure",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest candidates deal_model.xlsx\n  agent-spreadsheet sheetport manifest candidates deal_model.xlsx --sheet-filter Assumptions"
+    )]
+    Candidates {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(long, value_name = "SHEET", help = "Optional sheet filter")]
+        sheet_filter: Option<String>,
+    },
+    #[command(about = "Print the canonical SheetPort JSON schema")]
+    Schema,
+    #[command(
+        about = "Validate a SheetPort manifest",
+        after_long_help = "Example:\n  agent-spreadsheet sheetport manifest validate manifest.yaml"
+    )]
+    Validate {
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+    },
+    #[command(
+        about = "Normalize a SheetPort manifest for deterministic diffs",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest normalize manifest.yaml\n  agent-spreadsheet sheetport manifest normalize manifest.yaml --output manifest.normalized.yaml"
+    )]
+    Normalize {
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, value_name = "PATH", help = "Write normalized YAML to this file")]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SheetportCommands {
+    #[command(about = "Manifest lifecycle helpers", subcommand)]
+    Manifest(SheetportManifestCommands),
+    #[command(
+        about = "Bind-check a workbook against a SheetPort manifest",
+        after_long_help = "Example:\n  agent-spreadsheet sheetport bind-check deal_model.xlsx manifest.yaml"
+    )]
+    BindCheck {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+    },
+    #[command(
+        about = "Execute a SheetPort manifest with JSON inputs",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml --inputs '{\"loan\": 10000}'\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml"
+    )]
+    Run {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, help = "JSON string or @file containing input arguments")]
+        inputs: Option<String>,
+        #[arg(long, help = "Seed for deterministic RNG evaluation")]
+        rng_seed: Option<u64>,
+        #[arg(long, help = "Freeze volatile functions (e.g. NOW(), RAND())")]
+        freeze_volatile: bool,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "agent-spreadsheet",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(
@@ -466,6 +545,52 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
         file: PathBuf,
         #[arg(long, value_name = "SHEET", help = "Optional sheet to profile")]
         sheet: Option<String>,
+    },
+    #[command(
+        about = "Render a range with layout: column widths, borders, bold/italic, alignment",
+        after_long_help = "Examples:\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range A1:F30\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range A1:H40 --render both\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range B2:G20 --mode formulas\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range B2:G20 --render ascii\n\nThe JSON output (default) includes per-column widths, merged cell spans, and per-cell style metadata.\nThe ASCII render gives a proportional grid with box-drawing borders and bold/italic markers.\n\nCLI notes:\n  --render ascii prints the grid directly (plain text) instead of JSON.\n  Empty edge columns are trimmed by default; use --skip-empty-columns-trim to keep them.\n\nLimits: 80 rows × 25 columns. Ranges exceeding these are silently capped."
+    )]
+    LayoutPage {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name")]
+        sheet: String,
+        #[arg(
+            long,
+            value_name = "RANGE",
+            help = "A1 range to render (default: A1:T50)"
+        )]
+        range: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            value_name = "MODE",
+            help = "Cell content: values (default) or formulas"
+        )]
+        mode: Option<LayoutModeArg>,
+        #[arg(
+            long = "max-col-width",
+            value_name = "N",
+            help = "Maximum column width in character units before truncating (default: 20)"
+        )]
+        max_col_width: Option<u32>,
+        #[arg(
+            long = "fit-columns",
+            help = "Set each column width to the longest rendered cell so truncation is avoided (default off)"
+        )]
+        fit_columns: bool,
+        #[arg(
+            long = "skip-empty-columns-trim",
+            help = "Disable default trimming of empty edge columns"
+        )]
+        skip_empty_columns_trim: bool,
+        #[arg(
+            long,
+            value_enum,
+            value_name = "RENDER",
+            help = "Output format: json (default), ascii, or both"
+        )]
+        render: Option<LayoutRenderArg>,
     },
     #[command(
         about = "Create a new workbook at a destination path",
@@ -941,6 +1066,14 @@ Note:
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
     },
+    #[command(
+        about = "SheetPort manifest lifecycle and execution commands",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest candidates model.xlsx\n  agent-spreadsheet sheetport manifest validate manifest.yaml\n  agent-spreadsheet sheetport bind-check model.xlsx manifest.yaml\n  agent-spreadsheet sheetport run model.xlsx manifest.yaml --inputs @inputs.json"
+    )]
+    Sheetport {
+        #[command(subcommand)]
+        command: SheetportCommands,
+    },
     #[command(about = "Recalculate workbook formulas")]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
@@ -955,6 +1088,22 @@ Note:
         original: PathBuf,
         #[arg(value_name = "MODIFIED", help = "Modified workbook path")]
         modified: PathBuf,
+    },
+    #[command(
+        about = "[Deprecated] Execute a SheetPort manifest with JSON inputs",
+        after_long_help = "Use `agent-spreadsheet sheetport run ...` for new workflows.\n\nExamples:\n  agent-spreadsheet run-manifest data.xlsx manifest.yaml --inputs '{\"loan\": 10000}'\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml --inputs @inputs.json"
+    )]
+    RunManifest {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, help = "JSON string or @file containing input arguments")]
+        inputs: Option<String>,
+        #[arg(long, help = "Seed for deterministic RNG evaluation")]
+        rng_seed: Option<u64>,
+        #[arg(long, help = "Freeze volatile functions (e.g. NOW(), RAND())")]
+        freeze_volatile: bool,
     },
 }
 
@@ -1089,6 +1238,28 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         }
         Commands::Describe { file } => commands::read::describe(file).await,
         Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
+        Commands::LayoutPage {
+            file,
+            sheet,
+            range,
+            mode,
+            max_col_width,
+            fit_columns,
+            skip_empty_columns_trim,
+            render,
+        } => {
+            commands::read::layout_page(
+                file,
+                sheet,
+                range,
+                mode,
+                max_col_width,
+                fit_columns,
+                skip_empty_columns_trim,
+                render,
+            )
+            .await
+        }
         Commands::CreateWorkbook {
             path,
             sheets,
@@ -1309,8 +1480,42 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                 .await
             }
         }
+        Commands::Sheetport { command } => match command {
+            SheetportCommands::Manifest(manifest_command) => match manifest_command {
+                SheetportManifestCommands::Candidates { file, sheet_filter } => {
+                    commands::read::sheetport_manifest_candidates(file, sheet_filter).await
+                }
+                SheetportManifestCommands::Schema => commands::read::sheetport_manifest_schema(),
+                SheetportManifestCommands::Validate { manifest } => {
+                    commands::read::sheetport_manifest_validate(manifest)
+                }
+                SheetportManifestCommands::Normalize { manifest, output } => {
+                    commands::read::sheetport_manifest_normalize(manifest, output)
+                }
+            },
+            SheetportCommands::BindCheck { file, manifest } => {
+                commands::read::sheetport_bind_check(file, manifest).await
+            }
+            SheetportCommands::Run {
+                file,
+                manifest,
+                inputs,
+                rng_seed,
+                freeze_volatile,
+            } => {
+                commands::read::sheetport_run(file, manifest, inputs, rng_seed, freeze_volatile)
+                    .await
+            }
+        },
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
+        Commands::RunManifest {
+            file,
+            manifest,
+            inputs,
+            rng_seed,
+            freeze_volatile,
+        } => commands::read::sheetport_run(file, manifest, inputs, rng_seed, freeze_volatile).await,
     }
 }
 
@@ -1428,9 +1633,29 @@ pub async fn run_with_options(
     }
 
     let projection_target = compact_projection_target_for_command(&command);
+    let emit_layout_ascii_direct = matches!(
+        &command,
+        Commands::LayoutPage {
+            render: Some(LayoutRenderArg::Ascii),
+            ..
+        }
+    );
 
     match run_command(command).await {
         Ok(payload) => {
+            if emit_layout_ascii_direct {
+                if let Some(ascii) = payload.get("ascii_render").and_then(|v| v.as_str()) {
+                    print!("{ascii}");
+                    if !ascii.ends_with('\n') {
+                        println!();
+                    }
+                    return Ok(());
+                }
+                emit_error_and_exit(anyhow::anyhow!(
+                    "layout-page --render ascii expected ascii_render in response"
+                ));
+            }
+
             if let Err(error) =
                 output::emit_value(&payload, format, shape, projection_target, compact, quiet)
             {
@@ -2308,5 +2533,64 @@ mod tests {
                 "compact"
             ]
         );
+    }
+
+    #[test]
+    fn parses_sheetport_manifest_validate_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheetport",
+            "manifest",
+            "validate",
+            "manifest.yaml",
+        ])
+        .expect("parse sheetport manifest validate");
+
+        match cli.command {
+            Commands::Sheetport { command } => match command {
+                SheetportCommands::Manifest(SheetportManifestCommands::Validate { manifest }) => {
+                    assert_eq!(manifest, PathBuf::from("manifest.yaml"));
+                }
+                other => panic!("unexpected sheetport command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_sheetport_run_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheetport",
+            "run",
+            "workbook.xlsx",
+            "manifest.yaml",
+            "--inputs",
+            "@inputs.json",
+            "--rng-seed",
+            "42",
+            "--freeze-volatile",
+        ])
+        .expect("parse sheetport run");
+
+        match cli.command {
+            Commands::Sheetport { command } => match command {
+                SheetportCommands::Run {
+                    file,
+                    manifest,
+                    inputs,
+                    rng_seed,
+                    freeze_volatile,
+                } => {
+                    assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                    assert_eq!(manifest, PathBuf::from("manifest.yaml"));
+                    assert_eq!(inputs.as_deref(), Some("@inputs.json"));
+                    assert_eq!(rng_seed, Some(42));
+                    assert!(freeze_volatile);
+                }
+                other => panic!("unexpected sheetport command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

@@ -1,22 +1,22 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::cli::{
-    FindValueMode, FormulaSort, LabelDirectionArg, SheetPageFormatArg, TableReadFormat,
-    TableSampleModeArg, TraceDirectionArg,
+    FindValueMode, FormulaSort, LabelDirectionArg, LayoutModeArg, LayoutRenderArg,
+    SheetPageFormatArg, TableReadFormat, TableSampleModeArg, TraceDirectionArg,
 };
 use crate::model::{
-    FindMode, FormulaParsePolicy, LabelDirection, SheetPageFormat, TableOutputFormat, TraceCursor,
-    TraceDirection,
+    FindMode, FormulaParsePolicy, LabelDirection, LayoutMode, LayoutRender, SheetPageFormat,
+    TableOutputFormat, TraceCursor, TraceDirection,
 };
 use crate::runtime::stateless::StatelessRuntime;
 use crate::tools;
 use crate::tools::{
     DescribeWorkbookParams, FindFormulaParams, FindValueParams, FormulaSortBy, FormulaTraceParams,
-    InspectCellsParams, ListSheetsParams, NamedRangesParams, RangeValuesParams, ReadTableParams,
-    SampleMode, ScanVolatilesParams, SheetFormulaMapParams, SheetOverviewParams, SheetPageParams,
-    SheetStatisticsParams, TableFilter, TableProfileParams,
+    InspectCellsParams, LayoutPageParams, ListSheetsParams, ManifestStubParams, NamedRangesParams,
+    RangeValuesParams, ReadTableParams, SampleMode, ScanVolatilesParams, SheetFormulaMapParams,
+    SheetOverviewParams, SheetPageParams, SheetStatisticsParams, TableFilter, TableProfileParams,
 };
 
 const TRACE_DEPTH_MIN: u32 = 1;
@@ -707,4 +707,240 @@ fn levenshtein(left: &str, right: &str) -> usize {
     }
 
     prev[right_chars.len()]
+}
+
+pub async fn run_manifest(
+    file: PathBuf,
+    manifest: PathBuf,
+    inputs_arg: Option<String>,
+    rng_seed: Option<u64>,
+    freeze_volatile: bool,
+) -> Result<Value> {
+    let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
+        "failed to read manifest from '{}'",
+        manifest.display()
+    ))?;
+
+    let mut parsed_inputs = std::collections::BTreeMap::new();
+    if let Some(inputs_str) = inputs_arg {
+        let json_str = if inputs_str.starts_with('@') {
+            std::fs::read_to_string(&inputs_str[1..])
+                .context(format!("failed to read inputs file '{}'", &inputs_str[1..]))?
+        } else {
+            inputs_str
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).context("failed to parse inputs as JSON")?;
+
+        if let serde_json::Value::Object(map) = parsed {
+            parsed_inputs = map.into_iter().collect();
+        } else {
+            bail!("--inputs JSON must be an object keyed by port id");
+        }
+    }
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+
+    let response = tools::execute_manifest(
+        state,
+        tools::ExecuteManifestParams {
+            workbook_or_fork_id: workbook_id,
+            manifest_yaml,
+            inputs: parsed_inputs,
+            rng_seed,
+            freeze_volatile,
+        },
+    )
+    .await?;
+
+    Ok(serde_json::to_value(response)?)
+}
+
+pub async fn sheetport_run(
+    file: PathBuf,
+    manifest: PathBuf,
+    inputs_arg: Option<String>,
+    rng_seed: Option<u64>,
+    freeze_volatile: bool,
+) -> Result<Value> {
+    run_manifest(file, manifest, inputs_arg, rng_seed, freeze_volatile).await
+}
+
+pub async fn sheetport_manifest_candidates(
+    file: PathBuf,
+    sheet_filter: Option<String>,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let response = tools::get_manifest_stub(
+        state,
+        ManifestStubParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_filter,
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub fn sheetport_manifest_schema() -> Result<Value> {
+    let schema = formualizer::sheetport_spec::schema_json();
+    let schema_value: serde_json::Value =
+        serde_json::from_str(schema).context("failed to parse bundled SheetPort JSON schema")?;
+    Ok(schema_value)
+}
+
+pub fn sheetport_manifest_validate(manifest: PathBuf) -> Result<Value> {
+    let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
+        "failed to read manifest from '{}'",
+        manifest.display()
+    ))?;
+
+    let parsed = formualizer::sheetport_spec::Manifest::from_yaml_str(&manifest_yaml);
+    let response = match parsed {
+        Ok(manifest_obj) => match manifest_obj.validate() {
+            Ok(()) => serde_json::json!({
+                "valid": true,
+                "issues": []
+            }),
+            Err(err) => serde_json::json!({
+                "valid": false,
+                "issues": err.issues(),
+            }),
+        },
+        Err(err) => serde_json::json!({
+            "valid": false,
+            "issues": [{
+                "path": "<document>",
+                "message": err.to_string(),
+            }],
+        }),
+    };
+
+    Ok(response)
+}
+
+pub fn sheetport_manifest_normalize(manifest: PathBuf, output: Option<PathBuf>) -> Result<Value> {
+    let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
+        "failed to read manifest from '{}'",
+        manifest.display()
+    ))?;
+
+    let mut manifest_obj = formualizer::sheetport_spec::Manifest::from_yaml_str(&manifest_yaml)
+        .map_err(|err| anyhow!("failed to parse manifest YAML: {}", err))?;
+    manifest_obj.normalize();
+    let normalized_yaml = manifest_obj
+        .to_yaml()
+        .map_err(|err| anyhow!("failed to serialize normalized YAML: {}", err))?;
+
+    if let Some(output_path) = output {
+        std::fs::write(&output_path, &normalized_yaml).context(format!(
+            "failed to write normalized manifest to '{}'",
+            output_path.display()
+        ))?;
+        Ok(serde_json::json!({
+            "written": true,
+            "output_path": output_path,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "written": false,
+            "manifest_yaml": normalized_yaml,
+        }))
+    }
+}
+
+pub async fn sheetport_bind_check(file: PathBuf, manifest: PathBuf) -> Result<Value> {
+    use formualizer::workbook::SpreadsheetReader;
+
+    let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
+        "failed to read manifest from '{}'",
+        manifest.display()
+    ))?;
+
+    let manifest_obj = match formualizer::sheetport_spec::Manifest::from_yaml_str(&manifest_yaml) {
+        Ok(manifest_obj) => manifest_obj,
+        Err(err) => {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "stage": "parse",
+                "error": err.to_string(),
+            }));
+        }
+    };
+
+    if let Err(err) = manifest_obj.validate() {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "stage": "validate",
+            "issues": err.issues(),
+        }));
+    }
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let workbook_ctx = state.open_workbook(&workbook_id).await?;
+
+    let workbook_bytes = std::fs::read(&workbook_ctx.path)?;
+    let adapter = formualizer::workbook::UmyaAdapter::open_bytes(workbook_bytes)
+        .or_else(|_| formualizer::workbook::UmyaAdapter::open_path(&workbook_ctx.path))
+        .map_err(|e| anyhow!("failed to open workbook adapter: {}", e))?;
+
+    let workbook = formualizer::workbook::Workbook::from_reader(
+        adapter,
+        formualizer::workbook::LoadStrategy::EagerAll,
+        formualizer::workbook::WorkbookConfig::ephemeral(),
+    )
+    .map_err(|e| anyhow!("failed to load workbook: {}", e))?;
+
+    match formualizer::sheetport::SheetPortSession::new(workbook, manifest_obj) {
+        Ok(session) => Ok(serde_json::json!({
+            "ok": true,
+            "workbook_id": workbook_id,
+            "binding_count": session.bindings().len(),
+        })),
+        Err(err) => Ok(serde_json::json!({
+            "ok": false,
+            "stage": "bind",
+            "error": err.to_string(),
+        })),
+    }
+}
+
+pub async fn layout_page(
+    file: PathBuf,
+    sheet: String,
+    range: Option<String>,
+    mode: Option<LayoutModeArg>,
+    max_col_width: Option<u32>,
+    fit_columns: bool,
+    skip_empty_columns_trim: bool,
+    render: Option<LayoutRenderArg>,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+    let response = tools::layout_page(
+        state,
+        LayoutPageParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: sheet,
+            range,
+            mode: mode.map(|m| match m {
+                LayoutModeArg::Values => LayoutMode::Values,
+                LayoutModeArg::Formulas => LayoutMode::Formulas,
+            }),
+            max_col_width,
+            fit_columns: Some(fit_columns),
+            trim_empty_columns: Some(!skip_empty_columns_trim),
+            render: render.map(|r| match r {
+                LayoutRenderArg::Json => LayoutRender::Json,
+                LayoutRenderArg::Ascii => LayoutRender::Ascii,
+                LayoutRenderArg::Both => LayoutRender::Both,
+            }),
+        },
+    )
+    .await?;
+    Ok(serde_json::to_value(response)?)
 }

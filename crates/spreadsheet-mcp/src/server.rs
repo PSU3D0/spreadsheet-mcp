@@ -2,10 +2,10 @@ use crate::config::ServerConfig;
 use crate::errors::InvalidParamsError;
 use crate::model::{
     CloseWorkbookResponse, FindFormulaResponse, FindValueResponse, FormulaTraceResponse,
-    ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
-    SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
-    SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    LayoutPageResponse, ManifestStubResponse, NamedRangesResponse, RangeValuesResponse,
+    ReadTableResponse, SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse,
+    SheetPageResponse, SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse,
+    VolatileScanResponse, WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
     WorkbookSummaryResponse,
 };
 use crate::response_prune::Pruned;
@@ -64,6 +64,7 @@ OUTPUT DEFAULTS (token-dense profile):
 - table_profile defaults to summary_only=true (no samples). Set summary_only=false to include sample rows.
 - sheet_statistics defaults to summary_only=true (no samples). Set summary_only=false to include samples.
 - sheet_styles defaults to summary_only=true (no descriptors/ranges/examples). Use include_descriptor/include_ranges/include_example_cells.
+- layout_page defaults to render=json (no ascii_render field). Use render=ascii or render=both to include the ASCII grid. Capped at 80 rows × 25 columns.
 - workbook_style_summary defaults to summary_only=true (no theme/conditional formats/descriptors). Use include_theme/include_conditional_formats/include_descriptor/include_example_cells.
 - sheet_formula_map defaults to summary_only=true (addresses hidden). Set include_addresses=true to show cell addresses.
 - find_value defaults to context=none (no neighbors/row_context). Use context=neighbors, context=row, or context=both.
@@ -580,6 +581,25 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "layout_page",
+        description = "Render a sheet range with layout semantics: column widths, borders, bold/italic, alignment, and merged cells. Returns a JSON layout plane (per-column widths, per-cell style metadata) and optionally an ASCII grid render. Use render=ascii or render=both to include the ASCII view. Capped at 80 rows × 25 columns."
+    )]
+    pub async fn layout_page(
+        &self,
+        Parameters(params): Parameters<tools::LayoutPageParams>,
+    ) -> Result<Json<LayoutPageResponse>, McpError> {
+        self.ensure_tool_enabled("layout_page")
+            .map_err(|e| to_mcp_error_for_tool("layout_page", e))?;
+        self.run_tool_with_timeout(
+            "layout_page",
+            tools::layout_page(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("layout_page", e))
+    }
+
+    #[tool(
         name = "workbook_style_summary",
         description = "Summarise style usage, theme colors, and conditional formats across a workbook"
     )]
@@ -615,6 +635,25 @@ impl SpreadsheetServer {
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("get_manifest_stub", e))
+    }
+
+    #[tool(
+        name = "execute_manifest",
+        description = "Execute a SheetPort manifest with JSON inputs"
+    )]
+    pub async fn execute_manifest(
+        &self,
+        Parameters(params): Parameters<tools::ExecuteManifestParams>,
+    ) -> Result<Json<tools::ExecuteManifestResponse>, McpError> {
+        self.ensure_tool_enabled("execute_manifest")
+            .map_err(|e| to_mcp_error_for_tool("execute_manifest", e))?;
+        self.run_tool_with_timeout(
+            "execute_manifest",
+            tools::execute_manifest(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("execute_manifest", e))
     }
 
     #[tool(name = "close_workbook", description = "Evict a workbook from cache")]
