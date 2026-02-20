@@ -1,16 +1,20 @@
+use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::core::types::CellEdit;
 use crate::model::{
     CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
-    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, Warning, validate_formula,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, GridPayload, Warning, validate_formula,
 };
 use crate::runtime::stateless::StatelessRuntime;
+use crate::state::AppState;
+use crate::tools::filters::WorkbookFilter;
 use crate::tools::fork::{
-    ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, StructureBatchParamsInput,
-    StructureOp, StructureOpInput, StyleBatchParamsInput, StyleOp, StyleOpInput, TransformOp,
-    TransformTarget, apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file,
-    apply_structure_ops_to_file, apply_style_ops_to_file, apply_transform_ops_to_file,
+    ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, CreateForkParams,
+    GridImportParams, MatrixCell, SaveForkParams, StructureBatchParamsInput, StructureOp,
+    StructureOpInput, StyleBatchParamsInput, StyleOp, StyleOpInput, TransformOp, TransformTarget,
+    apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file, apply_structure_ops_to_file,
+    apply_style_ops_to_file, apply_transform_ops_to_file, create_fork, grid_import,
     normalize_column_size_payload, normalize_structure_batch, normalize_style_batch,
-    resolve_style_ops_for_workbook, resolve_transform_ops_for_workbook,
+    resolve_style_ops_for_workbook, resolve_transform_ops_for_workbook, save_fork,
 };
 use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
 use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
@@ -22,6 +26,8 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 use tempfile::{Builder, TempPath};
 
 #[derive(Debug, Serialize)]
@@ -249,6 +255,12 @@ struct BatchApplyResponse {
     formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     write_path_provenance: Option<WritePathProvenance>,
+}
+
+#[derive(Debug)]
+struct GridImportFileApplyResult {
+    summary: crate::fork::ChangeSummary,
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 pub async fn copy(source: PathBuf, dest: PathBuf) -> Result<Value> {
@@ -543,6 +555,61 @@ pub async fn transform_batch(
                         builder.record_error(sheet_name, "FillRange", value, &err_msg);
                     }
                 },
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+                    let (anchor_col, anchor_row) = parse_cell_ref_for_cli(anchor)?;
+
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = anchor_row + r_idx as u32;
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = anchor_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}WriteMatrix formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None);
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
                 _ => valid_ops.push(op),
             }
         }
@@ -622,6 +689,133 @@ pub async fn transform_batch(
                 source.display().to_string(),
                 formula_parse_diagnostics,
                 write_path_provenance.clone(),
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn range_import(
+    file: PathBuf,
+    sheet: String,
+    anchor: String,
+    from_grid: Option<String>,
+    from_csv: Option<String>,
+    header: bool,
+    clear_target: bool,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let grid: GridPayload = match (from_grid, from_csv) {
+        (Some(grid_path), None) => {
+            let grid_raw = fs::read_to_string(&grid_path).map_err(|e| {
+                invalid_argument(format!("unable to read --from-grid '{}': {}", grid_path, e))
+            })?;
+            serde_json::from_str(&grid_raw).map_err(|e| {
+                invalid_argument(format!("invalid grid payload in '{}': {}", grid_path, e))
+            })?
+        }
+        (None, Some(csv_path)) => grid_payload_from_csv_file(&sheet, &anchor, &csv_path, header)?,
+        (Some(_), Some(_)) => {
+            return Err(invalid_argument(
+                "--from-grid and --from-csv are mutually exclusive",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid_argument(
+                "range-import requires exactly one of --from-grid or --from-csv",
+            ));
+        }
+    };
+
+    let op_count = 1usize;
+    let mut operation_counts = BTreeMap::new();
+    operation_counts.insert("grid_import".to_string(), 1);
+
+    let formula_targets = if grid
+        .rows
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .any(|cell| cell.f.is_some())
+    {
+        vec![format!("{}!{}", sheet, anchor)]
+    } else {
+        Vec::new()
+    };
+    let write_path_provenance = formula_write_provenance("range_import", formula_targets);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".range-import-", |path| {
+                    apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = grid_import_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".range-import-", |path| {
+                apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                    .map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = grid_import_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                1,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".range-import-", |path| {
+                    apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = grid_import_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                1,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
             )
         }
     }
@@ -1479,6 +1673,7 @@ fn summarize_transform_operation_counts(ops: &[TransformOp]) -> BTreeMap<String,
             TransformOp::ClearRange { .. } => "clear_range",
             TransformOp::FillRange { .. } => "fill_range",
             TransformOp::ReplaceInRange { .. } => "replace_in_range",
+            TransformOp::WriteMatrix { .. } => "write_matrix",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }
@@ -1512,6 +1707,8 @@ fn summarize_structure_operation_counts(ops: &[StructureOp]) -> BTreeMap<String,
             StructureOp::DeleteSheet { .. } => "delete_sheet",
             StructureOp::CopyRange { .. } => "copy_range",
             StructureOp::MoveRange { .. } => "move_range",
+            StructureOp::MergeCells { .. } => "merge_cells",
+            StructureOp::UnmergeCells { .. } => "unmerge_cells",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }
@@ -1634,6 +1831,12 @@ fn rules_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
     )
 }
 
+fn grid_import_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    counts
+        .iter()
+        .any(|(key, value)| key != "ops" && *value > 0 && !key.starts_with("warnings_"))
+}
+
 fn any_count_non_zero(counts: &BTreeMap<String, u64>, keys: &[&str]) -> bool {
     keys.iter()
         .any(|key| counts.get(*key).copied().unwrap_or(0) > 0)
@@ -1687,6 +1890,17 @@ fn formula_write_provenance(
     }
 }
 
+fn parse_cell_ref_for_cli(cell: &str) -> Result<(u32, u32)> {
+    let (col, row, _, _) = umya_spreadsheet::helper::coordinate::index_from_coordinate(cell);
+    match (col, row) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Ok((c, r)),
+        _ => Err(invalid_ops_payload(format!(
+            "invalid cell reference '{}' (expected A1-style reference)",
+            cell
+        ))),
+    }
+}
+
 fn transform_formula_targets(ops: &[TransformOp]) -> Vec<String> {
     ops.iter()
         .filter_map(|op| match op {
@@ -1703,6 +1917,18 @@ fn transform_formula_targets(ops: &[TransformOp]) -> Vec<String> {
                 ..
             } if *include_formulas => {
                 Some(format!("{}!{}", sheet_name, transform_target_label(target)))
+            }
+            TransformOp::WriteMatrix {
+                sheet_name,
+                anchor,
+                rows,
+                ..
+            } if rows.iter().any(|r| {
+                r.iter()
+                    .any(|c| matches!(c, Some(crate::tools::fork::MatrixCell::Formula(_))))
+            }) =>
+            {
+                Some(format!("{}!{}", sheet_name, anchor))
             }
             _ => None,
         })
@@ -1996,6 +2222,231 @@ fn atomic_overwrite_supported() -> bool {
 #[cfg(not(unix))]
 fn atomic_overwrite_supported() -> bool {
     false
+}
+
+fn grid_payload_from_csv_file(
+    sheet_name: &str,
+    anchor: &str,
+    csv_path: &str,
+    skip_header: bool,
+) -> Result<GridPayload> {
+    let csv_raw = fs::read_to_string(csv_path).map_err(|e| {
+        invalid_argument(format!("unable to read --from-csv '{}': {}", csv_path, e))
+    })?;
+    let mut records = parse_csv_records(&csv_raw)
+        .map_err(|e| invalid_argument(format!("invalid CSV in '{}': {}", csv_path, e)))?;
+
+    if skip_header && !records.is_empty() {
+        records.remove(0);
+    }
+
+    let rows = records
+        .into_iter()
+        .enumerate()
+        .map(|(row_idx, row)| {
+            let cells = row
+                .into_iter()
+                .enumerate()
+                .map(|(col_idx, field)| crate::model::GridCell {
+                    offset: [row_idx as u32, col_idx as u32],
+                    v: Some(csv_field_to_json(&field)),
+                    f: None,
+                    fmt: None,
+                    style: None,
+                })
+                .collect();
+            crate::model::GridRow { cells }
+        })
+        .collect();
+
+    Ok(GridPayload {
+        sheet: sheet_name.to_string(),
+        anchor: anchor.to_string(),
+        columns: Vec::new(),
+        merges: Vec::new(),
+        rows,
+    })
+}
+
+fn csv_field_to_json(field: &str) -> serde_json::Value {
+    let trimmed = field.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::Null;
+    }
+    if trimmed.eq_ignore_ascii_case("true") {
+        return serde_json::Value::Bool(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return serde_json::Value::Bool(false);
+    }
+    if let Ok(int_val) = trimmed.parse::<i64>() {
+        return serde_json::json!(int_val);
+    }
+    if let Ok(float_val) = trimmed.parse::<f64>() {
+        return serde_json::json!(float_val);
+    }
+    serde_json::Value::String(field.to_string())
+}
+
+fn parse_csv_records(raw: &str) -> Result<Vec<Vec<String>>> {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if matches!(chars.peek(), Some('"')) {
+                    let _ = chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_quotes = true,
+            ',' => {
+                row.push(std::mem::take(&mut field));
+            }
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut row));
+            }
+            '\r' => {
+                if matches!(chars.peek(), Some('\n')) {
+                    let _ = chars.next();
+                }
+                row.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut row));
+            }
+            _ => field.push(ch),
+        }
+    }
+
+    if in_quotes {
+        return Err(anyhow!("unterminated quoted field"));
+    }
+
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        records.push(row);
+    }
+
+    Ok(records)
+}
+
+fn apply_grid_import_to_path(
+    path: &Path,
+    sheet_name: &str,
+    anchor: &str,
+    grid: &GridPayload,
+    clear_target: bool,
+) -> Result<GridImportFileApplyResult> {
+    let workspace_root = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let config = Arc::new(ServerConfig {
+        workspace_root,
+        screenshot_dir: PathBuf::from("screenshots"),
+        path_mappings: Vec::new(),
+        cache_capacity: 2,
+        supported_extensions: vec!["xlsx".into(), "xlsm".into(), "xls".into(), "xlsb".into()],
+        single_workbook: Some(path.to_path_buf()),
+        enabled_tools: None,
+        transport: TransportKind::Stdio,
+        http_bind_address: "127.0.0.1:8079"
+            .parse()
+            .expect("hardcoded bind address is valid"),
+        recalc_enabled: true,
+        recalc_backend: RecalcBackendKind::Auto,
+        vba_enabled: false,
+        max_concurrent_recalcs: 1,
+        tool_timeout_ms: Some(30_000),
+        max_response_bytes: Some(1_000_000),
+        output_profile: OutputProfile::Verbose,
+        max_payload_bytes: Some(65_536),
+        max_cells: Some(10_000),
+        max_items: Some(500),
+        allow_overwrite: true,
+    });
+
+    let sheet_name = sheet_name.to_string();
+    let anchor = anchor.to_string();
+    let grid = grid.clone();
+    let path_buf = path.to_path_buf();
+
+    let handle = thread::spawn(move || -> Result<GridImportFileApplyResult> {
+        let state = Arc::new(AppState::new(config));
+        let workbook_list = state.list_workbooks(WorkbookFilter::default())?;
+        let workbook_id = workbook_list
+            .workbooks
+            .first()
+            .map(|entry| entry.workbook_id.clone())
+            .ok_or_else(|| anyhow!("no workbook found at '{}'", path_buf.display()))?;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| write_failed(format!("failed to create tokio runtime: {}", e)))?;
+
+        let (summary, formula_parse_diagnostics) = runtime.block_on(async {
+            let fork = create_fork(
+                state.clone(),
+                CreateForkParams {
+                    workbook_or_fork_id: workbook_id,
+                },
+            )
+            .await?;
+
+            let import_response = grid_import(
+                state.clone(),
+                GridImportParams {
+                    fork_id: fork.fork_id.clone(),
+                    sheet_name,
+                    anchor,
+                    grid,
+                    clear_target,
+                    mode: None,
+                    label: None,
+                    formula_parse_policy: None,
+                },
+            )
+            .await?;
+
+            let _ = save_fork(
+                state.clone(),
+                SaveForkParams {
+                    fork_id: fork.fork_id,
+                    target_path: None,
+                    drop_fork: true,
+                },
+            )
+            .await?;
+
+            Ok::<_, anyhow::Error>((
+                import_response.summary,
+                import_response.formula_parse_diagnostics,
+            ))
+        })?;
+
+        Ok(GridImportFileApplyResult {
+            summary,
+            formula_parse_diagnostics,
+        })
+    });
+
+    handle
+        .join()
+        .map_err(|_| write_failed("grid import worker thread panicked"))?
 }
 
 fn classify_apply_error(error: anyhow::Error) -> anyhow::Error {

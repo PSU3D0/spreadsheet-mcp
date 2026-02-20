@@ -6984,6 +6984,274 @@ fn structure_batch_help_mentions_formula_cache() {
     );
 }
 
+fn write_complex_grid_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+
+        sheet.get_cell_mut("A1").set_value("Quarterly Report");
+        sheet.add_merge_cells("A1:B1");
+        sheet.get_cell_mut("A2").set_value("Name");
+        sheet.get_cell_mut("B2").set_value("Amount");
+        sheet.get_cell_mut("A3").set_value("Alice");
+        sheet.get_cell_mut("B3").set_value_number(1234.0);
+        sheet.get_cell_mut("A4").set_value("Bob");
+        sheet.get_cell_mut("B4").set_value_number(5678.0);
+
+        sheet.get_column_dimension_mut("A").set_width(26.0);
+        sheet.get_column_dimension_mut("B").set_width(14.0);
+
+        sheet.get_style_mut("A1").get_font_mut().set_bold(true);
+        sheet
+            .get_style_mut("A1")
+            .get_alignment_mut()
+            .set_horizontal(umya_spreadsheet::HorizontalAlignmentValues::Center);
+        sheet
+            .get_style_mut("A1")
+            .get_borders_mut()
+            .get_bottom_border_mut()
+            .set_border_style("medium");
+        sheet.get_style_mut("B3").get_font_mut().set_italic(true);
+        sheet
+            .get_style_mut("B3")
+            .get_number_format_mut()
+            .set_format_code("$#,##0");
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
+#[test]
+fn cli_range_export_csv_and_range_import_from_csv_roundtrip() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("csv-source.xlsx");
+    let target_path = tmp.path().join("csv-target.xlsx");
+    let csv_path = tmp.path().join("export.csv");
+
+    write_fixture(&source_path);
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let source = source_path.to_str().expect("source path utf8");
+    let target = target_path.to_str().expect("target path utf8");
+    let csv = csv_path.to_str().expect("csv path utf8");
+
+    let export = run_cli(&[
+        "range-export",
+        source,
+        "Sheet1",
+        "A1:B4",
+        "--format",
+        "csv",
+        "--output",
+        csv,
+    ]);
+    assert!(export.status.success(), "stderr: {:?}", export.stderr);
+    let export_payload = parse_stdout_json(&export);
+    assert_eq!(export_payload["status"], "ok");
+    assert_json_path_eq(&export_payload, "path", csv);
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "B2",
+        "--from-csv",
+        csv,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let read = run_cli(&["range-values", target, "Sheet1", "B2:C5"]);
+    assert!(read.status.success(), "stderr: {:?}", read.stderr);
+    let payload = parse_stdout_json(&read);
+    let rows = payload["values"][0]["rows"]
+        .as_array()
+        .expect("rows matrix");
+
+    assert_eq!(rows[0][0]["value"], "Name");
+    assert_eq!(rows[0][1]["value"], "Amount");
+    assert_eq!(rows[1][0]["value"], "Alice");
+    assert_eq!(rows[1][1]["value"], 10.0);
+    assert_eq!(rows[3][0]["value"], "Carol");
+    assert_eq!(rows[3][1]["value"], 30.0);
+
+    let target_header_path = tmp.path().join("csv-target-header.xlsx");
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_header_path)
+        .expect("write header target workbook");
+    let target_header = target_header_path.to_str().expect("header path utf8");
+
+    let import_header = run_cli(&[
+        "range-import",
+        target_header,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-csv",
+        csv,
+        "--header",
+        "--in-place",
+    ]);
+    assert!(
+        import_header.status.success(),
+        "stderr: {:?}",
+        import_header.stderr
+    );
+
+    let read_header = run_cli(&["range-values", target_header, "Sheet1", "A1:B3"]);
+    assert!(
+        read_header.status.success(),
+        "stderr: {:?}",
+        read_header.stderr
+    );
+    let header_payload = parse_stdout_json(&read_header);
+    let header_rows = header_payload["values"][0]["rows"]
+        .as_array()
+        .expect("header rows matrix");
+    assert_eq!(header_rows[0][0]["value"], "Alice");
+    assert_eq!(header_rows[0][1]["value"], 10.0);
+}
+
+#[test]
+fn cli_grid_export_import_roundtrip_preserves_layout_and_styles() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("grid-source.xlsx");
+    let target_path = tmp.path().join("grid-target.xlsx");
+    let grid_path = tmp.path().join("region.grid.json");
+
+    write_complex_grid_fixture(&source_path);
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let source = source_path.to_str().expect("source path utf8");
+    let target = target_path.to_str().expect("target path utf8");
+    let grid = grid_path.to_str().expect("grid path utf8");
+
+    let export = run_cli(&[
+        "range-export",
+        source,
+        "Sheet1",
+        "A1:B4",
+        "--format",
+        "grid",
+        "--output",
+        grid,
+    ]);
+    assert!(export.status.success(), "stderr: {:?}", export.stderr);
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-grid",
+        grid,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let layout = run_cli(&[
+        "layout-page",
+        target,
+        "Sheet1",
+        "--range",
+        "A1:B4",
+        "--max-col-width",
+        "40",
+        "--skip-empty-columns-trim",
+    ]);
+    assert!(layout.status.success(), "stderr: {:?}", layout.stderr);
+    let layout_payload = parse_stdout_json(&layout);
+
+    let merges = layout_payload["merged_cells"]
+        .as_array()
+        .expect("merged cells");
+    assert!(
+        merges.iter().any(|v| v.as_str() == Some("A1:B1")),
+        "expected A1:B1 merge, got {:?}",
+        merges
+    );
+
+    let columns = layout_payload["columns"].as_array().expect("columns");
+    assert_eq!(columns[0]["width_chars"], 26.0);
+    assert_eq!(columns[1]["width_chars"], 14.0);
+
+    let row1_cells = layout_payload["rows"][0]["cells"]
+        .as_array()
+        .expect("row1 cells");
+    let a1 = row1_cells
+        .iter()
+        .find(|c| c["address"] == "A1")
+        .expect("A1 cell");
+    assert_eq!(a1["bold"], true);
+
+    let inspect = run_cli(&["inspect-cells", target, "Sheet1", "B3:B3"]);
+    assert!(inspect.status.success(), "stderr: {:?}", inspect.stderr);
+    let inspect_payload = parse_stdout_json(&inspect);
+    let b3 = inspect_payload["cells"].as_array().expect("cells")[0].clone();
+    assert_eq!(b3["number_format"], "$#,##0");
+}
+
+#[test]
+fn cli_range_import_from_csv_handles_quotes_crlf_and_blanks() {
+    let tmp = tempdir().expect("tempdir");
+    let target_path = tmp.path().join("csv-edge-target.xlsx");
+    let csv_path = tmp.path().join("edge.csv");
+
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let csv_content = concat!(
+        "Name,Note,Amount,Extra\r\n",
+        "\"Doe, Jane\",\"He said \"\"Hi\"\"\",123,\r\n",
+        "\"Multiline\",\"First line\r\nSecond line\",45.67,\"\"\r\n"
+    );
+    fs::write(&csv_path, csv_content).expect("write csv");
+
+    let target = target_path.to_str().expect("target path utf8");
+    let csv = csv_path.to_str().expect("csv path utf8");
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-csv",
+        csv,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let read = run_cli(&["range-values", target, "Sheet1", "A1:D3"]);
+    assert!(read.status.success(), "stderr: {:?}", read.stderr);
+    let payload = parse_stdout_json(&read);
+    let rows = payload["values"][0]["rows"]
+        .as_array()
+        .expect("rows matrix");
+
+    assert_eq!(rows[0][0]["value"], "Name");
+    assert_eq!(rows[0][1]["value"], "Note");
+    assert_eq!(rows[0][2]["value"], "Amount");
+    assert_eq!(rows[0][3]["value"], "Extra");
+
+    assert_eq!(rows[1][0]["value"], "Doe, Jane");
+    assert_eq!(rows[1][1]["value"], "He said \"Hi\"");
+    assert_eq!(rows[1][2]["value"], 123.0);
+    assert!(rows[1][3].is_null());
+
+    assert_eq!(rows[2][0]["value"], "Multiline");
+    let multiline = rows[2][1]["value"].as_str().expect("multiline text value");
+    assert!(multiline.contains("First line"));
+    assert!(multiline.contains("Second line"));
+    assert_eq!(rows[2][2]["value"], 45.67);
+    assert!(rows[2][3].is_null());
+}
+
 #[test]
 fn edit_help_mentions_formula_cache_and_modes() {
     let output = run_cli(&["edit", "--help"]);

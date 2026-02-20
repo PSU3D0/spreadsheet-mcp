@@ -92,6 +92,102 @@ pub async fn range_values(
     Ok(serde_json::to_value(response)?)
 }
 
+pub async fn range_export(
+    file: PathBuf,
+    sheet: String,
+    range: String,
+    format: String,
+    output: Option<String>,
+    include_formulas: Option<bool>,
+) -> Result<Value> {
+    let is_csv = format == "csv";
+    let is_grid = format == "grid";
+    if !is_csv && !is_grid && format != "json" {
+        bail!("unsupported format: {}", format);
+    }
+
+    let runtime = StatelessRuntime;
+    let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
+    let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+
+    if is_grid {
+        let payload = tools::grid_export(
+            state,
+            tools::GridExportParams {
+                workbook_or_fork_id: workbook_id,
+                sheet_name: sheet,
+                range,
+            },
+        )
+        .await?;
+
+        if let Some(out_path) = output {
+            let json_str = serde_json::to_string_pretty(&payload)?;
+            if out_path == "-" {
+                print!("{}", json_str);
+            } else {
+                std::fs::write(&out_path, json_str)?;
+                return Ok(serde_json::json!({ "status": "ok", "path": out_path }));
+            }
+            std::process::exit(0);
+        }
+
+        return Ok(serde_json::to_value(payload)?);
+    }
+
+    let table_format = if is_csv {
+        TableOutputFormat::Csv
+    } else {
+        TableOutputFormat::Json
+    };
+
+    let mut response = tools::range_values(
+        state,
+        RangeValuesParams {
+            workbook_or_fork_id: workbook_id,
+            sheet_name: sheet,
+            ranges: vec![range],
+            include_headers: None,
+            include_formulas,
+            format: Some(table_format),
+            page_size: None,
+        },
+    )
+    .await?;
+
+    if let Some(mut first_entry) = response.values.pop() {
+        if is_csv {
+            let csv_str = first_entry.csv.take().unwrap_or_default();
+            if let Some(out_path) = output {
+                if out_path == "-" {
+                    print!("{}", csv_str);
+                } else {
+                    std::fs::write(&out_path, csv_str)?;
+                    return Ok(serde_json::json!({ "status": "ok", "path": out_path }));
+                }
+            } else {
+                print!("{}", csv_str);
+            }
+            std::process::exit(0);
+        }
+
+        if let Some(out_path) = output {
+            let json_str = serde_json::to_string_pretty(&first_entry)?;
+            if out_path == "-" {
+                println!("{}", json_str);
+            } else {
+                std::fs::write(&out_path, json_str)?;
+                return Ok(serde_json::json!({ "status": "ok", "path": out_path }));
+            }
+            std::process::exit(0);
+        }
+
+        return Ok(serde_json::to_value(first_entry)?);
+    }
+
+    bail!("no data returned from range-values");
+}
+
 pub async fn inspect_cells(file: PathBuf, sheet: String, range: String) -> Result<Value> {
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
@@ -723,9 +819,9 @@ pub async fn run_manifest(
 
     let mut parsed_inputs = std::collections::BTreeMap::new();
     if let Some(inputs_str) = inputs_arg {
-        let json_str = if inputs_str.starts_with('@') {
-            std::fs::read_to_string(&inputs_str[1..])
-                .context(format!("failed to read inputs file '{}'", &inputs_str[1..]))?
+        let json_str = if let Some(inputs_path) = inputs_str.strip_prefix('@') {
+            std::fs::read_to_string(inputs_path)
+                .context(format!("failed to read inputs file '{}'", inputs_path))?
         } else {
             inputs_str
         };
@@ -908,6 +1004,7 @@ pub async fn sheetport_bind_check(file: PathBuf, manifest: PathBuf) -> Result<Va
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn layout_page(
     file: PathBuf,
     sheet: String,

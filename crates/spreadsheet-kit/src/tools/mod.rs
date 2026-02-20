@@ -4195,6 +4195,8 @@ pub async fn get_manifest_stub(
     }
 
     let mut ports = Vec::new();
+    let sanitize_id_re = regex::Regex::new(r"[^a-z0-9_-]").expect("valid id regex");
+    let sanitize_header_re = regex::Regex::new(r"[^a-zA-Z0-9_]").expect("valid header regex");
 
     for summary in &summaries {
         let sheet_name = &summary.name;
@@ -4209,10 +4211,7 @@ pub async fn get_manifest_stub(
                 )
                 .to_lowercase()
                 .replace(char::is_whitespace, "_");
-                let id = regex::Regex::new(r"[^a-z0-9_-]")
-                    .unwrap()
-                    .replace_all(&id, "")
-                    .to_string();
+                let id = sanitize_id_re.replace_all(&id, "").to_string();
 
                 let (dir, shape, schema, location) = match region.classification {
                     crate::model::RegionKind::Parameters => {
@@ -4260,8 +4259,7 @@ pub async fn get_manifest_stub(
                         };
                         let mut columns = Vec::new();
                         for (c_idx, header) in region.headers.iter().enumerate() {
-                            let clean_name = regex::Regex::new(r"[^a-zA-Z0-9_]")
-                                .unwrap()
+                            let clean_name = sanitize_header_re
                                 .replace_all(header, "_")
                                 .to_string()
                                 .to_lowercase();
@@ -5287,9 +5285,11 @@ pub async fn execute_manifest(
             .map_err(|e| anyhow!("Failed to write inputs: {}", e))?;
     }
 
-    let mut options = formualizer::sheetport::EvalOptions::default();
-    options.rng_seed = params.rng_seed;
-    options.freeze_volatile = params.freeze_volatile;
+    let options = formualizer::sheetport::EvalOptions {
+        rng_seed: params.rng_seed,
+        freeze_volatile: params.freeze_volatile,
+        ..Default::default()
+    };
 
     let outputs = session
         .evaluate_once(options)
@@ -5307,6 +5307,230 @@ pub async fn execute_manifest(
 }
 
 // ── layout_page ───────────────────────────────────────────────────────────────
+
+// ── grid_export ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridExportParams {
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
+    pub sheet_name: String,
+    pub range: String,
+}
+
+pub async fn grid_export(
+    state: Arc<AppState>,
+    params: GridExportParams,
+) -> Result<crate::model::GridPayload> {
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let ((min_col, min_row), (max_col, max_row)) =
+        parse_range(&params.range).ok_or_else(|| anyhow!("invalid range: {}", params.range))?;
+
+    let payload = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let mut columns = Vec::new();
+        for col_idx in min_col..=max_col {
+            if let Some(dim) = sheet.get_column_dimension_by_number(&col_idx) {
+                let w = *dim.get_width();
+                if w > 0.0 {
+                    columns.push(crate::model::GridColumnHint {
+                        offset: col_idx - min_col,
+                        width_chars: w,
+                    });
+                }
+            }
+        }
+
+        let mut merges = Vec::new();
+        for mc in sheet.get_merge_cells() {
+            let m_range = mc.get_range();
+            if let Some(((c1, r1), (c2, r2))) = parse_range(&m_range)
+                && c1 <= max_col
+                && c2 >= min_col
+                && r1 <= max_row
+                && r2 >= min_row
+            {
+                merges.push(m_range.to_string());
+            }
+        }
+
+        let mut rows = Vec::new();
+        for row in min_row..=max_row {
+            let mut cells = Vec::new();
+            for col in min_col..=max_col {
+                if let Some(cell) = sheet.get_cell((&col, &row)) {
+                    let mut v = None;
+                    let mut f = None;
+
+                    if cell.is_formula() {
+                        f = Some(format!("={}", cell.get_formula()));
+                    } else {
+                        let value = crate::workbook::cell_to_value(cell);
+                        if let Some(cv) = value {
+                            match cv {
+                                crate::model::CellValue::Text(s) => {
+                                    v = Some(serde_json::Value::String(s))
+                                }
+                                crate::model::CellValue::Number(n) => {
+                                    v = Some(serde_json::json!(n))
+                                }
+                                crate::model::CellValue::Bool(b) => {
+                                    v = Some(serde_json::Value::Bool(b))
+                                }
+                                crate::model::CellValue::Error(e) => {
+                                    v = Some(serde_json::Value::String(e))
+                                }
+                                crate::model::CellValue::Date(d) => {
+                                    v = Some(serde_json::Value::String(d))
+                                }
+                            }
+                        }
+                    }
+
+                    let style = cell.get_style();
+                    let desc = crate::styles::descriptor_from_style(style);
+
+                    let fmt = desc.number_format.clone();
+
+                    let mut style_patch = None;
+                    if desc.font.is_some()
+                        || desc.fill.is_some()
+                        || desc.borders.is_some()
+                        || desc.alignment.is_some()
+                    {
+                        style_patch = Some(crate::model::StylePatch {
+                            font: desc.font.map(|f| {
+                                Some(crate::model::FontPatch {
+                                    name: f.name.map(Some),
+                                    size: f.size.map(Some),
+                                    bold: f.bold.map(Some),
+                                    italic: f.italic.map(Some),
+                                    underline: f.underline.map(Some),
+                                    strikethrough: f.strikethrough.map(Some),
+                                    color: f.color.map(Some),
+                                })
+                            }),
+                            fill: desc.fill.map(|f| {
+                                Some(match f {
+                                    crate::model::FillDescriptor::Pattern(p) => {
+                                        crate::model::FillPatch::Pattern(
+                                            crate::model::PatternFillPatch {
+                                                pattern_type: p.pattern_type.map(Some),
+                                                foreground_color: p.foreground_color.map(Some),
+                                                background_color: p.background_color.map(Some),
+                                            },
+                                        )
+                                    }
+                                    crate::model::FillDescriptor::Gradient(g) => {
+                                        crate::model::FillPatch::Gradient(
+                                            crate::model::GradientFillPatch {
+                                                degree: g.degree.map(Some),
+                                                stops: Some(
+                                                    g.stops
+                                                        .into_iter()
+                                                        .map(|s| crate::model::GradientStopPatch {
+                                                            position: s.position,
+                                                            color: s.color,
+                                                        })
+                                                        .collect(),
+                                                ),
+                                            },
+                                        )
+                                    }
+                                })
+                            }),
+                            borders: desc.borders.map(|b| {
+                                Some(crate::model::BordersPatch {
+                                    left: b.left.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    right: b.right.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    top: b.top.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    bottom: b.bottom.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    diagonal: b.diagonal.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    vertical: b.vertical.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    horizontal: b.horizontal.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    diagonal_up: b.diagonal_up.map(Some),
+                                    diagonal_down: b.diagonal_down.map(Some),
+                                })
+                            }),
+                            alignment: desc.alignment.map(|a| {
+                                Some(crate::model::AlignmentPatch {
+                                    horizontal: a.horizontal.map(Some),
+                                    vertical: a.vertical.map(Some),
+                                    wrap_text: a.wrap_text.map(Some),
+                                    text_rotation: a.text_rotation.map(Some),
+                                })
+                            }),
+                            number_format: None,
+                        });
+                    }
+
+                    if v.is_some() || f.is_some() || fmt.is_some() || style_patch.is_some() {
+                        cells.push(crate::model::GridCell {
+                            offset: [row - min_row, col - min_col],
+                            v,
+                            f,
+                            fmt,
+                            style: style_patch,
+                        });
+                    }
+                }
+            }
+            if !cells.is_empty() {
+                rows.push(crate::model::GridRow { cells });
+            }
+        }
+
+        let anchor = format!(
+            "{}{}",
+            crate::utils::column_number_to_name(min_col),
+            min_row
+        );
+
+        Ok::<_, anyhow::Error>(crate::model::GridPayload {
+            sheet: params.sheet_name.clone(),
+            anchor,
+            columns,
+            merges,
+            rows,
+        })
+    })??;
+
+    Ok(payload)
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LayoutPageParams {
@@ -5648,6 +5872,11 @@ fn border_weight(style: Option<&str>) -> u8 {
 }
 
 /// Render a compact ASCII grid from layout data.
+#[allow(
+    clippy::unnecessary_map_or,
+    clippy::if_same_then_else,
+    clippy::needless_range_loop
+)]
 fn render_layout_ascii(
     columns: &[LayoutPageColumnInfo],
     rows: &[LayoutRowInfo],
