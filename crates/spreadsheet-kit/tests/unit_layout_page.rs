@@ -48,6 +48,8 @@ async fn layout_page_returns_column_widths() -> Result<()> {
             range: Some("A1:B1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -83,6 +85,8 @@ async fn layout_page_default_width_for_unset_column() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -132,6 +136,8 @@ async fn layout_page_detects_bold_and_italic() -> Result<()> {
             range: Some("A1:C1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -178,6 +184,8 @@ async fn layout_page_captures_border_styles() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -210,6 +218,8 @@ async fn layout_page_no_borders_on_plain_cell() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -241,6 +251,8 @@ async fn layout_page_reports_merged_cells() -> Result<()> {
             range: Some("A1:E1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -292,6 +304,8 @@ async fn layout_page_filters_merges_outside_range() -> Result<()> {
             range: Some("A1:B2".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -327,6 +341,8 @@ async fn layout_page_formula_mode_returns_formula_text() -> Result<()> {
             range: Some("A1:A3".to_string()),
             mode: Some(LayoutMode::Formulas),
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -366,6 +382,8 @@ async fn layout_page_caps_oversized_range() -> Result<()> {
             range: Some("A1:AX200".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -407,6 +425,8 @@ async fn layout_page_ascii_render_present_when_requested() -> Result<()> {
             range: Some("A1:B1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: Some(LayoutRender::Ascii),
         },
     )
@@ -444,6 +464,8 @@ async fn layout_page_json_render_no_ascii_by_default() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None, // default = json
         },
     )
@@ -474,6 +496,8 @@ async fn layout_page_both_render_returns_json_and_ascii() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: Some(LayoutRender::Both),
         },
     )
@@ -509,6 +533,8 @@ async fn layout_page_max_col_width_caps_wide_columns() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: Some(15),
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )
@@ -545,6 +571,8 @@ async fn layout_page_captures_explicit_alignment() -> Result<()> {
             range: Some("A1:A1".to_string()),
             mode: None,
             max_col_width: None,
+            fit_columns: None,
+            trim_empty_columns: Some(false),
             render: None,
         },
     )

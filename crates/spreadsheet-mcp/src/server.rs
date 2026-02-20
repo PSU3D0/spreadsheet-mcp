@@ -600,6 +600,25 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "grid_export",
+        description = "Export a range into a rich grid payload containing per-cell values, formulas, number formats, styles, column sizes, and merges. Returns inline JSON."
+    )]
+    pub async fn grid_export(
+        &self,
+        Parameters(params): Parameters<tools::GridExportParams>,
+    ) -> Result<Json<spreadsheet_kit::model::GridPayload>, McpError> {
+        self.ensure_tool_enabled("grid_export")
+            .map_err(|e| to_mcp_error_for_tool("grid_export", e))?;
+        self.run_tool_with_timeout(
+            "grid_export",
+            tools::grid_export(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("grid_export", e))
+    }
+
+    #[tool(
         name = "workbook_style_summary",
         description = "Summarise style usage, theme colors, and conditional formats across a workbook"
     )]
@@ -793,6 +812,25 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("style_batch", e))
+    }
+
+    #[tool(
+        name = "grid_import",
+        description = "Import a rich grid payload containing values, formulas, styles, formats, column sizes, and merges."
+    )]
+    pub async fn grid_import(
+        &self,
+        Parameters(params): Parameters<tools::fork::GridImportParams>,
+    ) -> Result<Json<tools::fork::GridImportResponse>, McpError> {
+        self.ensure_recalc_enabled("grid_import")
+            .map_err(|e| to_mcp_error_for_tool("grid_import", e))?;
+        self.run_tool_with_timeout(
+            "grid_import",
+            tools::fork::grid_import(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("grid_import", e))
     }
 
     #[tool(

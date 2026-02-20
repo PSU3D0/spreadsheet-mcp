@@ -1081,3 +1081,40 @@ pub struct LayoutPageResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridPayload {
+    pub sheet: String,
+    pub anchor: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<GridColumnHint>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<String>,
+    pub rows: Vec<GridRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridColumnHint {
+    pub offset: u32,
+    pub width_chars: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridRow {
+    pub cells: Vec<GridCell>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridCell {
+    pub offset: [u32; 2], // [row_offset, col_offset]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::model::StylePatch>,
+}

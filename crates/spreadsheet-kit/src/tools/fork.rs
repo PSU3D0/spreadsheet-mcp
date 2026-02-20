@@ -225,6 +225,14 @@ pub struct TransformBatchParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum MatrixCell {
+    #[serde(rename = "v")]
+    Value(serde_json::Value),
+    #[serde(rename = "f")]
+    Formula(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransformOp {
     ClearRange {
@@ -255,6 +263,13 @@ pub enum TransformOp {
         case_sensitive: bool,
         #[serde(default)]
         include_formulas: bool,
+    },
+    WriteMatrix {
+        sheet_name: String,
+        anchor: String,
+        rows: Vec<Vec<Option<MatrixCell>>>,
+        #[serde(default = "default_overwrite_formulas")]
+        overwrite_formulas: bool,
     },
 }
 
@@ -289,7 +304,10 @@ pub(crate) fn resolve_transform_ops_for_workbook(
     let mut resolved_ops = Vec::with_capacity(ops.len());
 
     for op in ops {
-        let (sheet_name, target) = match op {
+        match op {
+            TransformOp::WriteMatrix { .. } => {
+                resolved_ops.push(op.clone());
+            }
             TransformOp::ClearRange {
                 sheet_name, target, ..
             }
@@ -298,74 +316,76 @@ pub(crate) fn resolve_transform_ops_for_workbook(
             }
             | TransformOp::ReplaceInRange {
                 sheet_name, target, ..
-            } => (sheet_name, target),
-        };
+            } => {
+                let resolved_target = match target {
+                    TransformTarget::Region { region_id } => {
+                        let metrics = workbook.get_sheet_metrics(sheet_name)?;
+                        let regions = metrics.detected_regions();
+                        let region =
+                            regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
+                                anyhow!(
+                                    "region_id {} not found on sheet '{}'",
+                                    region_id,
+                                    sheet_name
+                                )
+                            })?;
+                        TransformTarget::Range {
+                            range: region.bounds.clone(),
+                        }
+                    }
+                    other => other.clone(),
+                };
 
-        let resolved_target = match target {
-            TransformTarget::Region { region_id } => {
-                let metrics = workbook.get_sheet_metrics(sheet_name)?;
-                let regions = metrics.detected_regions();
-                let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
-                    anyhow!(
-                        "region_id {} not found on sheet '{}'",
-                        region_id,
-                        sheet_name
-                    )
-                })?;
-                TransformTarget::Range {
-                    range: region.bounds.clone(),
+                match op {
+                    TransformOp::ClearRange {
+                        sheet_name,
+                        clear_values,
+                        clear_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::ClearRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            clear_values: *clear_values,
+                            clear_formulas: *clear_formulas,
+                        });
+                    }
+                    TransformOp::FillRange {
+                        sheet_name,
+                        value,
+                        is_formula,
+                        overwrite_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::FillRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            value: value.clone(),
+                            is_formula: *is_formula,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    }
+                    TransformOp::ReplaceInRange {
+                        sheet_name,
+                        find,
+                        replace,
+                        match_mode,
+                        case_sensitive,
+                        include_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::ReplaceInRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            find: find.clone(),
+                            replace: replace.clone(),
+                            match_mode: *match_mode,
+                            case_sensitive: *case_sensitive,
+                            include_formulas: *include_formulas,
+                        });
+                    }
+                    TransformOp::WriteMatrix { .. } => unreachable!(),
                 }
-            }
-            other => other.clone(),
-        };
-
-        match op {
-            TransformOp::ClearRange {
-                sheet_name,
-                clear_values,
-                clear_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::ClearRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    clear_values: *clear_values,
-                    clear_formulas: *clear_formulas,
-                });
-            }
-            TransformOp::FillRange {
-                sheet_name,
-                value,
-                is_formula,
-                overwrite_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::FillRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    value: value.clone(),
-                    is_formula: *is_formula,
-                    overwrite_formulas: *overwrite_formulas,
-                });
-            }
-            TransformOp::ReplaceInRange {
-                sheet_name,
-                find,
-                replace,
-                match_mode,
-                case_sensitive,
-                include_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::ReplaceInRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    find: find.clone(),
-                    replace: replace.clone(),
-                    match_mode: *match_mode,
-                    case_sensitive: *case_sensitive,
-                    include_formulas: *include_formulas,
-                });
             }
         }
     }
@@ -421,6 +441,63 @@ pub async fn transform_batch(
                         builder.record_error(sheet_name, "FillRange", value, &err_msg);
                     }
                 },
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+
+                    let (anchor_col, anchor_row) = parse_cell_ref(anchor)?;
+
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = anchor_row + r_idx as u32;
+
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = anchor_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}WriteMatrix formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None); // drop the invalid formula cell if warn
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
                 _ => valid_ops.push(op),
             }
         }
@@ -1666,6 +1743,14 @@ pub fn normalize_structure_batch(
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StructureOp {
+    MergeCells {
+        sheet_name: String,
+        target_range: String,
+    },
+    UnmergeCells {
+        sheet_name: String,
+        target_range: String,
+    },
     InsertRows {
         sheet_name: String,
         at_row: u32,
@@ -1906,6 +1991,45 @@ pub(crate) fn apply_structure_ops_to_file(
 
     for op in ops {
         match op {
+            StructureOp::MergeCells {
+                sheet_name,
+                target_range,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheet.add_merge_cells(target_range.clone());
+                affected_sheets.insert(sheet_name.clone());
+                *counts.entry("cells_merged".to_string()).or_insert(0) += 1;
+            }
+            StructureOp::UnmergeCells {
+                sheet_name,
+                target_range,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+                let original_len = sheet.get_merge_cells().len();
+                if let Ok(target_bounds) = parse_range_bounds(target_range) {
+                    let merges = sheet.get_merge_cells_mut();
+                    merges.retain(|m| {
+                        let m_range = m.get_range();
+                        if let Ok(m_bounds) = parse_range_bounds(&m_range) {
+                            !(m_bounds.min_col <= target_bounds.max_col
+                                && m_bounds.max_col >= target_bounds.min_col
+                                && m_bounds.min_row <= target_bounds.max_row
+                                && m_bounds.max_row >= target_bounds.min_row)
+                        } else {
+                            true
+                        }
+                    });
+                }
+                *counts.entry("cells_unmerged".to_string()).or_insert(0) +=
+                    (original_len - sheet.get_merge_cells().len()) as u64;
+
+                affected_sheets.insert(sheet_name.clone());
+            }
             StructureOp::InsertRows {
                 sheet_name,
                 at_row,
@@ -3642,6 +3766,79 @@ pub(crate) fn apply_transform_ops_to_file(
                     }
                 }
             }
+            TransformOp::WriteMatrix {
+                sheet_name,
+                anchor,
+                rows,
+                overwrite_formulas,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheets.insert(sheet_name.clone());
+
+                let (anchor_col, anchor_row) = parse_cell_ref(anchor)?;
+
+                let mut max_row = anchor_row;
+                let mut max_col = anchor_col;
+
+                for (r_idx, row) in rows.iter().enumerate() {
+                    let r = anchor_row + r_idx as u32;
+                    if r > max_row {
+                        max_row = r;
+                    }
+                    for (c_idx, cell_opt) in row.iter().enumerate() {
+                        let c = anchor_col + c_idx as u32;
+                        if c > max_col {
+                            max_col = c;
+                        }
+
+                        let Some(cell_data) = cell_opt else {
+                            continue;
+                        };
+
+                        let cell = sheet.get_cell_mut((c, r));
+                        cells_touched += 1;
+
+                        if cell.is_formula() {
+                            if !*overwrite_formulas {
+                                cells_skipped_keep_formulas += 1;
+                                continue;
+                            }
+                            cell.set_formula(String::new());
+                            cells_formula_cleared += 1;
+                        }
+
+                        match cell_data {
+                            MatrixCell::Value(v) => {
+                                let val_str = match v {
+                                    serde_json::Value::Null => String::new(),
+                                    serde_json::Value::Bool(b) => b.to_string(),
+                                    serde_json::Value::Number(n) => n.to_string(),
+                                    serde_json::Value::String(s) => s.clone(),
+                                    serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                                        v.to_string()
+                                    }
+                                };
+                                cell.set_value(val_str);
+                                cells_value_set += 1;
+                            }
+                            MatrixCell::Formula(f) => {
+                                let f_str = f.strip_prefix('=').unwrap_or(f);
+                                cell.set_formula(f_str);
+                                cell.set_formula_result_default("");
+                                cells_formula_set += 1;
+                            }
+                        }
+                    }
+                }
+
+                affected_bounds.push(format!(
+                    "{}:{}",
+                    crate::utils::cell_address(anchor_col, anchor_row),
+                    crate::utils::cell_address(max_col, max_row)
+                ));
+            }
         }
     }
 
@@ -4625,6 +4822,29 @@ pub async fn apply_staged_change(
 
                 ops_applied += 1;
             }
+            "grid_import" => {
+                recalc_triggered = true;
+                let payload: GridImportStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid grid_import payload: {}", e))?;
+
+                grid_import(
+                    state.clone(),
+                    GridImportParams {
+                        fork_id: params.fork_id.clone(),
+                        sheet_name: payload.sheet_name,
+                        anchor: payload.anchor,
+                        grid: payload.grid,
+                        clear_target: payload.clear_target,
+                        mode: Some(BatchMode::Apply),
+                        label: None,
+                        formula_parse_policy: None,
+                    },
+                )
+                .await?;
+
+                ops_applied += 1;
+            }
             "apply_formula_pattern" => {
                 recalc_triggered = true;
                 let payload: ApplyFormulaPatternStagedPayload =
@@ -5083,4 +5303,427 @@ Try smaller ranges. Suggested ranges: {}",
     }
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridImportParams {
+    #[serde(alias = "workbook_or_fork_id")]
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub anchor: String,
+    pub grid: crate::model::GridPayload,
+    #[serde(default)]
+    pub clear_target: bool,
+    #[serde(default)]
+    pub mode: Option<BatchMode>,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GridImportResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub summary: ChangeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GridImportStagedPayload {
+    sheet_name: String,
+    anchor: String,
+    clear_target: bool,
+    grid: crate::model::GridPayload,
+}
+
+pub async fn grid_import(
+    state: Arc<AppState>,
+    params: GridImportParams,
+) -> Result<GridImportResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let (anchor_col, anchor_row) = parse_cell_ref(&params.anchor)?;
+    let mut max_col = anchor_col;
+    let mut max_row = anchor_row;
+
+    let mut write_rows: Vec<Vec<Option<MatrixCell>>> = Vec::new();
+    let mut style_ops_map: BTreeMap<String, (StyleOp, Vec<String>)> = BTreeMap::new(); // keyed by json of style patch
+
+    for grid_row in &params.grid.rows {
+        for cell in &grid_row.cells {
+            let r = anchor_row + cell.offset[0];
+            let c = anchor_col + cell.offset[1];
+            if r > max_row {
+                max_row = r;
+            }
+            if c > max_col {
+                max_col = c;
+            }
+        }
+    }
+
+    let footprint_range = format!(
+        "{}:{}",
+        crate::utils::cell_address(anchor_col, anchor_row),
+        crate::utils::cell_address(max_col, max_row)
+    );
+
+    for grid_row in &params.grid.rows {
+        for cell in &grid_row.cells {
+            let row_idx = cell.offset[0] as usize;
+            let col_idx = cell.offset[1] as usize;
+            while write_rows.len() <= row_idx {
+                write_rows.push(Vec::new());
+            }
+            while write_rows[row_idx].len() <= col_idx {
+                write_rows[row_idx].push(None);
+            }
+
+            let mut mc = None;
+            if let Some(f) = &cell.f {
+                mc = Some(MatrixCell::Formula(f.clone()));
+            } else if let Some(v) = &cell.v {
+                mc = Some(MatrixCell::Value(v.clone()));
+            }
+            if mc.is_some() {
+                write_rows[row_idx][col_idx] = mc;
+            }
+
+            let mut has_style = false;
+            let mut style_patch = crate::model::StylePatch::default();
+            if let Some(st) = &cell.style {
+                style_patch = st.clone();
+                has_style = true;
+            }
+            if let Some(fmt) = &cell.fmt {
+                style_patch.number_format = Some(Some(fmt.clone()));
+                has_style = true;
+            }
+
+            if has_style {
+                let key = serde_json::to_string(&style_patch).unwrap();
+                let addr = crate::utils::cell_address(
+                    anchor_col + cell.offset[1],
+                    anchor_row + cell.offset[0],
+                );
+
+                let entry = style_ops_map.entry(key).or_insert_with(|| {
+                    (
+                        StyleOp {
+                            sheet_name: params.sheet_name.clone(),
+                            target: StyleTarget::Cells { cells: Vec::new() }, // filled later
+                            patch: style_patch.clone(),
+                            op_mode: None,
+                        },
+                        Vec::new(),
+                    )
+                });
+                entry.1.push(addr);
+            }
+        }
+    }
+
+    let mut style_ops = Vec::new();
+    if params.clear_target {
+        style_ops.push(StyleOp {
+            sheet_name: params.sheet_name.clone(),
+            target: StyleTarget::Range {
+                range: footprint_range.clone(),
+            },
+            patch: crate::model::StylePatch {
+                font: Some(None),
+                fill: Some(None),
+                borders: Some(None),
+                alignment: Some(None),
+                number_format: Some(None),
+            },
+            op_mode: None,
+        });
+    }
+    for mut group in style_ops_map.into_values() {
+        group.0.target = StyleTarget::Cells { cells: group.1 };
+        style_ops.push(group.0);
+    }
+
+    let mut transform_ops = Vec::new();
+    if params.clear_target {
+        transform_ops.push(TransformOp::ClearRange {
+            sheet_name: params.sheet_name.clone(),
+            target: TransformTarget::Range {
+                range: footprint_range.clone(),
+            },
+            clear_values: true,
+            clear_formulas: true,
+        });
+    }
+    transform_ops.push(TransformOp::WriteMatrix {
+        sheet_name: params.sheet_name.clone(),
+        anchor: params.anchor.clone(),
+        rows: write_rows,
+        overwrite_formulas: true,
+    });
+
+    let mut column_ops = Vec::new();
+    for col in &params.grid.columns {
+        let col_name = crate::utils::column_number_to_name(anchor_col + col.offset);
+        column_ops.push(ColumnSizeOp {
+            target: ColumnTarget::Columns {
+                range: format!("{}:{}", col_name, col_name),
+            },
+            size: ColumnSizeSpec::Width {
+                width_chars: col.width_chars,
+            },
+        });
+    }
+
+    let mut structure_ops = Vec::new();
+    if !params.grid.merges.is_empty() {
+        if params.clear_target {
+            structure_ops.push(StructureOp::UnmergeCells {
+                sheet_name: params.sheet_name.clone(),
+                target_range: footprint_range.clone(),
+            });
+        }
+        for merge in &params.grid.merges {
+            structure_ops.push(StructureOp::MergeCells {
+                sheet_name: params.sheet_name.clone(),
+                target_range: merge.clone(),
+            });
+        }
+    }
+
+    // Prepare ops for applying (same formula parsing as transform_batch)
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let resolved_transform_ops = resolve_transform_ops_for_workbook(&workbook, &transform_ops)?;
+    let resolved_style_ops = resolve_style_ops_for_workbook(&workbook, &style_ops)?;
+
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
+    let (ops_to_apply, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (resolved_transform_ops, None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_ops = Vec::new();
+        for op in resolved_transform_ops {
+            match &op {
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+                    let (a_col, a_row) = parse_cell_ref(anchor)?;
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = a_row + r_idx as u32;
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = a_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}grid_import formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None);
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
+                _ => valid_ops.push(op),
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_ops, diagnostics)
+    };
+
+    let mode = params.mode.unwrap_or_default();
+
+    if mode.is_preview() {
+        let change_id = make_short_random_id("chg", 12);
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let sheet_name_for_col = params.sheet_name.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            let mut summary = ChangeSummary::default();
+            summary.op_kinds.push("grid_import".to_string());
+
+            if !structure_ops.is_empty() {
+                let res = apply_structure_ops_to_file(
+                    &snapshot_for_apply,
+                    &structure_ops,
+                    FormulaParsePolicy::Off,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !column_ops.is_empty() {
+                let res = apply_column_size_ops_to_file(
+                    &snapshot_for_apply,
+                    &sheet_name_for_col,
+                    &column_ops,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !ops_to_apply.is_empty() {
+                let res = apply_transform_ops_to_file(&snapshot_for_apply, &ops_to_apply)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !resolved_style_ops.is_empty() {
+                let res = apply_style_ops_to_file(&snapshot_for_apply, &resolved_style_ops)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+
+            Ok::<_, anyhow::Error>(summary)
+        })
+        .await??;
+
+        let mut summary = apply_result;
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
+
+        let staged_op = StagedOp {
+            kind: "grid_import".to_string(),
+            payload: serde_json::to_value(GridImportStagedPayload {
+                sheet_name: params.sheet_name.clone(),
+                anchor: params.anchor.clone(),
+                clear_target: params.clear_target,
+                grid: params.grid.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(GridImportResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: Some(change_id),
+            summary,
+            formula_parse_diagnostics,
+        })
+    } else {
+        let sheet_name_for_col = params.sheet_name.clone();
+        let work_path_for_apply = work_path.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            let mut summary = ChangeSummary::default();
+            summary.op_kinds.push("grid_import".to_string());
+
+            if !structure_ops.is_empty() {
+                let res = apply_structure_ops_to_file(
+                    &work_path_for_apply,
+                    &structure_ops,
+                    FormulaParsePolicy::Off,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !column_ops.is_empty() {
+                let res = apply_column_size_ops_to_file(
+                    &work_path_for_apply,
+                    &sheet_name_for_col,
+                    &column_ops,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !ops_to_apply.is_empty() {
+                let res = apply_transform_ops_to_file(&work_path_for_apply, &ops_to_apply)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !resolved_style_ops.is_empty() {
+                let res = apply_style_ops_to_file(&work_path_for_apply, &resolved_style_ops)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+
+            Ok::<_, anyhow::Error>(summary)
+        })
+        .await??;
+
+        let mut summary = apply_result;
+        registry.with_fork_mut(&params.fork_id, |ctx| {
+            ctx.recalc_needed = true;
+            Ok(())
+        })?;
+        set_recalc_needed_flag(&mut summary, true);
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(GridImportResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: None,
+            summary,
+            formula_parse_diagnostics,
+        })
+    }
+}
+
+fn merge_summary_counts(dest: &mut ChangeSummary, src: &ChangeSummary) {
+    for sheet in &src.affected_sheets {
+        if !dest.affected_sheets.contains(sheet) {
+            dest.affected_sheets.push(sheet.clone());
+        }
+    }
+    for bounds in &src.affected_bounds {
+        if !dest.affected_bounds.contains(bounds) {
+            dest.affected_bounds.push(bounds.clone());
+        }
+    }
+    for (k, v) in &src.counts {
+        *dest.counts.entry(k.clone()).or_insert(0) += v;
+    }
 }

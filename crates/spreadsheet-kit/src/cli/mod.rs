@@ -230,6 +230,58 @@ pub enum Commands {
         include_formulas: Option<bool>,
     },
     #[command(
+        about = "Export a range to a specific format (e.g., csv, grid)",
+        after_long_help = "Examples:\n  agent-spreadsheet range-export data.xlsx Sheet1 A1:C20 --format csv --output data.csv\n  agent-spreadsheet range-export data.xlsx Sheet1 A1:C20 --format csv --output -"
+    )]
+    RangeExport {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name containing the range")]
+        sheet: String,
+        #[arg(value_name = "RANGE", help = "A1 range (for example A1:C10)")]
+        range: String,
+        #[arg(long, help = "Output format (e.g. csv, grid)", default_value = "json")]
+        format: String,
+        #[arg(long, help = "Output path or '-' for stdout")]
+        output: Option<String>,
+        #[arg(
+            long = "include-formulas",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include parsed formulas in formula cells alongside evaluated values (JSON only)"
+        )]
+        include_formulas: Option<bool>,
+    },
+    #[command(
+        about = "Import range data from grid JSON or CSV",
+        after_long_help = "Examples:\n  agent-spreadsheet range-import data.xlsx Sheet1 --anchor B7 --from-grid region.json\n  agent-spreadsheet range-import data.xlsx Sheet1 --anchor B7 --from-csv data.csv --in-place"
+    )]
+    RangeImport {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name to import into")]
+        sheet: String,
+        #[arg(long, help = "Anchor cell for import (e.g. B7)")]
+        anchor: String,
+        #[arg(long, help = "Path to the grid JSON file to import")]
+        from_grid: Option<String>,
+        #[arg(long, help = "Path to the CSV file to import")]
+        from_csv: Option<String>,
+        #[arg(long, help = "Skip first CSV row when importing --from-csv")]
+        header: bool,
+        #[arg(long, help = "Clear the target area before import")]
+        clear_target: bool,
+        #[arg(long, help = "Validate ops without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply imports by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, help = "Apply imports to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
         about = "Inspect one A1 range and return per-cell formula/value/style snapshots",
         after_long_help = "Examples:
   agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C10
@@ -1119,6 +1171,44 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             ranges,
             include_formulas,
         } => commands::read::range_values(file, sheet, ranges, include_formulas).await,
+        Commands::RangeExport {
+            file,
+            sheet,
+            range,
+            format,
+            output,
+            include_formulas,
+        } => {
+            commands::read::range_export(file, sheet, range, format, output, include_formulas).await
+        }
+        Commands::RangeImport {
+            file,
+            sheet,
+            anchor,
+            from_grid,
+            from_csv,
+            header,
+            clear_target,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::range_import(
+                file,
+                sheet,
+                anchor,
+                from_grid,
+                from_csv,
+                header,
+                clear_target,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
         Commands::InspectCells { file, sheet, range } => {
             commands::read::inspect_cells(file, sheet, range).await
         }
@@ -1569,7 +1659,8 @@ fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
     let first_subcommand_name = first_subcommand_index
         .map(|index| argv[index].to_string_lossy().into_owned())
         .unwrap_or_default();
-    let preserve_sheet_page_format = first_subcommand_name == "sheet-page";
+    let preserve_sheet_page_format =
+        first_subcommand_name == "sheet-page" || first_subcommand_name == "range-export";
 
     let mut normalized = Vec::with_capacity(argv.len());
     normalized.push(argv[0].clone());
@@ -1831,6 +1922,82 @@ mod tests {
                 assert_eq!(sheet, "Sheet1");
                 assert_eq!(ranges, vec!["A1:C10".to_string()]);
                 assert_eq!(include_formulas, Some(true));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_import_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-import",
+            "workbook.xlsx",
+            "Sheet1",
+            "--anchor",
+            "B7",
+            "--from-grid",
+            "region.json",
+            "--in-place",
+        ])
+        .expect("parse range-import");
+
+        match cli.command {
+            Commands::RangeImport {
+                file,
+                sheet,
+                anchor,
+                from_grid,
+                from_csv,
+                header,
+                clear_target,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(anchor, "B7");
+                assert_eq!(from_grid.as_deref(), Some("region.json"));
+                assert!(from_csv.is_none());
+                assert!(!header);
+                assert!(!clear_target);
+                assert!(!dry_run);
+                assert!(in_place);
+                assert!(output.is_none());
+                assert!(!force);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_import_from_csv_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-import",
+            "workbook.xlsx",
+            "Sheet1",
+            "--anchor",
+            "B7",
+            "--from-csv",
+            "data.csv",
+            "--header",
+            "--in-place",
+        ])
+        .expect("parse range-import csv");
+
+        match cli.command {
+            Commands::RangeImport {
+                from_grid,
+                from_csv,
+                header,
+                ..
+            } => {
+                assert!(from_grid.is_none());
+                assert_eq!(from_csv.as_deref(), Some("data.csv"));
+                assert!(header);
             }
             other => panic!("unexpected command: {other:?}"),
         }
