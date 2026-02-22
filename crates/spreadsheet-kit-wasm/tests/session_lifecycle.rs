@@ -69,27 +69,48 @@ fn session_lifecycle_reads_and_disposes() {
 }
 
 #[test]
-fn sheet_page_is_explicitly_unsupported() {
+fn sheet_page_reads_real_session_data() {
     let bytes = workbook_bytes(|book| {
-        book.get_sheet_by_name_mut("Sheet1")
-            .expect("sheet")
-            .get_cell_mut("A1")
-            .set_value("hello");
+        let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Score");
+        sheet.get_cell_mut("A2").set_value("alpha");
+        sheet.get_cell_mut("B2").set_value_number(42.0);
+        sheet.get_cell_mut("A3").set_value("beta");
+        sheet.get_cell_mut("B3").set_value_number(7.0);
     });
 
     let api = SessionApi::new();
     let session_id = api.create_session(&bytes).expect("create session");
 
-    let err = api
+    let page = api
         .sheet_page(
             &session_id,
             SheetPageParams {
                 sheet_name: "Sheet1".to_string(),
+                start_row: Some(2),
+                page_size: Some(1),
+                columns: None,
+                columns_by_header: Some(vec!["score".to_string()]),
+                include_formulas: Some(false),
+                include_styles: Some(false),
+                include_header: Some(true),
+                format: Some(spreadsheet_kit::model::SheetPageFormat::Compact),
             },
         )
-        .expect_err("sheet page unsupported");
-    assert!(matches!(err, SessionApiError::Unsupported { .. }));
-    assert_eq!(err.code(), "UNSUPPORTED");
+        .expect("sheet page");
+
+    assert_eq!(page.sheet_name, "Sheet1");
+    assert_eq!(page.workbook_id.as_str(), session_id);
+    assert_eq!(page.next_start_row, Some(3));
+
+    let compact = page.compact.expect("compact payload");
+    assert_eq!(compact.headers, vec!["Row", "Score"]);
+    assert_eq!(compact.rows.len(), 1);
+    assert!(matches!(
+        compact.rows[0][1],
+        Some(CellValue::Number(n)) if (n - 42.0).abs() < f64::EPSILON
+    ));
 }
 
 #[test]

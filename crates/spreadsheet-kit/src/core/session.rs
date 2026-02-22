@@ -1,4 +1,8 @@
-use crate::model::{GridCell, GridColumnHint, GridPayload, GridRow, RangeValuesEntry, StylePatch};
+use crate::model::{
+    CellSnapshot, CellValue, GridCell, GridColumnHint, GridPayload, GridRow, RangeValuesEntry,
+    RowSnapshot, SheetPageCompact, SheetPageFormat, SheetPageResponse, SheetPageValues, StylePatch,
+    WorkbookId,
+};
 use crate::styles::descriptor_from_style;
 use crate::workbook::cell_to_value;
 use anyhow::{Context, Result, anyhow};
@@ -79,6 +83,50 @@ impl WorkbookSession {
         }
 
         Ok(out)
+    }
+
+    /// Read a page-oriented snapshot from a sheet.
+    pub fn sheet_page(&self, params: SessionSheetPageParams) -> Result<SheetPageResponse> {
+        if params.page_size == 0 {
+            return Err(anyhow!("page_size must be greater than zero"));
+        }
+
+        let sheet = self.sheet_by_name(&params.sheet_name)?;
+        let start_row = params.start_row.max(1);
+        let page_size = params.page_size.min(500);
+        let max_row = sheet.get_highest_row();
+
+        let page = build_sheet_page(
+            sheet,
+            start_row,
+            page_size,
+            params.columns.as_ref(),
+            params.columns_by_header.as_ref(),
+            params.include_formulas,
+            params.include_styles,
+            params.include_header,
+        )?;
+
+        let last_row_index = page
+            .rows
+            .last()
+            .map(|row| row.row_index)
+            .unwrap_or(start_row.saturating_sub(1));
+        let next_start_row = if last_row_index < max_row {
+            Some(last_row_index + 1)
+        } else {
+            None
+        };
+
+        Ok(build_sheet_page_response(
+            WorkbookId("session".to_string()),
+            params.sheet_name,
+            params.format,
+            params.include_header,
+            page.header,
+            page.rows,
+            next_start_row,
+        ))
     }
 
     /// Export a range as grid payload (value/formula/style patch surface).
@@ -275,6 +323,73 @@ impl WorkbookSession {
             }
         }
         Ok(())
+    }
+}
+
+fn default_start_row() -> u32 {
+    1
+}
+
+fn default_page_size() -> u32 {
+    50
+}
+
+fn default_include_formulas() -> bool {
+    true
+}
+
+fn default_include_styles() -> bool {
+    false
+}
+
+fn default_include_header() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionSheetPageParams {
+    pub sheet_name: String,
+    #[serde(default = "default_start_row")]
+    pub start_row: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub columns_by_header: Option<Vec<String>>,
+    #[serde(default = "default_include_formulas")]
+    pub include_formulas: bool,
+    #[serde(default = "default_include_styles")]
+    pub include_styles: bool,
+    #[serde(default = "default_include_header")]
+    pub include_header: bool,
+    #[serde(default)]
+    pub format: SheetPageFormat,
+}
+
+impl SessionSheetPageParams {
+    pub fn with_sheet_name(sheet_name: impl Into<String>) -> Self {
+        Self {
+            sheet_name: sheet_name.into(),
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for SessionSheetPageParams {
+    fn default() -> Self {
+        Self {
+            sheet_name: String::new(),
+            start_row: default_start_row(),
+            page_size: default_page_size(),
+            columns: None,
+            columns_by_header: None,
+            include_formulas: default_include_formulas(),
+            include_styles: default_include_styles(),
+            include_header: default_include_header(),
+            format: SheetPageFormat::default(),
+        }
     }
 }
 
@@ -539,6 +654,352 @@ fn style_descriptor_to_patch(desc: crate::model::StyleDescriptor) -> Option<Styl
     })
 }
 
+struct PageBuildResult {
+    rows: Vec<RowSnapshot>,
+    header: Option<RowSnapshot>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_sheet_page(
+    sheet: &umya_spreadsheet::Worksheet,
+    start_row: u32,
+    page_size: u32,
+    columns: Option<&Vec<String>>,
+    columns_by_header: Option<&Vec<String>>,
+    include_formulas: bool,
+    include_styles: bool,
+    include_header: bool,
+) -> Result<PageBuildResult> {
+    let max_col = sheet.get_highest_column();
+    let end_row = start_row
+        .saturating_add(page_size.saturating_sub(1))
+        .min(sheet.get_highest_row());
+    let column_indices = resolve_columns_with_headers(sheet, columns, columns_by_header, max_col)?;
+
+    let header = if include_header {
+        Some(build_row_snapshot(
+            sheet,
+            1,
+            &column_indices,
+            include_formulas,
+            include_styles,
+        ))
+    } else {
+        None
+    };
+
+    let mut rows = Vec::new();
+    for row_idx in start_row..=end_row {
+        rows.push(build_row_snapshot(
+            sheet,
+            row_idx,
+            &column_indices,
+            include_formulas,
+            include_styles,
+        ));
+    }
+
+    Ok(PageBuildResult { rows, header })
+}
+
+fn build_row_snapshot(
+    sheet: &umya_spreadsheet::Worksheet,
+    row_index: u32,
+    columns: &[u32],
+    include_formulas: bool,
+    include_styles: bool,
+) -> RowSnapshot {
+    let mut cells = Vec::new();
+    for &col in columns {
+        if let Some(cell) = sheet.get_cell((col, row_index)) {
+            cells.push(build_cell_snapshot(cell, include_formulas, include_styles));
+        } else {
+            let address = crate::utils::cell_address(col, row_index);
+            cells.push(CellSnapshot {
+                address,
+                value: None,
+                formula: None,
+                cached_value: None,
+                number_format: None,
+                style_tags: Vec::new(),
+                notes: Vec::new(),
+            });
+        }
+    }
+
+    RowSnapshot { row_index, cells }
+}
+
+fn build_cell_snapshot(
+    cell: &umya_spreadsheet::Cell,
+    include_formulas: bool,
+    include_styles: bool,
+) -> CellSnapshot {
+    let address = cell.get_coordinate().get_coordinate();
+    let value = crate::workbook::cell_to_value(cell);
+    let formula = if include_formulas && cell.is_formula() {
+        Some(cell.get_formula().to_string())
+    } else {
+        None
+    };
+    let cached_value = if cell.is_formula() {
+        value.clone()
+    } else {
+        None
+    };
+    let number_format = if include_styles {
+        cell.get_style()
+            .get_number_format()
+            .map(|fmt| fmt.get_format_code().to_string())
+    } else {
+        None
+    };
+    let style_tags = if include_styles {
+        crate::analysis::style::tag_cell(cell)
+            .map(|(_, tagging)| tagging.tags)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    CellSnapshot {
+        address,
+        value,
+        formula,
+        cached_value,
+        number_format,
+        style_tags,
+        notes: Vec::new(),
+    }
+}
+
+fn parse_column_index(spec: &str) -> Result<u32> {
+    use umya_spreadsheet::helper::coordinate::column_index_from_string;
+
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("invalid column spec: empty"));
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err(anyhow!(
+            "invalid column spec '{}'; expected letters like 'A' or 'A:C'",
+            spec
+        ));
+    }
+    if trimmed.len() > 3 {
+        return Err(anyhow!(
+            "invalid column spec '{}'; expected at most 3 column letters",
+            spec
+        ));
+    }
+
+    Ok(column_index_from_string(trimmed.to_ascii_uppercase()))
+}
+
+fn resolve_columns(columns: Option<&Vec<String>>, max_column: u32) -> Result<Vec<u32>> {
+    use std::collections::BTreeSet;
+
+    let mut indices = BTreeSet::new();
+    if let Some(specs) = columns {
+        for spec in specs {
+            if let Some((start, end)) = spec.split_once(':') {
+                let start_idx = parse_column_index(start)?;
+                let end_idx = parse_column_index(end)?;
+                let (min_idx, max_idx) = if start_idx <= end_idx {
+                    (start_idx, end_idx)
+                } else {
+                    (end_idx, start_idx)
+                };
+                for idx in min_idx..=max_idx {
+                    indices.insert(idx);
+                }
+            } else {
+                indices.insert(parse_column_index(spec)?);
+            }
+        }
+    } else {
+        for idx in 1..=max_column.max(1) {
+            indices.insert(idx);
+        }
+    }
+
+    Ok(indices.into_iter().collect())
+}
+
+fn resolve_columns_with_headers(
+    sheet: &umya_spreadsheet::Worksheet,
+    columns: Option<&Vec<String>>,
+    columns_by_header: Option<&Vec<String>>,
+    max_column: u32,
+) -> Result<Vec<u32>> {
+    use std::collections::BTreeSet;
+
+    if columns_by_header.is_none() {
+        return resolve_columns(columns, max_column);
+    }
+
+    let mut selected: BTreeSet<u32> = if columns.is_some() {
+        resolve_columns(columns, max_column)?.into_iter().collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut matched_header = false;
+    let header_targets: Vec<String> = columns_by_header
+        .expect("checked")
+        .iter()
+        .map(|h| h.trim().to_ascii_lowercase())
+        .collect();
+
+    for col_idx in 1..=max_column.max(1) {
+        let header_cell = sheet.get_cell((col_idx, 1u32));
+        let header_value = header_cell
+            .and_then(cell_to_value)
+            .map(cell_value_to_string_lower);
+        if let Some(hval) = header_value
+            && header_targets.iter().any(|target| target == &hval)
+        {
+            selected.insert(col_idx);
+            matched_header = true;
+        }
+    }
+
+    if !matched_header && columns.is_none() {
+        resolve_columns(None, max_column)
+    } else {
+        Ok(selected.into_iter().collect())
+    }
+}
+
+fn cell_value_to_string_lower(value: CellValue) -> String {
+    match value {
+        CellValue::Text(s) => s.to_ascii_lowercase(),
+        CellValue::Number(n) => n.to_string().to_ascii_lowercase(),
+        CellValue::Bool(b) => b.to_string(),
+        CellValue::Error(e) => e.to_ascii_lowercase(),
+        CellValue::Date(d) => d.to_ascii_lowercase(),
+    }
+}
+
+fn build_compact_payload(
+    header: &Option<RowSnapshot>,
+    rows: &[RowSnapshot],
+    include_header: bool,
+) -> SheetPageCompact {
+    let headers = derive_headers(header, rows);
+    let header_row = if include_header {
+        header
+            .as_ref()
+            .map(|h| h.cells.iter().map(|c| c.value.clone()).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let data_rows = rows
+        .iter()
+        .map(|row| {
+            let mut vals: Vec<Option<CellValue>> = Vec::new();
+            vals.push(Some(CellValue::Number(row.row_index as f64)));
+            vals.extend(row.cells.iter().map(|c| c.value.clone()));
+            vals
+        })
+        .collect();
+
+    SheetPageCompact {
+        headers,
+        header_row,
+        rows: data_rows,
+    }
+}
+
+fn build_values_only_payload(
+    header: &Option<RowSnapshot>,
+    rows: &[RowSnapshot],
+    include_header: bool,
+) -> SheetPageValues {
+    let mut data = Vec::new();
+    if include_header && let Some(h) = header {
+        data.push(h.cells.iter().map(|c| c.value.clone()).collect());
+    }
+    for row in rows {
+        data.push(row.cells.iter().map(|c| c.value.clone()).collect());
+    }
+
+    SheetPageValues { rows: data }
+}
+
+fn build_sheet_page_response(
+    workbook_id: WorkbookId,
+    sheet_name: String,
+    format: SheetPageFormat,
+    include_header: bool,
+    header: Option<RowSnapshot>,
+    rows: Vec<RowSnapshot>,
+    next_start_row: Option<u32>,
+) -> SheetPageResponse {
+    let compact_payload = if matches!(format, SheetPageFormat::Compact) {
+        Some(build_compact_payload(&header, &rows, include_header))
+    } else {
+        None
+    };
+
+    let values_only_payload = if matches!(format, SheetPageFormat::ValuesOnly) {
+        Some(build_values_only_payload(&header, &rows, include_header))
+    } else {
+        None
+    };
+
+    let rows_payload = if matches!(format, SheetPageFormat::Full) {
+        rows
+    } else {
+        Vec::new()
+    };
+
+    let header_row = if include_header && matches!(format, SheetPageFormat::Full) {
+        header
+    } else {
+        None
+    };
+
+    SheetPageResponse {
+        workbook_id,
+        sheet_name,
+        rows: rows_payload,
+        next_start_row,
+        header_row,
+        compact: compact_payload,
+        values_only: values_only_payload,
+        format,
+    }
+}
+
+fn derive_headers(header: &Option<RowSnapshot>, rows: &[RowSnapshot]) -> Vec<String> {
+    if let Some(h) = header {
+        let mut headers: Vec<String> = h
+            .cells
+            .iter()
+            .map(|c| match &c.value {
+                Some(CellValue::Text(t)) => t.clone(),
+                Some(CellValue::Number(n)) => n.to_string(),
+                Some(CellValue::Bool(b)) => b.to_string(),
+                Some(CellValue::Date(d)) => d.clone(),
+                Some(CellValue::Error(e)) => e.clone(),
+                None => c.address.clone(),
+            })
+            .collect();
+        headers.insert(0, "Row".to_string());
+        headers
+    } else if let Some(first) = rows.first() {
+        let mut headers = Vec::new();
+        headers.push("Row".to_string());
+        for cell in &first.cells {
+            headers.push(cell.address.clone());
+        }
+        headers
+    } else {
+        vec![]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +1169,120 @@ mod tests {
             rows[0][0],
             Some(CellValue::Text(ref value)) if value == "before"
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_page_full_supports_paging_and_formulas() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Calc");
+            sheet.get_cell_mut("A2").set_value("alpha");
+            sheet.get_cell_mut("B2").set_formula("1+1");
+            sheet.get_cell_mut("A3").set_value("beta");
+            sheet.get_cell_mut("B3").set_value_number(7.0);
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let page = session.sheet_page(SessionSheetPageParams {
+            sheet_name: "Sheet1".to_string(),
+            start_row: 2,
+            page_size: 1,
+            include_formulas: true,
+            format: SheetPageFormat::Full,
+            ..SessionSheetPageParams::default()
+        })?;
+
+        assert_eq!(page.sheet_name, "Sheet1");
+        assert!(matches!(page.workbook_id, WorkbookId(ref id) if id == "session"));
+        assert_eq!(page.next_start_row, Some(3));
+        let header = page.header_row.as_ref().expect("header row");
+        assert_eq!(header.row_index, 1);
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].row_index, 2);
+        assert_eq!(page.rows[0].cells[1].formula.as_deref(), Some("1+1"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_page_compact_respects_columns_by_header() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Score");
+            sheet.get_cell_mut("C1").set_value("Ignore");
+            sheet.get_cell_mut("A2").set_value("alpha");
+            sheet.get_cell_mut("B2").set_value_number(99.0);
+            sheet.get_cell_mut("C2").set_value("x");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let page = session.sheet_page(SessionSheetPageParams {
+            sheet_name: "Sheet1".to_string(),
+            start_row: 2,
+            page_size: 1,
+            columns_by_header: Some(vec!["score".to_string()]),
+            format: SheetPageFormat::Compact,
+            ..SessionSheetPageParams::default()
+        })?;
+
+        let compact = page.compact.as_ref().expect("compact payload");
+        assert_eq!(compact.headers, vec!["Row", "Score"]);
+        assert_eq!(compact.rows.len(), 1);
+        assert!(
+            matches!(compact.rows[0][0], Some(CellValue::Number(n)) if (n - 2.0).abs() < f64::EPSILON)
+        );
+        assert!(
+            matches!(compact.rows[0][1], Some(CellValue::Number(n)) if (n - 99.0).abs() < f64::EPSILON)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_page_rejects_invalid_column_specs() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            book.get_sheet_by_name_mut("Sheet1")
+                .expect("sheet")
+                .get_cell_mut("A1")
+                .set_value("x");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let err = session
+            .sheet_page(SessionSheetPageParams {
+                sheet_name: "Sheet1".to_string(),
+                columns: Some(vec!["1".to_string()]),
+                ..SessionSheetPageParams::default()
+            })
+            .expect_err("invalid columns should error");
+        assert!(err.to_string().contains("invalid column spec"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_page_handles_large_start_rows_without_overflow() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            book.get_sheet_by_name_mut("Sheet1")
+                .expect("sheet")
+                .get_cell_mut("A1")
+                .set_value("x");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let page = session.sheet_page(SessionSheetPageParams {
+            sheet_name: "Sheet1".to_string(),
+            start_row: u32::MAX,
+            page_size: 500,
+            format: SheetPageFormat::ValuesOnly,
+            ..SessionSheetPageParams::default()
+        })?;
+
+        assert_eq!(page.next_start_row, None);
 
         Ok(())
     }

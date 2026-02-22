@@ -28,7 +28,7 @@ const MCP_CAPABILITIES = Object.freeze({
 const WASM_CAPABILITIES = Object.freeze({
   supportsListSheets: true,
   supportsRangeValues: true,
-  supportsSheetPage: false,
+  supportsSheetPage: true,
   supportsGridExport: true,
   supportsTransformBatch: true,
   supportsForkLifecycle: false,
