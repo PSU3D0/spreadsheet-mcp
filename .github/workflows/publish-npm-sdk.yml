@@ -1,0 +1,44 @@
+name: Publish npm SDK
+
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+
+jobs:
+  publish-spreadsheet-kit-sdk:
+    name: Publish spreadsheet-kit-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Run SDK tests
+        run: npm test
+        working-directory: npm/spreadsheet-kit-sdk
+
+      - name: Set npm package version from tag
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
+            echo "npm package version already matches tag: $VERSION"
+          else
+            npm version "$VERSION" --no-git-tag-version
+          fi
+        working-directory: npm/spreadsheet-kit-sdk
+
+      - name: Publish npm package
+        run: npm publish --access public
+        working-directory: npm/spreadsheet-kit-sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
