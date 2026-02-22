@@ -1,5 +1,11 @@
 const { freezeCapabilities, MCP_CAPABILITIES } = require("./capabilities")
-const { requireCapability, requiredString, normalizeSheetPageResult } = require("./backend")
+const {
+  requireCapability,
+  requiredString,
+  normalizeSheetPageResult,
+  normalizeGridExportResult,
+  normalizeTransformBatchResult
+} = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
 function normalizeSheetNames(items) {
@@ -142,10 +148,16 @@ class McpBackend {
       input.workbookId || input.workbook_id || input.contextId,
       "workbookId"
     )
-    return this._call("grid_export", {
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+
+    const result = await this._call("grid_export", {
       ...input,
-      workbook_id: workbookId
+      workbook_id: workbookId,
+      sheet_name: sheetName,
+      range: input.range
     })
+
+    return normalizeGridExportResult(result)
   }
 
   async transformBatch(input = {}) {
@@ -154,10 +166,14 @@ class McpBackend {
       input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
       "forkId"
     )
-    return this._call("transform_batch", {
+    const result = await this._call("transform_batch", {
       ...input,
-      fork_id: forkId
+      fork_id: forkId,
+      ops: input.ops,
+      mode: input.options?.dryRun ? "preview" : (input.mode ?? "apply")
     })
+
+    return normalizeTransformBatchResult(result)
   }
 
   async createFork(input = {}) {
