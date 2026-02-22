@@ -4,7 +4,10 @@ const {
   requiredString,
   normalizeSheetPageResult,
   normalizeGridExportResult,
-  normalizeTransformBatchResult
+  normalizeTransformBatchResult,
+  normalizeDescribeWorkbookResult,
+  normalizeNamedRangesResult,
+  normalizeSheetOverviewResult
 } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
@@ -84,6 +87,51 @@ class McpBackend {
 
   getCapabilities() {
     return this._capabilities
+  }
+
+  async describeWorkbook(input = {}) {
+    requireCapability(this, "supportsDescribeWorkbook", "describeWorkbook")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const result = await this._call("describe_workbook", {
+      ...input,
+      workbook_id: workbookId
+    })
+    return normalizeDescribeWorkbookResult(result, workbookId)
+  }
+
+  async namedRanges(input = {}) {
+    requireCapability(this, "supportsNamedRanges", "namedRanges")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const result = await this._call("named_ranges", {
+      ...input,
+      workbook_id: workbookId
+    })
+    return normalizeNamedRangesResult(result, workbookId)
+  }
+
+  async sheetOverview(input = {}) {
+    requireCapability(this, "supportsSheetOverview", "sheetOverview")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+    const result = await this._call("sheet_overview", {
+      ...input,
+      workbook_id: workbookId,
+      sheet_name: sheetName,
+      max_regions: input.max_regions ?? input.maxRegions,
+      max_headers: input.max_headers ?? input.maxHeaders,
+      include_headers: input.include_headers ?? input.includeHeaders
+    })
+
+    return normalizeSheetOverviewResult(result, sheetName, workbookId)
   }
 
   async listSheets(input = {}) {
