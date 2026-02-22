@@ -15,9 +15,7 @@ serde-wasm-bindgen = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-spreadsheet-kit = { path = "../spreadsheet-kit" }
+spreadsheet-kit = { path = "../spreadsheet-kit", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 umya-spreadsheet = "2.3.3"

@@ -4183,6 +4183,7 @@ pub struct ManifestStubParams {
     pub sheet_filter: Option<String>,
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub async fn get_manifest_stub(
     state: Arc<AppState>,
     params: ManifestStubParams,
@@ -4384,6 +4385,16 @@ pub async fn get_manifest_stub(
         sheets,
     };
     Ok(response)
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub async fn get_manifest_stub(
+    _state: Arc<AppState>,
+    _params: ManifestStubParams,
+) -> Result<ManifestStubResponse> {
+    Err(anyhow!(
+        "sheetport operations require the 'recalc-formualizer' feature"
+    ))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -5107,6 +5118,7 @@ fn clean_sheet_name(sheet: &str) -> String {
         .to_string()
 }
 
+#[cfg(feature = "recalc-formualizer")]
 fn json_to_literal(value: &serde_json::Value) -> formualizer::workbook::LiteralValue {
     match value {
         serde_json::Value::Null => formualizer::workbook::LiteralValue::Empty,
@@ -5123,6 +5135,7 @@ fn json_to_literal(value: &serde_json::Value) -> formualizer::workbook::LiteralV
     }
 }
 
+#[cfg(feature = "recalc-formualizer")]
 fn json_to_port_value(value: &serde_json::Value) -> formualizer::sheetport::PortValue {
     match value {
         serde_json::Value::Object(map) => {
@@ -5166,6 +5179,7 @@ fn json_to_port_value(value: &serde_json::Value) -> formualizer::sheetport::Port
     }
 }
 
+#[cfg(feature = "recalc-formualizer")]
 fn port_value_to_json(value: &formualizer::sheetport::PortValue) -> serde_json::Value {
     match value {
         formualizer::sheetport::PortValue::Scalar(lit) => literal_to_json(lit),
@@ -5200,6 +5214,7 @@ fn port_value_to_json(value: &formualizer::sheetport::PortValue) -> serde_json::
     }
 }
 
+#[cfg(feature = "recalc-formualizer")]
 fn literal_to_json(lit: &formualizer::workbook::LiteralValue) -> serde_json::Value {
     match lit {
         formualizer::workbook::LiteralValue::Empty => serde_json::Value::Null,
@@ -5248,6 +5263,7 @@ pub struct ExecuteManifestResponse {
     pub outputs: serde_json::Value,
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub async fn execute_manifest(
     state: Arc<AppState>,
     params: ExecuteManifestParams,
@@ -5304,6 +5320,16 @@ pub async fn execute_manifest(
         workbook_id: params.workbook_or_fork_id.clone(),
         outputs: serde_json::Value::Object(out_map),
     })
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub async fn execute_manifest(
+    _state: Arc<AppState>,
+    _params: ExecuteManifestParams,
+) -> Result<ExecuteManifestResponse> {
+    Err(anyhow!(
+        "sheetport operations require the 'recalc-formualizer' feature"
+    ))
 }
 
 // ── layout_page ───────────────────────────────────────────────────────────────

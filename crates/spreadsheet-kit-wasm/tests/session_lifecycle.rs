@@ -4,7 +4,7 @@ use spreadsheet_kit::core::session::{SessionMatrixCell, SessionTransformOp, Work
 use spreadsheet_kit::model::CellValue;
 use spreadsheet_kit_wasm::{
     GridExportParams, RangeSelectionInput, RangeValuesParams, SessionApi, SessionApiError,
-    TransformBatchOptions,
+    SheetPageParams, TransformBatchOptions,
 };
 
 fn workbook_bytes(setup: impl FnOnce(&mut umya_spreadsheet::Spreadsheet)) -> Vec<u8> {
@@ -66,6 +66,30 @@ fn session_lifecycle_reads_and_disposes() {
     let err = api.list_sheets(&session_id).expect_err("session removed");
     assert!(matches!(err, SessionApiError::SessionNotFound { .. }));
     assert_eq!(err.code(), "SESSION_NOT_FOUND");
+}
+
+#[test]
+fn sheet_page_is_explicitly_unsupported() {
+    let bytes = workbook_bytes(|book| {
+        book.get_sheet_by_name_mut("Sheet1")
+            .expect("sheet")
+            .get_cell_mut("A1")
+            .set_value("hello");
+    });
+
+    let api = SessionApi::new();
+    let session_id = api.create_session(&bytes).expect("create session");
+
+    let err = api
+        .sheet_page(
+            &session_id,
+            SheetPageParams {
+                sheet_name: "Sheet1".to_string(),
+            },
+        )
+        .expect_err("sheet page unsupported");
+    assert!(matches!(err, SessionApiError::Unsupported { .. }));
+    assert_eq!(err.code(), "UNSUPPORTED");
 }
 
 #[test]

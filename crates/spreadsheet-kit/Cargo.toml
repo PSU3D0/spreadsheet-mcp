@@ -11,6 +11,11 @@ readme = "README.md"
 keywords = ["spreadsheet", "xlsx", "automation", "agent", "mcp"]
 categories = ["data-structures", "parser-implementations"]
 
+[[bin]]
+name = "agent-spreadsheet"
+path = "src/bin/agent-spreadsheet.rs"
+required-features = ["recalc"]
+
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
@@ -19,7 +24,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_with = "3.8"
 serde_yaml = "0.9"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal", "net", "process"] }
+tokio = { version = "1.37", features = ["macros", "rt", "sync", "time"] }
 parking_lot = "0.12"
 lru = "0.12"
 ahash = "0.8"
@@ -45,10 +50,17 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 base64 = { version = "0.22", optional = true }
 async-trait = { version = "0.1", optional = true }
 uuid = { version = "1.10", features = ["v4"], optional = true }
-zip = "0.6"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.31", optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh64"], optional = true }
 tempfile = "3.10"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.37", features = ["rt-multi-thread", "fs", "signal", "net", "process"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+umya-spreadsheet = { version = "2.3.3", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [features]
 default = ["recalc-formualizer"]
