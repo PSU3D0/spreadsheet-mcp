@@ -8,6 +8,7 @@ use crate::model::{
     StylePatch, Warning, WorkbookId, validate_formula,
 };
 use crate::recalc::RecalcBackend;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::security::sanitize_filename_component;
 use crate::state::AppState;
 use crate::tools::write_normalize::{EditBatchParamsInput, normalize_edit_batch};
@@ -4993,8 +4994,11 @@ pub async fn discard_staged_change(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_SCREENSHOT_ROWS: u32 = 100;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_SCREENSHOT_COLS: u32 = 30;
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_SCREENSHOT_RANGE: &str = "A1:M40";
 #[cfg(feature = "recalc-libreoffice")]
 const DEFAULT_MAX_PNG_DIM_PX: u32 = 4096;
@@ -5022,6 +5026,7 @@ pub struct ScreenshotSheetResponse {
     pub duration_ms: u64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn screenshot_sheet(
     state: Arc<AppState>,
     params: ScreenshotSheetParams,
@@ -5104,6 +5109,7 @@ struct ScreenshotBounds {
     cols: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_screenshot_range(range: &str) -> Result<ScreenshotBounds> {
     let bounds = parse_range_bounds(range)?;
 
@@ -5184,10 +5190,12 @@ fn parse_range_bounds(range: &str) -> Result<ScreenshotBounds> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn div_ceil(n: u32, d: u32) -> u32 {
     n.div_ceil(d)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn suggest_tiled_ranges(
     bounds: &ScreenshotBounds,
     max_rows: u32,
