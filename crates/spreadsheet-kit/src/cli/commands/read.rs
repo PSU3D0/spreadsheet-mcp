@@ -880,6 +880,7 @@ pub async fn sheetport_manifest_candidates(
     Ok(serde_json::to_value(response)?)
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub fn sheetport_manifest_schema() -> Result<Value> {
     let schema = formualizer::sheetport_spec::schema_json();
     let schema_value: serde_json::Value =
@@ -887,6 +888,7 @@ pub fn sheetport_manifest_schema() -> Result<Value> {
     Ok(schema_value)
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub fn sheetport_manifest_validate(manifest: PathBuf) -> Result<Value> {
     let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
         "failed to read manifest from '{}'",
@@ -917,6 +919,7 @@ pub fn sheetport_manifest_validate(manifest: PathBuf) -> Result<Value> {
     Ok(response)
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub fn sheetport_manifest_normalize(manifest: PathBuf, output: Option<PathBuf>) -> Result<Value> {
     let manifest_yaml = std::fs::read_to_string(&manifest).context(format!(
         "failed to read manifest from '{}'",
@@ -947,6 +950,7 @@ pub fn sheetport_manifest_normalize(manifest: PathBuf, output: Option<PathBuf>) 
     }
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub async fn sheetport_bind_check(file: PathBuf, manifest: PathBuf) -> Result<Value> {
     use formualizer::workbook::SpreadsheetReader;
 
@@ -1002,6 +1006,34 @@ pub async fn sheetport_bind_check(file: PathBuf, manifest: PathBuf) -> Result<Va
             "error": err.to_string(),
         })),
     }
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub fn sheetport_manifest_schema() -> Result<Value> {
+    Err(anyhow!(
+        "sheetport commands require the 'recalc-formualizer' feature"
+    ))
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub fn sheetport_manifest_validate(_manifest: PathBuf) -> Result<Value> {
+    Err(anyhow!(
+        "sheetport commands require the 'recalc-formualizer' feature"
+    ))
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub fn sheetport_manifest_normalize(_manifest: PathBuf, _output: Option<PathBuf>) -> Result<Value> {
+    Err(anyhow!(
+        "sheetport commands require the 'recalc-formualizer' feature"
+    ))
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub async fn sheetport_bind_check(_file: PathBuf, _manifest: PathBuf) -> Result<Value> {
+    Err(anyhow!(
+        "sheetport commands require the 'recalc-formualizer' feature"
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
