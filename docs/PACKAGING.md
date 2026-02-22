@@ -17,14 +17,20 @@ The workspace umbrella name is **spreadsheet-kit**. The GitHub repo is `PSU3D0/s
 - `spreadsheet-kit` — follows semver independently (currently 0.1.x)
 - `spreadsheet-kit-wasm` — follows semver independently, but tracks shared core contract changes closely
 - `spreadsheet-mcp` — follows semver independently (currently 0.10.x)
-- `agent-spreadsheet` (npm) — version is kept in sync with the release tag
-- `spreadsheet-kit-sdk` (npm) — follows semver independently with capability negotiation at runtime
+- `agent-spreadsheet` (npm) — published from `cli-v*` tags; package version is derived from tag suffix and must match available `v*` GitHub release assets
+- `spreadsheet-kit-sdk` (npm) — published from `sdk-v*` tags; semver independent from CLI/binary cadence
 
 Release ordering for tranche-35 surfaces:
 
 1. publish core crates in dependency order (`spreadsheet-kit` → `spreadsheet-kit-wasm` → `spreadsheet-mcp`)
 2. publish npm packages (`agent-spreadsheet`, `spreadsheet-kit-sdk`, and `spreadsheet-kit-wasm` when enabled)
 3. run smoke tests against SDK MCP + WASM backends before final release promotion
+
+### Tag lanes
+
+- `vX.Y.Z` → Rust release lane (GitHub release assets + crates publish)
+- `cli-vX.Y.Z` → npm `agent-spreadsheet` publish lane
+- `sdk-vX.Y.Z` → npm `spreadsheet-kit-sdk` publish lane
 
 ### Compatibility notes (SDK/MCP/WASM)
 
