@@ -32,6 +32,13 @@ Release ordering for tranche-35 surfaces:
 - `cli-vX.Y.Z` → npm `agent-spreadsheet` publish lane
 - `sdk-vX.Y.Z` → npm `spreadsheet-kit-sdk` publish lane
 
+### npm dist-tag policy
+
+- stable `X.Y.Z` publishes to `latest`
+- prerelease `X.Y.Z-rc.N` publishes to `rc`
+- prerelease `X.Y.Z-beta.N` publishes to `beta`
+- prerelease `X.Y.Z-alpha.N` publishes to `alpha`
+
 ### Compatibility notes (SDK/MCP/WASM)
 
 | SDK line | MCP compatibility | WASM compatibility | Notes |

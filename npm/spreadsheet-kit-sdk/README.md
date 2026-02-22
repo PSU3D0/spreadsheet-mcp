@@ -1,13 +1,13 @@
 # spreadsheet-kit-sdk
 
-Backend abstraction for shared spreadsheet-kit JavaScript workflows.
+Backend-agnostic JavaScript SDK for `spreadsheet-kit` surfaces.
 
-This package provides:
+It lets you write one app-level integration and switch between:
 
-- `McpBackend` wrapper for MCP tool transports
-- `WasmBackend` wrapper for in-process WASM bindings
-- capability model (`supportsForkLifecycle`, `supportsStaging`, etc.)
-- typed-ish SDK errors (`SpreadsheetSdkError`, `CapabilityError`, `BackendOperationError`)
+- **MCP backend** (`McpBackend`) for server/remote workflows
+- **WASM backend** (`WasmBackend`) for in-process session workflows
+
+---
 
 ## Install
 
@@ -15,42 +15,170 @@ This package provides:
 npm i spreadsheet-kit-sdk
 ```
 
-## Basic usage
+Node: `>=18`
+
+---
+
+## What this SDK normalizes
+
+- Shared method names (`describeWorkbook`, `sheetOverview`, `rangeValues`, etc.)
+- Input aliases (`camelCase` + `snake_case` tolerance)
+- Output shape normalization (SDK returns `camelCase` top-level fields)
+- Typed errors for capability and backend failures
+
+---
+
+## Quick start
 
 ```js
 const { McpBackend, WasmBackend } = require("spreadsheet-kit-sdk")
 
+// 1) MCP backend
 const mcp = new McpBackend({ transport: myMcpTransport })
+
+// 2) WASM backend
 const wasm = new WasmBackend({ bindings: myWasmBindings })
 
-async function readSummary(backend, ctx) {
+async function sharedReadFlow(backend, ctx) {
+  const desc = await backend.describeWorkbook(ctx)
   const sheets = await backend.listSheets(ctx)
-  const preview = await backend.rangeValues({
+  const page = await backend.sheetPage({
     ...ctx,
     sheetName: sheets[0],
-    ranges: "A1:C5"
+    startRow: 1,
+    pageSize: 50,
+    format: "compact"
   })
-  return { sheets, preview }
+  return { desc, sheets, page }
 }
 ```
 
-Callers can switch backend instances without changing shared-method callsites.
+`ctx` typically includes one of:
 
-## Capability checks
+- MCP: `{ workbookId: "..." }`
+- WASM: `{ sessionId: "..." }`
+- Cross-surface helper: `{ contextId: "..." }`
 
-Use `backend.getCapabilities()` to branch on backend-specific flows.
+---
+
+## Shared methods (currently parity-wired)
+
+### Read/analysis
+
+- `describeWorkbook(input)`
+- `namedRanges(input)`
+- `sheetOverview(input)`
+- `listSheets(input)`
+- `rangeValues(input)`
+- `findValue(input)`
+- `readTable(input)`
+- `sheetPage(input)`
+- `gridExport(input)`
+
+### Write
+
+- `transformBatch(input)`
+
+### Lifecycle / backend-specific
+
+- MCP-only fork lifecycle: `createFork`, `listForks`, `saveFork`, `discardFork`, staged-change methods
+- WASM-only session lifecycle: `createSession`, `exportWorkbook`, `disposeSession`
+
+Always branch using capabilities before backend-specific methods.
+
+---
+
+## Capability model
 
 ```js
 const caps = backend.getCapabilities()
+
 if (caps.supportsForkLifecycle) {
-  await backend.createFork({ workbookId: "wb-1" })
+  // MCP path
+}
+if (caps.supportsSessionLifecycle) {
+  // WASM path
 }
 ```
 
-If you call an unsupported method, a `CapabilityError` is thrown with code `UNSUPPORTED_CAPABILITY`.
+If you call an unsupported method, SDK throws `CapabilityError` with code:
 
-## Notes
+- `UNSUPPORTED_CAPABILITY`
 
-- `McpBackend` and `WasmBackend` intentionally differ for host-specific concerns.
-- Shared read/write methods are normalized where semantics match.
-- This scaffold is tranche-35 MVP surface and will expand incrementally.
+---
+
+## Error model
+
+SDK exports:
+
+- `SpreadsheetSdkError`
+- `CapabilityError`
+- `BackendOperationError`
+
+Typical codes:
+
+- `INVALID_ARGUMENT`
+- `INVALID_RESPONSE`
+- `UNSUPPORTED_CAPABILITY`
+- backend-provided error envelopes are normalized when possible
+
+---
+
+## MCP transport contract
+
+`McpBackend` accepts either:
+
+- an `invoke(operation, params)` function
+- or per-operation methods (`transport.list_sheets`, etc.)
+
+Example:
+
+```js
+const backend = new McpBackend({
+  transport: {
+    async invoke(operation, params) {
+      // call your MCP client
+      return client.callTool(operation, params)
+    }
+  }
+})
+```
+
+---
+
+## WASM bindings contract
+
+`WasmBackend` expects function bindings named like:
+
+- `createSession`, `describeWorkbook`, `namedRanges`, `sheetOverview`
+- `listSheets`, `rangeValues`, `findValue`, `readTable`, `sheetPage`, `gridExport`
+- `transformBatch`, `exportWorkbook`, `disposeSession`
+
+These map directly to methods exposed by `spreadsheet-kit-wasm`.
+
+---
+
+## Publishing channels / npm dist-tags
+
+Release lanes:
+
+- `sdk-vX.Y.Z` tags publish this package
+
+Dist-tag policy:
+
+- stable `X.Y.Z` -> `latest`
+- prerelease `X.Y.Z-rc.N` -> `rc`
+- prerelease `X.Y.Z-beta.N` -> `beta`
+- prerelease `X.Y.Z-alpha.N` -> `alpha`
+
+So prereleases never override `latest` unintentionally.
+
+---
+
+## Related packages
+
+- `agent-spreadsheet` (npm CLI wrapper)
+- `spreadsheet-kit` (Rust core crate)
+- `spreadsheet-kit-wasm` (Rust/WASM adapter crate)
+
+Repo: <https://github.com/PSU3D0/spreadsheet-mcp>

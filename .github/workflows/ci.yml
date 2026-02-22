@@ -66,6 +66,24 @@ jobs:
           path: target/release/agent-spreadsheet
           if-no-files-found: error
 
+  sdk-parity:
+    name: SDK parity checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run SDK backend tests
+        run: node --test npm/spreadsheet-kit-sdk/test/backend.test.js
+
+      - name: Run parity harness
+        run: node scripts/parity-harness.js
+
   docker-integration:
     name: Docker Integration Tests
     runs-on: ubuntu-latest
