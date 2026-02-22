@@ -37,8 +37,27 @@ jobs:
           fi
         working-directory: npm/spreadsheet-kit-sdk
 
+      - name: Determine npm dist-tag
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          DIST_TAG="latest"
+          if [[ "$VERSION" == *"-alpha."* ]]; then
+            DIST_TAG="alpha"
+          elif [[ "$VERSION" == *"-beta."* ]]; then
+            DIST_TAG="beta"
+          elif [[ "$VERSION" == *"-rc."* ]]; then
+            DIST_TAG="rc"
+          fi
+          echo "DIST_TAG=$DIST_TAG" >> "$GITHUB_ENV"
+          echo "Using npm dist-tag: $DIST_TAG"
+
+      - name: Validate npm package contents
+        run: npm pack --dry-run
+        working-directory: npm/spreadsheet-kit-sdk
+
       - name: Publish npm package
-        run: npm publish --access public
+        run: npm publish --access public --tag "$DIST_TAG"
         working-directory: npm/spreadsheet-kit-sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
