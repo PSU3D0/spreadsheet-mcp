@@ -15,6 +15,13 @@ const CHECKS = [
     runner: "sdk-backend-tests"
   },
   {
+    id: "sheet-page-parity",
+    surfaces: ["core", "wasm", "mcp", "sdk"],
+    status: "automated",
+    note: "sheetPage behavior wired through shared SDK backend surface",
+    runner: "sdk-backend-tests"
+  },
+  {
     id: "capability-divergence-guards",
     surfaces: ["wasm", "mcp", "sdk"],
     status: "automated",

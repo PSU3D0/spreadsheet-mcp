@@ -17,7 +17,18 @@ async function sharedReadFlow(backend) {
     sheetName: sheets[0],
     ranges: "A1:B2"
   })
-  return { sheets, range }
+  const page = await backend.sheetPage({
+    ...ctx,
+    sheetName: sheets[0],
+    startRow: 2,
+    pageSize: 1,
+    columnsByHeader: ["Score"],
+    includeFormulas: false,
+    includeStyles: false,
+    includeHeader: true,
+    format: "compact"
+  })
+  return { sheets, range, page }
 }
 
 test("switching backends keeps shared read callsites stable", async () => {
@@ -34,6 +45,23 @@ test("switching backends keeps shared read callsites stable", async () => {
           return {
             sheet_name: "Sheet1",
             values: [{ range: "A1:B2", rows: [["v1", "v2"]] }]
+          }
+        }
+        if (operation === "sheet_page") {
+          assert.equal(params.workbook_id, "wb-1")
+          assert.equal(params.sheet_name, "Sheet1")
+          assert.equal(params.start_row, 2)
+          assert.equal(params.page_size, 1)
+          return {
+            workbook_id: "ctx-1",
+            sheet_name: "Sheet1",
+            next_start_row: 3,
+            format: "compact",
+            compact: {
+              headers: ["Row", "Score"],
+              header_row: ["Score"],
+              rows: [[2, 42]]
+            }
           }
         }
         throw new Error(`unexpected op ${operation}`)
@@ -53,6 +81,23 @@ test("switching backends keeps shared read callsites stable", async () => {
         return {
           sheetName: "Sheet1",
           values: [{ range: "A1:B2", rows: [["v1", "v2"]] }]
+        }
+      },
+      async sheetPage(sessionId, params) {
+        assert.equal(sessionId, "session-1")
+        assert.equal(params.sheetName, "Sheet1")
+        assert.equal(params.startRow, 2)
+        assert.equal(params.pageSize, 1)
+        return {
+          workbook_id: "ctx-1",
+          sheet_name: "Sheet1",
+          next_start_row: 3,
+          format: "compact",
+          compact: {
+            headers: ["Row", "Score"],
+            header_row: ["Score"],
+            rows: [[2, 42]]
+          }
         }
       }
     }
@@ -111,6 +156,24 @@ test("mcp createFork normalizes workbook id field", async () => {
 
   const result = await mcp.createFork({ workbookId: "wb-1" })
   assert.equal(result.fork_id, "fork-1")
+})
+
+test("mcp transformBatch normalizes context id to fork_id", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "transform_batch")
+        assert.equal(params.fork_id, "fork-123")
+        return { ok: true }
+      }
+    }
+  })
+
+  const result = await mcp.transformBatch({
+    contextId: "fork-123",
+    ops: []
+  })
+  assert.equal(result.ok, true)
 })
 
 test("backend-specific no-op methods throw explicit unsupported errors", async () => {

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use spreadsheet_kit::core::session::{
-    SessionApplySummary, SessionRangeSelection, SessionTransformOp, WorkbookSession,
+    SessionApplySummary, SessionRangeSelection, SessionSheetPageParams, SessionTransformOp,
+    WorkbookSession,
 };
-use spreadsheet_kit::model::{GridPayload, RangeValuesEntry};
+use spreadsheet_kit::model::{GridPayload, RangeValuesEntry, SheetPageFormat, SheetPageResponse};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -103,6 +104,38 @@ pub struct TransformBatchOptions {
 pub struct SheetPageParams {
     #[serde(alias = "sheet_name")]
     pub sheet_name: String,
+    #[serde(default)]
+    pub start_row: Option<u32>,
+    #[serde(default)]
+    pub page_size: Option<u32>,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub columns_by_header: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_formulas: Option<bool>,
+    #[serde(default)]
+    pub include_styles: Option<bool>,
+    #[serde(default)]
+    pub include_header: Option<bool>,
+    #[serde(default)]
+    pub format: Option<SheetPageFormat>,
+}
+
+impl From<SheetPageParams> for SessionSheetPageParams {
+    fn from(value: SheetPageParams) -> Self {
+        SessionSheetPageParams {
+            sheet_name: value.sheet_name,
+            start_row: value.start_row.unwrap_or(1),
+            page_size: value.page_size.unwrap_or(50),
+            columns: value.columns,
+            columns_by_header: value.columns_by_header,
+            include_formulas: value.include_formulas.unwrap_or(true),
+            include_styles: value.include_styles.unwrap_or(false),
+            include_header: value.include_header.unwrap_or(true),
+            format: value.format.unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -180,10 +213,10 @@ impl SessionApi {
     pub fn sheet_page(
         &self,
         session_id: &str,
-        _params: SheetPageParams,
-    ) -> SessionResult<serde_json::Value> {
+        params: SheetPageParams,
+    ) -> SessionResult<SheetPageResponse> {
         let store = self.lock_store()?;
-        let _session =
+        let session =
             store
                 .sessions
                 .get(session_id)
@@ -191,10 +224,14 @@ impl SessionApi {
                     session_id: session_id.to_string(),
                 })?;
 
-        Err(SessionApiError::Unsupported {
-            message: "sheetPage is deferred in tranche-35 wasm MVP; use rangeValues/gridExport"
-                .to_string(),
-        })
+        let mut response =
+            session
+                .sheet_page(params.into())
+                .map_err(|err| SessionApiError::InvalidArgument {
+                    message: err.to_string(),
+                })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
     }
 
     pub fn grid_export(

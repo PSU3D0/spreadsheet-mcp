@@ -1,5 +1,5 @@
 const { freezeCapabilities, WASM_CAPABILITIES } = require("./capabilities")
-const { requireCapability, requiredString } = require("./backend")
+const { requireCapability, requiredString, normalizeSheetPageResult } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
 function normalizeSheetNames(items) {
@@ -117,7 +117,20 @@ class WasmBackend {
   async sheetPage(input = {}) {
     requireCapability(this, "supportsSheetPage", "sheetPage")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
-    return this._call("sheetPage", sessionId, input)
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+
+    const result = await this._call("sheetPage", sessionId, {
+      ...input,
+      sheetName,
+      startRow: input.startRow ?? input.start_row,
+      pageSize: input.pageSize ?? input.page_size,
+      columnsByHeader: input.columnsByHeader ?? input.columns_by_header,
+      includeFormulas: input.includeFormulas ?? input.include_formulas,
+      includeStyles: input.includeStyles ?? input.include_styles,
+      includeHeader: input.includeHeader ?? input.include_header
+    })
+
+    return normalizeSheetPageResult(result, sheetName)
   }
 
   async gridExport(input = {}) {

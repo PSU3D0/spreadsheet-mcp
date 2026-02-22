@@ -1,5 +1,5 @@
 const { freezeCapabilities, MCP_CAPABILITIES } = require("./capabilities")
-const { requireCapability, requiredString } = require("./backend")
+const { requireCapability, requiredString, normalizeSheetPageResult } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
 function normalizeSheetNames(items) {
@@ -117,10 +117,23 @@ class McpBackend {
       input.workbookId || input.workbook_id || input.contextId,
       "workbookId"
     )
-    return this._call("sheet_page", {
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+
+    const result = await this._call("sheet_page", {
       ...input,
-      workbook_id: workbookId
+      workbook_id: workbookId,
+      sheet_name: sheetName,
+      start_row: input.start_row ?? input.startRow,
+      page_size: input.page_size ?? input.pageSize,
+      columns: input.columns,
+      format: input.format,
+      columns_by_header: input.columns_by_header ?? input.columnsByHeader,
+      include_formulas: input.include_formulas ?? input.includeFormulas,
+      include_styles: input.include_styles ?? input.includeStyles,
+      include_header: input.include_header ?? input.includeHeader
     })
+
+    return normalizeSheetPageResult(result, sheetName)
   }
 
   async gridExport(input = {}) {
@@ -137,13 +150,13 @@ class McpBackend {
 
   async transformBatch(input = {}) {
     requireCapability(this, "supportsTransformBatch", "transformBatch")
-    const workbookId = requiredString(
-      input.workbookId || input.workbook_id || input.contextId,
-      "workbookId"
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
     )
     return this._call("transform_batch", {
       ...input,
-      workbook_id: workbookId
+      fork_id: forkId
     })
   }
 

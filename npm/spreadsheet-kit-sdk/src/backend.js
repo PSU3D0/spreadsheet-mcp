@@ -41,7 +41,43 @@ function requiredString(value, name) {
   return value
 }
 
+/**
+ * @param {unknown} result
+ * @param {string} fallbackSheetName
+ */
+function normalizeSheetPageResult(result, fallbackSheetName) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid sheetPage response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: typeof result.workbookId === "string"
+      ? result.workbookId
+      : typeof result.workbook_id === "string"
+        ? result.workbook_id
+        : undefined,
+    sheetName: typeof result.sheetName === "string"
+      ? result.sheetName
+      : typeof result.sheet_name === "string"
+        ? result.sheet_name
+        : fallbackSheetName,
+    rows: Array.isArray(result.rows) ? result.rows : [],
+    nextStartRow: typeof result.nextStartRow === "number"
+      ? result.nextStartRow
+      : typeof result.next_start_row === "number"
+        ? result.next_start_row
+        : undefined,
+    headerRow: result.headerRow ?? result.header_row,
+    compact: result.compact,
+    valuesOnly: result.valuesOnly ?? result.values_only,
+    format: result.format
+  }
+}
+
 module.exports = {
   requireCapability,
-  requiredString
+  requiredString,
+  normalizeSheetPageResult
 }
