@@ -49,7 +49,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 base64 = { version = "0.22", optional = true }
 async-trait = { version = "0.1", optional = true }
-uuid = { version = "1.10", features = ["v4"], optional = true }
+uuid = { version = "1.10", features = ["v4", "js"], optional = true }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.31", optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh64"], optional = true }
