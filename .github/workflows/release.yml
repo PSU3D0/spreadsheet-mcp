@@ -168,7 +168,7 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Set npm package version from tag
+      - name: Set npm package version from tag (agent-spreadsheet)
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -179,6 +179,18 @@ jobs:
             npm version "$VERSION" --no-git-tag-version
           fi
         working-directory: npm/agent-spreadsheet
+
+      - name: Set npm package version from tag (spreadsheet-kit-sdk)
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
+            echo "npm package version already matches tag: $VERSION"
+          else
+            npm version "$VERSION" --no-git-tag-version
+          fi
+        working-directory: npm/spreadsheet-kit-sdk
 
       - name: Wait for GitHub release assets
         run: |
@@ -216,8 +228,14 @@ jobs:
             wait_for_asset "$asset"
           done
 
-      - name: Publish npm package
+      - name: Publish npm CLI package (agent-spreadsheet)
         run: npm publish --access public
         working-directory: npm/agent-spreadsheet
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish npm SDK package (spreadsheet-kit-sdk)
+        run: npm publish --access public
+        working-directory: npm/spreadsheet-kit-sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

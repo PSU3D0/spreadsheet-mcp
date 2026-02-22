@@ -76,8 +76,48 @@ function normalizeSheetPageResult(result, fallbackSheetName) {
   }
 }
 
+/**
+ * @param {unknown} result
+ */
+function normalizeGridExportResult(result) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid gridExport response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+  return {
+    sheet: result.sheet,
+    anchor: result.anchor,
+    columns: result.columns,
+    merges: result.merges,
+    rows: result.rows
+  }
+}
+
+/**
+ * @param {unknown} result
+ */
+function normalizeTransformBatchResult(result) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid transformBatch response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+  return {
+    opsApplied: result.opsApplied ?? result.ops_applied,
+    cellsTouched: result.cellsTouched ?? result.cells_touched,
+    cellsValueSet: result.cellsValueSet ?? result.cells_value_set,
+    cellsFormulaSet: result.cellsFormulaSet ?? result.cells_formula_set,
+    cellsFormulaCleared: result.cellsFormulaCleared ?? result.cells_formula_cleared,
+    cellsSkippedKeepFormulas: result.cellsSkippedKeepFormulas ?? result.cells_skipped_keep_formulas,
+    formulaParseDiagnostics: result.formulaParseDiagnostics ?? result.formula_parse_diagnostics
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
-  normalizeSheetPageResult
+  normalizeSheetPageResult,
+  normalizeGridExportResult,
+  normalizeTransformBatchResult
 }

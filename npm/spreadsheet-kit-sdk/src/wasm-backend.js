@@ -1,5 +1,11 @@
 const { freezeCapabilities, WASM_CAPABILITIES } = require("./capabilities")
-const { requireCapability, requiredString, normalizeSheetPageResult } = require("./backend")
+const {
+  requireCapability,
+  requiredString,
+  normalizeSheetPageResult,
+  normalizeGridExportResult,
+  normalizeTransformBatchResult
+} = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
 function normalizeSheetNames(items) {
@@ -136,13 +142,30 @@ class WasmBackend {
   async gridExport(input = {}) {
     requireCapability(this, "supportsGridExport", "gridExport")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
-    return this._call("gridExport", sessionId, input)
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+
+    const result = await this._call("gridExport", sessionId, {
+      ...input,
+      sheetName,
+      range: input.range
+    })
+
+    return normalizeGridExportResult(result)
   }
 
   async transformBatch(input = {}) {
     requireCapability(this, "supportsTransformBatch", "transformBatch")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
-    return this._call("transformBatch", sessionId, input.ops || [], input.options || {})
+    
+    // Convert SDK generic `mode: "preview"` to Wasm specific `dryRun` if missing options
+    const options = input.options ?? {}
+    if (input.mode === "preview" && options.dryRun === undefined) {
+      options.dryRun = true
+    }
+
+    const result = await this._call("transformBatch", sessionId, input.ops || [], options)
+    
+    return normalizeTransformBatchResult(result)
   }
 
   async exportWorkbook(input = {}) {

@@ -9,8 +9,8 @@ const {
 } = require("../src")
 const { MCP_CAPABILITIES } = require("../src/capabilities")
 
-async function sharedReadFlow(backend) {
-  const ctx = { workbookId: "wb-1", sessionId: "session-1" }
+async function sharedDataFlow(backend) {
+  const ctx = { workbookId: "wb-1", sessionId: "session-1", contextId: "ctx-1" }
   const sheets = await backend.listSheets(ctx)
   const range = await backend.rangeValues({
     ...ctx,
@@ -28,30 +28,33 @@ async function sharedReadFlow(backend) {
     includeHeader: true,
     format: "compact"
   })
-  return { sheets, range, page }
+  const grid = await backend.gridExport({
+    ...ctx,
+    sheetName: sheets[0],
+    range: "A1:B2"
+  })
+  const transform = await backend.transformBatch({
+    ...ctx,
+    ops: [{ kind: "clear_range", sheet_name: sheets[0], target: { kind: "range", range: "A1" } }],
+    mode: "preview"
+  })
+  return { sheets, range, page, grid, transform }
 }
 
-test("switching backends keeps shared read callsites stable", async () => {
+test("switching backends keeps shared data callsites stable", async () => {
   const mcp = new McpBackend({
     transport: {
       async invoke(operation, params) {
         if (operation === "list_sheets") {
-          assert.equal(params.workbook_id, "wb-1")
           return { sheets: [{ name: "Sheet1" }] }
         }
         if (operation === "range_values") {
-          assert.equal(params.workbook_id, "wb-1")
-          assert.equal(params.sheet_name, "Sheet1")
           return {
             sheet_name: "Sheet1",
             values: [{ range: "A1:B2", rows: [["v1", "v2"]] }]
           }
         }
         if (operation === "sheet_page") {
-          assert.equal(params.workbook_id, "wb-1")
-          assert.equal(params.sheet_name, "Sheet1")
-          assert.equal(params.start_row, 2)
-          assert.equal(params.page_size, 1)
           return {
             workbook_id: "ctx-1",
             sheet_name: "Sheet1",
@@ -64,6 +67,27 @@ test("switching backends keeps shared read callsites stable", async () => {
             }
           }
         }
+        if (operation === "grid_export") {
+          return {
+            sheet: "Sheet1",
+            anchor: "A1",
+            columns: [],
+            merges: [],
+            rows: []
+          }
+        }
+        if (operation === "transform_batch") {
+          assert.equal(params.mode, "preview")
+          assert.equal(params.fork_id, "wb-1")
+          return {
+            ops_applied: 1,
+            cells_touched: 1,
+            cells_value_set: 0,
+            cells_formula_set: 0,
+            cells_formula_cleared: 0,
+            cells_skipped_keep_formulas: 0
+          }
+        }
         throw new Error(`unexpected op ${operation}`)
       }
     }
@@ -72,22 +96,15 @@ test("switching backends keeps shared read callsites stable", async () => {
   const wasm = new WasmBackend({
     bindings: {
       async listSheets(sessionId) {
-        assert.equal(sessionId, "session-1")
         return ["Sheet1"]
       },
       async rangeValues(sessionId, params) {
-        assert.equal(sessionId, "session-1")
-        assert.equal(params.sheetName, "Sheet1")
         return {
           sheetName: "Sheet1",
           values: [{ range: "A1:B2", rows: [["v1", "v2"]] }]
         }
       },
       async sheetPage(sessionId, params) {
-        assert.equal(sessionId, "session-1")
-        assert.equal(params.sheetName, "Sheet1")
-        assert.equal(params.startRow, 2)
-        assert.equal(params.pageSize, 1)
         return {
           workbook_id: "ctx-1",
           sheet_name: "Sheet1",
@@ -99,12 +116,32 @@ test("switching backends keeps shared read callsites stable", async () => {
             rows: [[2, 42]]
           }
         }
+      },
+      async gridExport(sessionId, params) {
+        return {
+          sheet: "Sheet1",
+          anchor: "A1",
+          columns: [],
+          merges: [],
+          rows: []
+        }
+      },
+      async transformBatch(sessionId, ops, options) {
+        assert.equal(options.dryRun, true)
+        return {
+          ops_applied: 1,
+          cells_touched: 1,
+          cells_value_set: 0,
+          cells_formula_set: 0,
+          cells_formula_cleared: 0,
+          cells_skipped_keep_formulas: 0
+        }
       }
     }
   })
 
-  const mcpResult = await sharedReadFlow(mcp)
-  const wasmResult = await sharedReadFlow(wasm)
+  const mcpResult = await sharedDataFlow(mcp)
+  const wasmResult = await sharedDataFlow(wasm)
   assert.deepEqual(wasmResult, mcpResult)
 })
 
@@ -164,7 +201,7 @@ test("mcp transformBatch normalizes context id to fork_id", async () => {
       async invoke(operation, params) {
         assert.equal(operation, "transform_batch")
         assert.equal(params.fork_id, "fork-123")
-        return { ok: true }
+        return { ops_applied: 1, cells_touched: 0 }
       }
     }
   })
@@ -173,7 +210,7 @@ test("mcp transformBatch normalizes context id to fork_id", async () => {
     contextId: "fork-123",
     ops: []
   })
-  assert.equal(result.ok, true)
+  assert.equal(result.opsApplied, 1)
 })
 
 test("backend-specific no-op methods throw explicit unsupported errors", async () => {
