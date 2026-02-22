@@ -7,7 +7,9 @@ const {
   normalizeTransformBatchResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
-  normalizeSheetOverviewResult
+  normalizeSheetOverviewResult,
+  normalizeFindValueResult,
+  normalizeReadTableResult
 } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
@@ -163,6 +165,45 @@ class McpBackend {
       ranges
     })
     return normalizeRangeValuesResult(result, sheetName)
+  }
+
+  async findValue(input = {}) {
+    requireCapability(this, "supportsFindValue", "findValue")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+    const query = requiredString(input.query, "query")
+
+    const result = await this._call("find_value", {
+      ...input,
+      workbook_id: workbookId,
+      query,
+      sheet_name: input.sheet_name ?? input.sheetName,
+      case_sensitive: input.case_sensitive ?? input.caseSensitive,
+      limit: input.limit,
+      offset: input.offset
+    })
+
+    return normalizeFindValueResult(result, workbookId)
+  }
+
+  async readTable(input = {}) {
+    requireCapability(this, "supportsReadTable", "readTable")
+    const workbookId = requiredString(
+      input.workbookId || input.workbook_id || input.contextId,
+      "workbookId"
+    )
+
+    const result = await this._call("read_table", {
+      ...input,
+      workbook_id: workbookId,
+      sheet_name: input.sheet_name ?? input.sheetName,
+      include_headers: input.include_headers ?? input.includeHeaders,
+      include_types: input.include_types ?? input.includeTypes
+    })
+
+    return normalizeReadTableResult(result, workbookId, input.sheetName || input.sheet_name)
   }
 
   async sheetPage(input = {}) {

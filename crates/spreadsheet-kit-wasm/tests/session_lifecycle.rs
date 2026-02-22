@@ -3,8 +3,8 @@
 use spreadsheet_kit::core::session::{SessionMatrixCell, SessionTransformOp, WorkbookSession};
 use spreadsheet_kit::model::CellValue;
 use spreadsheet_kit_wasm::{
-    GridExportParams, RangeSelectionInput, RangeValuesParams, SessionApi, SessionApiError,
-    SheetOverviewParams, SheetPageParams, TransformBatchOptions,
+    FindValueParams, GridExportParams, RangeSelectionInput, RangeValuesParams, ReadTableParams,
+    SessionApi, SessionApiError, SheetOverviewParams, SheetPageParams, TransformBatchOptions,
 };
 
 fn workbook_bytes(setup: impl FnOnce(&mut umya_spreadsheet::Spreadsheet)) -> Vec<u8> {
@@ -52,6 +52,38 @@ fn session_lifecycle_reads_and_disposes() {
         .expect("sheet overview");
     assert_eq!(overview.workbook_id.as_str(), session_id);
     assert_eq!(overview.sheet_name, "Sheet1");
+
+    let find = api
+        .find_value(
+            &session_id,
+            FindValueParams {
+                query: "hello".to_string(),
+                sheet_name: Some("Sheet1".to_string()),
+                case_sensitive: Some(false),
+                limit: Some(10),
+                offset: Some(0),
+            },
+        )
+        .expect("find value");
+    assert_eq!(find.workbook_id.as_str(), session_id);
+    assert_eq!(find.matches.len(), 1);
+
+    let table = api
+        .read_table(
+            &session_id,
+            ReadTableParams {
+                sheet_name: Some("Sheet1".to_string()),
+                range: Some("A1:A1".to_string()),
+                columns: None,
+                limit: Some(10),
+                offset: Some(0),
+                format: Some(spreadsheet_kit::model::TableOutputFormat::Json),
+                include_headers: Some(true),
+                include_types: Some(false),
+            },
+        )
+        .expect("read table");
+    assert_eq!(table.workbook_id.as_str(), session_id);
 
     let values = api
         .range_values(

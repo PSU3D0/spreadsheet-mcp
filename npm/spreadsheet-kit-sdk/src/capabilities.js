@@ -5,6 +5,8 @@
  * @property {boolean} supportsSheetOverview
  * @property {boolean} supportsListSheets
  * @property {boolean} supportsRangeValues
+ * @property {boolean} supportsFindValue
+ * @property {boolean} supportsReadTable
  * @property {boolean} supportsSheetPage
  * @property {boolean} supportsGridExport
  * @property {boolean} supportsTransformBatch
@@ -21,6 +23,8 @@ const MCP_CAPABILITIES = Object.freeze({
   supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,
+  supportsFindValue: true,
+  supportsReadTable: true,
   supportsSheetPage: true,
   supportsGridExport: true,
   supportsTransformBatch: true,
@@ -37,6 +41,8 @@ const WASM_CAPABILITIES = Object.freeze({
   supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,
+  supportsFindValue: true,
+  supportsReadTable: true,
   supportsSheetPage: true,
   supportsGridExport: true,
   supportsTransformBatch: true,
