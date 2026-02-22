@@ -1,14 +1,16 @@
+use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::model::{
-    CellSnapshot, CellValue, GridCell, GridColumnHint, GridPayload, GridRow, RangeValuesEntry,
-    RowSnapshot, SheetPageCompact, SheetPageFormat, SheetPageResponse, SheetPageValues, StylePatch,
-    WorkbookId,
+    CellSnapshot, CellValue, GridCell, GridColumnHint, GridPayload, GridRow, NamedRangesResponse,
+    RangeValuesEntry, RowSnapshot, SheetOverviewResponse, SheetPageCompact, SheetPageFormat,
+    SheetPageResponse, SheetPageValues, StylePatch, WorkbookDescription, WorkbookId,
 };
 use crate::styles::descriptor_from_style;
-use crate::workbook::cell_to_value;
+use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use umya_spreadsheet::{Spreadsheet, Worksheet};
 
 /// Surface-agnostic in-memory workbook session.
@@ -44,6 +46,86 @@ impl WorkbookSession {
             .iter()
             .map(|sheet| sheet.get_name().to_string())
             .collect()
+    }
+
+    /// Return workbook-level descriptor for this in-memory session.
+    pub fn describe_workbook(&self) -> Result<WorkbookDescription> {
+        let workbook = self.as_workbook_context()?;
+        Ok(workbook.describe())
+    }
+
+    /// Return workbook defined names and table descriptors.
+    pub fn named_ranges(&self) -> Result<NamedRangesResponse> {
+        let workbook = self.as_workbook_context()?;
+        let items = workbook.named_items()?;
+        Ok(NamedRangesResponse {
+            workbook_id: workbook.id.clone(),
+            items,
+        })
+    }
+
+    /// Return overview/classification information for a sheet.
+    pub fn sheet_overview(
+        &self,
+        params: SessionSheetOverviewParams,
+    ) -> Result<SheetOverviewResponse> {
+        let workbook = self.as_workbook_context()?;
+        let mut overview = workbook.sheet_overview(&params.sheet_name)?;
+
+        let max_regions = params.max_regions.unwrap_or(25).max(1);
+        let max_headers = params.max_headers.unwrap_or(50).max(1);
+        let include_headers = params.include_headers.unwrap_or(true);
+
+        let region_limit = if params.max_regions == Some(0) {
+            usize::MAX
+        } else {
+            max_regions as usize
+        };
+        let header_limit = if params.max_headers == Some(0) {
+            usize::MAX
+        } else {
+            max_headers as usize
+        };
+
+        let total_regions = overview.detected_regions.len() as u32;
+        let mut headers_truncated = false;
+
+        for region in &mut overview.detected_regions {
+            let header_count = region.header_count.max(region.headers.len() as u32);
+            region.header_count = header_count;
+            if !include_headers {
+                region.headers.clear();
+            } else if region.headers.len() > header_limit {
+                region.headers.truncate(header_limit);
+            }
+            region.headers_truncated = region.headers.len() as u32 != header_count;
+            headers_truncated |= region.headers_truncated;
+        }
+
+        let regions_truncated = if overview.detected_regions.len() > region_limit {
+            overview.detected_regions.truncate(region_limit);
+            true
+        } else {
+            false
+        };
+
+        overview.detected_region_count = total_regions;
+        overview.detected_regions_truncated = regions_truncated;
+
+        if regions_truncated {
+            overview.notes.push(format!(
+                "Detected regions truncated to {} ({} total).",
+                region_limit, total_regions
+            ));
+        }
+        if headers_truncated {
+            overview.notes.push(format!(
+                "Region headers truncated to {} columns.",
+                header_limit
+            ));
+        }
+
+        Ok(overview)
     }
 
     /// Read one or more A1 ranges from a sheet.
@@ -299,6 +381,50 @@ impl WorkbookSession {
         self.to_bytes()
     }
 
+    fn as_workbook_context(&self) -> Result<WorkbookContext> {
+        let bytes = self.to_bytes()?;
+        let workbook_id = WorkbookId("session".to_string());
+        let short_id = crate::utils::make_short_workbook_id("session", workbook_id.as_str());
+        let config = Arc::new(ServerConfig {
+            workspace_root: PathBuf::from("."),
+            screenshot_dir: PathBuf::from("screenshots"),
+            path_mappings: Vec::new(),
+            cache_capacity: 2,
+            supported_extensions: vec![
+                "xlsx".to_string(),
+                "xlsm".to_string(),
+                "xls".to_string(),
+                "xlsb".to_string(),
+            ],
+            single_workbook: None,
+            enabled_tools: None,
+            transport: TransportKind::Stdio,
+            http_bind_address: "127.0.0.1:8079"
+                .parse()
+                .expect("hardcoded bind address is valid"),
+            recalc_enabled: false,
+            recalc_backend: RecalcBackendKind::Auto,
+            vba_enabled: false,
+            max_concurrent_recalcs: 1,
+            tool_timeout_ms: Some(30_000),
+            max_response_bytes: Some(1_000_000),
+            output_profile: OutputProfile::Verbose,
+            max_payload_bytes: Some(65_536),
+            max_cells: Some(10_000),
+            max_items: Some(500),
+            allow_overwrite: true,
+        });
+
+        WorkbookContext::load_from_bytes(
+            &config,
+            "session.xlsx",
+            &bytes,
+            workbook_id,
+            short_id,
+            None,
+        )
+    }
+
     fn sheet_by_name(&self, sheet_name: &str) -> Result<&Worksheet> {
         self.spreadsheet
             .get_sheet_by_name(sheet_name)
@@ -344,6 +470,18 @@ fn default_include_styles() -> bool {
 
 fn default_include_header() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionSheetOverviewParams {
+    pub sheet_name: String,
+    #[serde(default)]
+    pub max_regions: Option<u32>,
+    #[serde(default)]
+    pub max_headers: Option<u32>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1283,6 +1421,58 @@ mod tests {
         })?;
 
         assert_eq!(page.next_start_row, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn describe_and_named_ranges_return_session_metadata() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+            sheet.get_cell_mut("A2").set_value_number(100.0);
+            sheet
+                .add_defined_name("TotalRevenue", "Sheet1!$A$2")
+                .expect("defined name");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let desc = session.describe_workbook()?;
+        assert!(matches!(desc.workbook_id, WorkbookId(ref id) if id == "session"));
+        assert!(desc.sheet_count >= 1);
+
+        let named = session.named_ranges()?;
+        assert!(matches!(named.workbook_id, WorkbookId(ref id) if id == "session"));
+        assert!(named.items.iter().all(|item| !item.name.trim().is_empty()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_overview_applies_region_and_header_limits() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Score");
+            sheet.get_cell_mut("A2").set_value("alpha");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            sheet.get_cell_mut("A10").set_value("Name");
+            sheet.get_cell_mut("B10").set_value("Score");
+            sheet.get_cell_mut("A11").set_value("beta");
+            sheet.get_cell_mut("B11").set_value_number(20.0);
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let overview = session.sheet_overview(SessionSheetOverviewParams {
+            sheet_name: "Sheet1".to_string(),
+            max_regions: Some(1),
+            max_headers: Some(1),
+            include_headers: Some(true),
+        })?;
+
+        assert_eq!(overview.sheet_name, "Sheet1");
+        assert!(overview.detected_region_count >= overview.detected_regions.len() as u32);
+        assert!(overview.detected_regions.len() <= 1);
 
         Ok(())
     }

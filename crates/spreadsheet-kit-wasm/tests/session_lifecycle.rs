@@ -4,7 +4,7 @@ use spreadsheet_kit::core::session::{SessionMatrixCell, SessionTransformOp, Work
 use spreadsheet_kit::model::CellValue;
 use spreadsheet_kit_wasm::{
     GridExportParams, RangeSelectionInput, RangeValuesParams, SessionApi, SessionApiError,
-    SheetPageParams, TransformBatchOptions,
+    SheetOverviewParams, SheetPageParams, TransformBatchOptions,
 };
 
 fn workbook_bytes(setup: impl FnOnce(&mut umya_spreadsheet::Spreadsheet)) -> Vec<u8> {
@@ -30,6 +30,28 @@ fn session_lifecycle_reads_and_disposes() {
 
     let sheets = api.list_sheets(&session_id).expect("list sheets");
     assert_eq!(sheets, vec!["Sheet1"]);
+
+    let desc = api
+        .describe_workbook(&session_id)
+        .expect("describe workbook");
+    assert_eq!(desc.workbook_id.as_str(), session_id);
+
+    let named = api.named_ranges(&session_id).expect("named ranges");
+    assert_eq!(named.workbook_id.as_str(), session_id);
+
+    let overview = api
+        .sheet_overview(
+            &session_id,
+            SheetOverviewParams {
+                sheet_name: "Sheet1".to_string(),
+                max_regions: Some(1),
+                max_headers: Some(1),
+                include_headers: Some(true),
+            },
+        )
+        .expect("sheet overview");
+    assert_eq!(overview.workbook_id.as_str(), session_id);
+    assert_eq!(overview.sheet_name, "Sheet1");
 
     let values = api
         .range_values(

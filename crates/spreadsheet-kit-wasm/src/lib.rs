@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use spreadsheet_kit::core::session::{
-    SessionApplySummary, SessionRangeSelection, SessionSheetPageParams, SessionTransformOp,
-    WorkbookSession,
+    SessionApplySummary, SessionRangeSelection, SessionSheetOverviewParams, SessionSheetPageParams,
+    SessionTransformOp, WorkbookSession,
 };
-use spreadsheet_kit::model::{GridPayload, RangeValuesEntry, SheetPageFormat, SheetPageResponse};
+use spreadsheet_kit::model::{
+    GridPayload, NamedRangesResponse, RangeValuesEntry, SheetOverviewResponse, SheetPageFormat,
+    SheetPageResponse, WorkbookDescription,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -101,6 +104,30 @@ pub struct TransformBatchOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SheetOverviewParams {
+    #[serde(alias = "sheet_name")]
+    pub sheet_name: String,
+    #[serde(default)]
+    pub max_regions: Option<u32>,
+    #[serde(default)]
+    pub max_headers: Option<u32>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
+}
+
+impl From<SheetOverviewParams> for SessionSheetOverviewParams {
+    fn from(value: SheetOverviewParams) -> Self {
+        SessionSheetOverviewParams {
+            sheet_name: value.sheet_name,
+            max_regions: value.max_regions,
+            max_headers: value.max_headers,
+            include_headers: value.include_headers,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SheetPageParams {
     #[serde(alias = "sheet_name")]
     pub sheet_name: String,
@@ -179,6 +206,69 @@ impl SessionApi {
                 })?;
 
         Ok(session.list_sheets())
+    }
+
+    pub fn describe_workbook(&self, session_id: &str) -> SessionResult<WorkbookDescription> {
+        let store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut description =
+            session
+                .describe_workbook()
+                .map_err(|err| SessionApiError::InvalidArgument {
+                    message: err.to_string(),
+                })?;
+        description.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(description)
+    }
+
+    pub fn named_ranges(&self, session_id: &str) -> SessionResult<NamedRangesResponse> {
+        let store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response =
+            session
+                .named_ranges()
+                .map_err(|err| SessionApiError::InvalidArgument {
+                    message: err.to_string(),
+                })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
+    pub fn sheet_overview(
+        &self,
+        session_id: &str,
+        params: SheetOverviewParams,
+    ) -> SessionResult<SheetOverviewResponse> {
+        let store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response = session.sheet_overview(params.into()).map_err(|err| {
+            SessionApiError::InvalidArgument {
+                message: err.to_string(),
+            }
+        })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
     }
 
     pub fn range_values(
@@ -374,6 +464,27 @@ mod wasm_bindings {
     pub fn list_sheets_js(session_id: String) -> Result<JsValue, JsValue> {
         let sheets = api().list_sheets(&session_id).map_err(to_js_error)?;
         to_js_value(&sheets)
+    }
+
+    #[wasm_bindgen(js_name = describeWorkbook)]
+    pub fn describe_workbook_js(session_id: String) -> Result<JsValue, JsValue> {
+        let result = api().describe_workbook(&session_id).map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = namedRanges)]
+    pub fn named_ranges_js(session_id: String) -> Result<JsValue, JsValue> {
+        let result = api().named_ranges(&session_id).map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = sheetOverview)]
+    pub fn sheet_overview_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        let params: SheetOverviewParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api()
+            .sheet_overview(&session_id, params)
+            .map_err(to_js_error)?;
+        to_js_value(&result)
     }
 
     #[wasm_bindgen(js_name = rangeValues)]

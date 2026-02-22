@@ -11,7 +11,16 @@ const { MCP_CAPABILITIES } = require("../src/capabilities")
 
 async function sharedDataFlow(backend) {
   const ctx = { workbookId: "wb-1", sessionId: "session-1", contextId: "ctx-1" }
+  const describe = await backend.describeWorkbook(ctx)
+  const named = await backend.namedRanges(ctx)
   const sheets = await backend.listSheets(ctx)
+  const overview = await backend.sheetOverview({
+    ...ctx,
+    sheetName: "Sheet1",
+    maxRegions: 1,
+    maxHeaders: 1,
+    includeHeaders: true
+  })
   const range = await backend.rangeValues({
     ...ctx,
     sheetName: sheets[0],
@@ -38,15 +47,47 @@ async function sharedDataFlow(backend) {
     ops: [{ kind: "clear_range", sheet_name: sheets[0], target: { kind: "range", range: "A1" } }],
     mode: "preview"
   })
-  return { sheets, range, page, grid, transform }
+  return { describe, named, sheets, overview, range, page, grid, transform }
 }
 
 test("switching backends keeps shared data callsites stable", async () => {
   const mcp = new McpBackend({
     transport: {
       async invoke(operation, params) {
+        if (operation === "describe_workbook") {
+          return {
+            workbook_id: "wb-1",
+            short_id: "session",
+            slug: "session",
+            path: "virtual/session.xlsx",
+            bytes: 123,
+            sheet_count: 1,
+            defined_names: 0,
+            tables: 0,
+            macros_present: false,
+            caps: { read: true }
+          }
+        }
+        if (operation === "named_ranges") {
+          return { workbook_id: "wb-1", items: [] }
+        }
         if (operation === "list_sheets") {
           return { sheets: [{ name: "Sheet1" }] }
+        }
+        if (operation === "sheet_overview") {
+          return {
+            workbook_id: "wb-1",
+            sheet_name: "Sheet1",
+            narrative: "overview",
+            regions: [],
+            detected_regions: [],
+            detected_region_count: 0,
+            detected_regions_truncated: false,
+            key_ranges: [],
+            formula_ratio: 0,
+            notable_features: [],
+            notes: []
+          }
         }
         if (operation === "range_values") {
           return {
@@ -95,8 +136,40 @@ test("switching backends keeps shared data callsites stable", async () => {
 
   const wasm = new WasmBackend({
     bindings: {
+      async describeWorkbook(sessionId) {
+        return {
+          workbook_id: "wb-1",
+          short_id: "session",
+          slug: "session",
+          path: "virtual/session.xlsx",
+          bytes: 123,
+          sheet_count: 1,
+          defined_names: 0,
+          tables: 0,
+          macros_present: false,
+          caps: { read: true }
+        }
+      },
+      async namedRanges(sessionId) {
+        return { workbook_id: "wb-1", items: [] }
+      },
       async listSheets(sessionId) {
         return ["Sheet1"]
+      },
+      async sheetOverview(sessionId, params) {
+        return {
+          workbook_id: "wb-1",
+          sheet_name: "Sheet1",
+          narrative: "overview",
+          regions: [],
+          detected_regions: [],
+          detected_region_count: 0,
+          detected_regions_truncated: false,
+          key_ranges: [],
+          formula_ratio: 0,
+          notable_features: [],
+          notes: []
+        }
       },
       async rangeValues(sessionId, params) {
         return {

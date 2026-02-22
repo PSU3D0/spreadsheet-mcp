@@ -114,10 +114,85 @@ function normalizeTransformBatchResult(result) {
   }
 }
 
+/**
+ * @param {unknown} result
+ * @param {string | undefined} fallbackWorkbookId
+ */
+function normalizeDescribeWorkbookResult(result, fallbackWorkbookId) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid describeWorkbook response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: result.workbookId ?? result.workbook_id ?? fallbackWorkbookId,
+    shortId: result.shortId ?? result.short_id,
+    slug: result.slug,
+    path: result.path,
+    clientPath: result.clientPath ?? result.client_path,
+    bytes: result.bytes,
+    sheetCount: result.sheetCount ?? result.sheet_count,
+    definedNames: result.definedNames ?? result.defined_names,
+    tables: result.tables,
+    macrosPresent: result.macrosPresent ?? result.macros_present,
+    lastModified: result.lastModified ?? result.last_modified,
+    revisionId: result.revisionId ?? result.revision_id,
+    caps: result.caps
+  }
+}
+
+/**
+ * @param {unknown} result
+ * @param {string | undefined} fallbackWorkbookId
+ */
+function normalizeNamedRangesResult(result, fallbackWorkbookId) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid namedRanges response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: result.workbookId ?? result.workbook_id ?? fallbackWorkbookId,
+    items: Array.isArray(result.items) ? result.items : []
+  }
+}
+
+/**
+ * @param {unknown} result
+ * @param {string} fallbackSheetName
+ * @param {string | undefined} fallbackWorkbookId
+ */
+function normalizeSheetOverviewResult(result, fallbackSheetName, fallbackWorkbookId) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid sheetOverview response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: result.workbookId ?? result.workbook_id ?? fallbackWorkbookId,
+    sheetName: result.sheetName ?? result.sheet_name ?? fallbackSheetName,
+    narrative: result.narrative,
+    regions: Array.isArray(result.regions) ? result.regions : [],
+    detectedRegions: result.detectedRegions ?? result.detected_regions ?? [],
+    detectedRegionCount: result.detectedRegionCount ?? result.detected_region_count,
+    detectedRegionsTruncated: result.detectedRegionsTruncated ?? result.detected_regions_truncated,
+    keyRanges: result.keyRanges ?? result.key_ranges ?? [],
+    formulaRatio: result.formulaRatio ?? result.formula_ratio,
+    notableFeatures: result.notableFeatures ?? result.notable_features ?? [],
+    notes: Array.isArray(result.notes) ? result.notes : []
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
   normalizeSheetPageResult,
   normalizeGridExportResult,
-  normalizeTransformBatchResult
+  normalizeTransformBatchResult,
+  normalizeDescribeWorkbookResult,
+  normalizeNamedRangesResult,
+  normalizeSheetOverviewResult
 }

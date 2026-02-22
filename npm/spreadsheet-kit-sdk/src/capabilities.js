@@ -1,5 +1,8 @@
 /**
  * @typedef {object} BackendCapabilities
+ * @property {boolean} supportsDescribeWorkbook
+ * @property {boolean} supportsNamedRanges
+ * @property {boolean} supportsSheetOverview
  * @property {boolean} supportsListSheets
  * @property {boolean} supportsRangeValues
  * @property {boolean} supportsSheetPage
@@ -13,6 +16,9 @@
 
 /** @type {Readonly<BackendCapabilities>} */
 const MCP_CAPABILITIES = Object.freeze({
+  supportsDescribeWorkbook: true,
+  supportsNamedRanges: true,
+  supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,
   supportsSheetPage: true,
@@ -26,6 +32,9 @@ const MCP_CAPABILITIES = Object.freeze({
 
 /** @type {Readonly<BackendCapabilities>} */
 const WASM_CAPABILITIES = Object.freeze({
+  supportsDescribeWorkbook: true,
+  supportsNamedRanges: true,
+  supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,
   supportsSheetPage: true,

@@ -4,7 +4,10 @@ const {
   requiredString,
   normalizeSheetPageResult,
   normalizeGridExportResult,
-  normalizeTransformBatchResult
+  normalizeTransformBatchResult,
+  normalizeDescribeWorkbookResult,
+  normalizeNamedRangesResult,
+  normalizeSheetOverviewResult
 } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
@@ -97,6 +100,34 @@ class WasmBackend {
       })
     }
     return this._call("createSession", workbookBytes)
+  }
+
+  async describeWorkbook(input = {}) {
+    requireCapability(this, "supportsDescribeWorkbook", "describeWorkbook")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const result = await this._call("describeWorkbook", sessionId)
+    return normalizeDescribeWorkbookResult(result, sessionId)
+  }
+
+  async namedRanges(input = {}) {
+    requireCapability(this, "supportsNamedRanges", "namedRanges")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const result = await this._call("namedRanges", sessionId)
+    return normalizeNamedRangesResult(result, sessionId)
+  }
+
+  async sheetOverview(input = {}) {
+    requireCapability(this, "supportsSheetOverview", "sheetOverview")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+    const result = await this._call("sheetOverview", sessionId, {
+      ...input,
+      sheetName,
+      maxRegions: input.maxRegions ?? input.max_regions,
+      maxHeaders: input.maxHeaders ?? input.max_headers,
+      includeHeaders: input.includeHeaders ?? input.include_headers
+    })
+    return normalizeSheetOverviewResult(result, sheetName, sessionId)
   }
 
   async listSheets(input = {}) {
