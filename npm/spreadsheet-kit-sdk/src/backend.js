@@ -186,6 +186,51 @@ function normalizeSheetOverviewResult(result, fallbackSheetName, fallbackWorkboo
   }
 }
 
+/**
+ * @param {unknown} result
+ * @param {string | undefined} fallbackWorkbookId
+ */
+function normalizeFindValueResult(result, fallbackWorkbookId) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid findValue response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: result.workbookId ?? result.workbook_id ?? fallbackWorkbookId,
+    matches: Array.isArray(result.matches) ? result.matches : [],
+    nextOffset: result.nextOffset ?? result.next_offset
+  }
+}
+
+/**
+ * @param {unknown} result
+ * @param {string | undefined} fallbackWorkbookId
+ * @param {string | undefined} fallbackSheetName
+ */
+function normalizeReadTableResult(result, fallbackWorkbookId, fallbackSheetName) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid readTable response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  return {
+    workbookId: result.workbookId ?? result.workbook_id ?? fallbackWorkbookId,
+    sheetName: result.sheetName ?? result.sheet_name ?? fallbackSheetName,
+    tableName: result.tableName ?? result.table_name,
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    headers: Array.isArray(result.headers) ? result.headers : [],
+    rows: Array.isArray(result.rows) ? result.rows : [],
+    values: result.values,
+    types: result.types,
+    csv: result.csv,
+    totalRows: result.totalRows ?? result.total_rows ?? 0,
+    nextOffset: result.nextOffset ?? result.next_offset
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
@@ -194,5 +239,7 @@ module.exports = {
   normalizeTransformBatchResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
-  normalizeSheetOverviewResult
+  normalizeSheetOverviewResult,
+  normalizeFindValueResult,
+  normalizeReadTableResult
 }

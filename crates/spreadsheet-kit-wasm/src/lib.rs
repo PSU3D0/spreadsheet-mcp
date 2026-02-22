@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use spreadsheet_kit::core::session::{
-    SessionApplySummary, SessionRangeSelection, SessionSheetOverviewParams, SessionSheetPageParams,
-    SessionTransformOp, WorkbookSession,
+    SessionApplySummary, SessionFindValueParams, SessionRangeSelection, SessionReadTableParams,
+    SessionSheetOverviewParams, SessionSheetPageParams, SessionTransformOp, WorkbookSession,
 };
 use spreadsheet_kit::model::{
-    GridPayload, NamedRangesResponse, RangeValuesEntry, SheetOverviewResponse, SheetPageFormat,
-    SheetPageResponse, WorkbookDescription,
+    FindValueResponse, GridPayload, NamedRangesResponse, RangeValuesEntry, ReadTableResponse,
+    SheetOverviewResponse, SheetPageFormat, SheetPageResponse, TableOutputFormat,
+    WorkbookDescription,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -122,6 +123,68 @@ impl From<SheetOverviewParams> for SessionSheetOverviewParams {
             max_regions: value.max_regions,
             max_headers: value.max_headers,
             include_headers: value.include_headers,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindValueParams {
+    pub query: String,
+    #[serde(default, alias = "sheet_name")]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+impl From<FindValueParams> for SessionFindValueParams {
+    fn from(value: FindValueParams) -> Self {
+        SessionFindValueParams {
+            query: value.query,
+            sheet_name: value.sheet_name,
+            case_sensitive: value.case_sensitive.unwrap_or(false),
+            limit: value.limit.unwrap_or(50),
+            offset: value.offset,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTableParams {
+    #[serde(default, alias = "sheet_name")]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub range: Option<String>,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default)]
+    pub format: Option<TableOutputFormat>,
+    #[serde(default)]
+    pub include_headers: Option<bool>,
+    #[serde(default)]
+    pub include_types: Option<bool>,
+}
+
+impl From<ReadTableParams> for SessionReadTableParams {
+    fn from(value: ReadTableParams) -> Self {
+        SessionReadTableParams {
+            sheet_name: value.sheet_name,
+            range: value.range,
+            columns: value.columns,
+            limit: value.limit.unwrap_or(100),
+            offset: value.offset,
+            format: value.format.unwrap_or(TableOutputFormat::Csv),
+            include_headers: value.include_headers.unwrap_or(true),
+            include_types: value.include_types.unwrap_or(false),
         }
     }
 }
@@ -267,6 +330,54 @@ impl SessionApi {
                 message: err.to_string(),
             }
         })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
+    pub fn find_value(
+        &self,
+        session_id: &str,
+        params: FindValueParams,
+    ) -> SessionResult<FindValueResponse> {
+        let store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response =
+            session
+                .find_value(params.into())
+                .map_err(|err| SessionApiError::InvalidArgument {
+                    message: err.to_string(),
+                })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
+    pub fn read_table(
+        &self,
+        session_id: &str,
+        params: ReadTableParams,
+    ) -> SessionResult<ReadTableResponse> {
+        let store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response =
+            session
+                .read_table(params.into())
+                .map_err(|err| SessionApiError::InvalidArgument {
+                    message: err.to_string(),
+                })?;
         response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
         Ok(response)
     }
@@ -484,6 +595,20 @@ mod wasm_bindings {
         let result = api()
             .sheet_overview(&session_id, params)
             .map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = findValue)]
+    pub fn find_value_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        let params: FindValueParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api().find_value(&session_id, params).map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = readTable)]
+    pub fn read_table_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        let params: ReadTableParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api().read_table(&session_id, params).map_err(to_js_error)?;
         to_js_value(&result)
     }
 

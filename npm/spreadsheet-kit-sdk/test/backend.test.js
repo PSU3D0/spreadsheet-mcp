@@ -37,6 +37,22 @@ async function sharedDataFlow(backend) {
     includeHeader: true,
     format: "compact"
   })
+  const find = await backend.findValue({
+    ...ctx,
+    sheetName: sheets[0],
+    query: "alpha",
+    limit: 10,
+    offset: 0
+  })
+  const table = await backend.readTable({
+    ...ctx,
+    sheetName: sheets[0],
+    range: "A1:B2",
+    includeHeaders: true,
+    includeTypes: false,
+    limit: 10,
+    offset: 0
+  })
   const grid = await backend.gridExport({
     ...ctx,
     sheetName: sheets[0],
@@ -47,7 +63,7 @@ async function sharedDataFlow(backend) {
     ops: [{ kind: "clear_range", sheet_name: sheets[0], target: { kind: "range", range: "A1" } }],
     mode: "preview"
   })
-  return { describe, named, sheets, overview, range, page, grid, transform }
+  return { describe, named, sheets, overview, range, page, find, table, grid, transform }
 }
 
 test("switching backends keeps shared data callsites stable", async () => {
@@ -106,6 +122,28 @@ test("switching backends keeps shared data callsites stable", async () => {
               header_row: ["Score"],
               rows: [[2, 42]]
             }
+          }
+        }
+        if (operation === "find_value") {
+          return {
+            workbook_id: "wb-1",
+            matches: [
+              { address: "A2", sheet_name: "Sheet1", value: { kind: "text", value: "alpha" } }
+            ],
+            next_offset: null
+          }
+        }
+        if (operation === "read_table") {
+          return {
+            workbook_id: "wb-1",
+            sheet_name: "Sheet1",
+            table_name: null,
+            warnings: [],
+            headers: [],
+            rows: [],
+            csv: "Name,Score\nalpha,42\n",
+            total_rows: 1,
+            next_offset: null
           }
         }
         if (operation === "grid_export") {
@@ -188,6 +226,28 @@ test("switching backends keeps shared data callsites stable", async () => {
             header_row: ["Score"],
             rows: [[2, 42]]
           }
+        }
+      },
+      async findValue(sessionId, params) {
+        return {
+          workbook_id: "wb-1",
+          matches: [
+            { address: "A2", sheet_name: "Sheet1", value: { kind: "text", value: "alpha" } }
+          ],
+          next_offset: null
+        }
+      },
+      async readTable(sessionId, params) {
+        return {
+          workbook_id: "wb-1",
+          sheet_name: "Sheet1",
+          table_name: null,
+          warnings: [],
+          headers: [],
+          rows: [],
+          csv: "Name,Score\nalpha,42\n",
+          total_rows: 1,
+          next_offset: null
         }
       },
       async gridExport(sessionId, params) {

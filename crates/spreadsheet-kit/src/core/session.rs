@@ -1,13 +1,16 @@
 use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::model::{
-    CellSnapshot, CellValue, GridCell, GridColumnHint, GridPayload, GridRow, NamedRangesResponse,
-    RangeValuesEntry, RowSnapshot, SheetOverviewResponse, SheetPageCompact, SheetPageFormat,
-    SheetPageResponse, SheetPageValues, StylePatch, WorkbookDescription, WorkbookId,
+    CellSnapshot, CellValue, CellValueKind, CellValuePrimitive, FindValueMatch, FindValueResponse,
+    GridCell, GridColumnHint, GridPayload, GridRow, NamedRangesResponse, RangeValuesEntry,
+    ReadTableResponse, RowSnapshot, SheetOverviewResponse, SheetPageCompact, SheetPageFormat,
+    SheetPageResponse, SheetPageValues, StylePatch, TableOutputFormat, TableRow, Warning,
+    WorkbookDescription, WorkbookId,
 };
 use crate::styles::descriptor_from_style;
 use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -126,6 +129,227 @@ impl WorkbookSession {
         }
 
         Ok(overview)
+    }
+
+    /// Search for values in one sheet or across all sheets.
+    pub fn find_value(&self, params: SessionFindValueParams) -> Result<FindValueResponse> {
+        if params.query.trim().is_empty() {
+            return Err(anyhow!("query is required"));
+        }
+
+        let query = if params.case_sensitive {
+            params.query.clone()
+        } else {
+            params.query.to_ascii_lowercase()
+        };
+        let offset = params.offset.unwrap_or(0);
+        let limit = params.limit.max(1);
+
+        let sheet_names: Vec<String> = if let Some(sheet_name) = params.sheet_name.as_ref() {
+            vec![sheet_name.clone()]
+        } else {
+            self.list_sheets()
+        };
+
+        let mut seen = 0u32;
+        let mut matches = Vec::new();
+        let mut truncated = false;
+
+        'outer: for sheet_name in sheet_names {
+            let sheet = self.sheet_by_name(&sheet_name)?;
+            let max_row = sheet.get_highest_row().max(1);
+            let max_col = sheet.get_highest_column().max(1);
+
+            for row in 1..=max_row {
+                for col in 1..=max_col {
+                    let Some(cell) = sheet.get_cell((col, row)) else {
+                        continue;
+                    };
+                    let Some(value) = cell_to_value(cell) else {
+                        continue;
+                    };
+
+                    let haystack = if params.case_sensitive {
+                        cell_value_to_string(value.clone())
+                    } else {
+                        cell_value_to_string_lower(value.clone())
+                    };
+                    if !haystack.contains(&query) {
+                        continue;
+                    }
+
+                    if seen < offset {
+                        seen += 1;
+                        continue;
+                    }
+
+                    if matches.len() >= limit as usize {
+                        truncated = true;
+                        break 'outer;
+                    }
+
+                    matches.push(FindValueMatch {
+                        address: crate::utils::cell_address(col, row),
+                        sheet_name: sheet_name.clone(),
+                        value: Some(value),
+                        row_context: None,
+                        neighbors: None,
+                        label_hit: None,
+                    });
+                    seen += 1;
+                }
+            }
+        }
+
+        Ok(FindValueResponse {
+            workbook_id: WorkbookId("session".to_string()),
+            matches,
+            next_offset: truncated.then_some(offset + limit),
+        })
+    }
+
+    /// Read a rectangular table snapshot from a sheet.
+    pub fn read_table(&self, params: SessionReadTableParams) -> Result<ReadTableResponse> {
+        let sheet_name = if let Some(name) = params.sheet_name.clone() {
+            name
+        } else {
+            self.list_sheets()
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("workbook has no sheets"))?
+        };
+        let sheet = self.sheet_by_name(&sheet_name)?;
+
+        let bounds = if let Some(range) = params.range.as_ref() {
+            parse_range_bounds(range)?
+        } else {
+            RangeBounds {
+                min_col: 1,
+                min_row: 1,
+                max_col: sheet.get_highest_column().max(1),
+                max_row: sheet.get_highest_row().max(1),
+            }
+        };
+
+        let include_headers = params.include_headers;
+        let include_types = params.include_types;
+        let format = params.format;
+        let offset = params.offset.unwrap_or(0) as usize;
+        let limit = params.limit.max(1) as usize;
+
+        let column_indices = if let Some(columns) = params.columns.as_ref() {
+            resolve_columns(Some(columns), bounds.max_col)?
+                .into_iter()
+                .filter(|col| *col >= bounds.min_col && *col <= bounds.max_col)
+                .collect::<Vec<_>>()
+        } else {
+            (bounds.min_col..=bounds.max_col).collect::<Vec<_>>()
+        };
+
+        if column_indices.is_empty() {
+            return Err(anyhow!("no columns selected for read_table"));
+        }
+
+        let header_row_idx = bounds.min_row;
+        let mut headers: Vec<String> = column_indices
+            .iter()
+            .map(|col| {
+                if include_headers {
+                    sheet
+                        .get_cell((*col, header_row_idx))
+                        .and_then(cell_to_value)
+                        .map(cell_value_to_string)
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or_else(|| crate::utils::column_number_to_name(*col))
+                } else {
+                    crate::utils::column_number_to_name(*col)
+                }
+            })
+            .collect();
+        dedupe_headers_in_place(&mut headers);
+
+        let data_start_row = if include_headers {
+            header_row_idx.saturating_add(1)
+        } else {
+            bounds.min_row
+        };
+        let data_rows_count = if data_start_row > bounds.max_row {
+            0usize
+        } else {
+            (bounds.max_row - data_start_row + 1) as usize
+        };
+
+        let row_start = data_start_row.saturating_add(offset as u32);
+        let row_end_exclusive = row_start.saturating_add(limit as u32);
+
+        let mut json_rows: Vec<TableRow> = Vec::new();
+        let mut raw_rows: Vec<Vec<Option<CellValue>>> = Vec::new();
+        let mut values_rows: Vec<Vec<Option<CellValuePrimitive>>> = Vec::new();
+        let mut types_rows: Vec<Vec<Option<CellValueKind>>> = Vec::new();
+
+        let mut row_idx = row_start;
+        while row_idx <= bounds.max_row && row_idx < row_end_exclusive {
+            let mut json_row = BTreeMap::new();
+            let mut raw_row = Vec::new();
+            let mut values_row = Vec::new();
+            let mut types_row = Vec::new();
+
+            for (idx, col) in column_indices.iter().enumerate() {
+                let value = sheet.get_cell((*col, row_idx)).and_then(cell_to_value);
+                json_row.insert(headers[idx].clone(), value.clone());
+                raw_row.push(value.clone());
+                values_row.push(value.as_ref().and_then(cell_value_to_primitive));
+                types_row.push(value.as_ref().map(cell_value_kind));
+            }
+
+            json_rows.push(json_row);
+            raw_rows.push(raw_row);
+            values_rows.push(values_row);
+            types_rows.push(types_row);
+            row_idx = row_idx.saturating_add(1);
+        }
+
+        let next_offset = if offset + json_rows.len() < data_rows_count {
+            Some((offset + json_rows.len()) as u32)
+        } else {
+            None
+        };
+
+        let csv = if matches!(format, TableOutputFormat::Csv) {
+            Some(build_csv_payload(&headers, &raw_rows, include_headers))
+        } else {
+            None
+        };
+
+        Ok(ReadTableResponse {
+            workbook_id: WorkbookId("session".to_string()),
+            sheet_name,
+            table_name: None,
+            warnings: Vec::<Warning>::new(),
+            headers: if matches!(format, TableOutputFormat::Csv) {
+                Vec::new()
+            } else {
+                headers
+            },
+            rows: if matches!(format, TableOutputFormat::Json) {
+                json_rows
+            } else {
+                Vec::new()
+            },
+            values: if matches!(format, TableOutputFormat::Values) {
+                Some(values_rows)
+            } else {
+                None
+            },
+            types: if include_types {
+                Some(types_rows)
+            } else {
+                None
+            },
+            csv,
+            total_rows: data_rows_count as u32,
+            next_offset,
+        })
     }
 
     /// Read one or more A1 ranges from a sheet.
@@ -482,6 +706,88 @@ pub struct SessionSheetOverviewParams {
     pub max_headers: Option<u32>,
     #[serde(default)]
     pub include_headers: Option<bool>,
+}
+
+fn default_find_limit() -> u32 {
+    50
+}
+
+fn default_read_table_limit() -> u32 {
+    100
+}
+
+fn default_read_table_include_headers() -> bool {
+    true
+}
+
+fn default_read_table_include_types() -> bool {
+    false
+}
+
+fn default_read_table_format() -> TableOutputFormat {
+    TableOutputFormat::Csv
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionFindValueParams {
+    pub query: String,
+    #[serde(default)]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default = "default_find_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+impl Default for SessionFindValueParams {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            sheet_name: None,
+            case_sensitive: false,
+            limit: default_find_limit(),
+            offset: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionReadTableParams {
+    #[serde(default)]
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub range: Option<String>,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[serde(default = "default_read_table_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: Option<u32>,
+    #[serde(default = "default_read_table_format")]
+    pub format: TableOutputFormat,
+    #[serde(default = "default_read_table_include_headers")]
+    pub include_headers: bool,
+    #[serde(default = "default_read_table_include_types")]
+    pub include_types: bool,
+}
+
+impl Default for SessionReadTableParams {
+    fn default() -> Self {
+        Self {
+            sheet_name: None,
+            range: None,
+            columns: None,
+            limit: default_read_table_limit(),
+            offset: None,
+            format: default_read_table_format(),
+            include_headers: default_read_table_include_headers(),
+            include_types: default_read_table_include_types(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1008,13 +1314,104 @@ fn resolve_columns_with_headers(
     }
 }
 
-fn cell_value_to_string_lower(value: CellValue) -> String {
+fn cell_value_to_string(value: CellValue) -> String {
     match value {
-        CellValue::Text(s) => s.to_ascii_lowercase(),
-        CellValue::Number(n) => n.to_string().to_ascii_lowercase(),
+        CellValue::Text(s) => s,
+        CellValue::Number(n) => n.to_string(),
         CellValue::Bool(b) => b.to_string(),
-        CellValue::Error(e) => e.to_ascii_lowercase(),
-        CellValue::Date(d) => d.to_ascii_lowercase(),
+        CellValue::Error(e) => e,
+        CellValue::Date(d) => d,
+    }
+}
+
+fn cell_value_to_string_lower(value: CellValue) -> String {
+    cell_value_to_string(value).to_ascii_lowercase()
+}
+
+fn cell_value_to_primitive(value: &CellValue) -> Option<CellValuePrimitive> {
+    match value {
+        CellValue::Text(s) => Some(CellValuePrimitive::Text(s.clone())),
+        CellValue::Number(n) => Some(CellValuePrimitive::Number(*n)),
+        CellValue::Bool(b) => Some(CellValuePrimitive::Bool(*b)),
+        CellValue::Error(e) => Some(CellValuePrimitive::Text(e.clone())),
+        CellValue::Date(d) => Some(CellValuePrimitive::Text(d.clone())),
+    }
+}
+
+fn cell_value_kind(value: &CellValue) -> CellValueKind {
+    match value {
+        CellValue::Text(_) => CellValueKind::Text,
+        CellValue::Number(_) => CellValueKind::Number,
+        CellValue::Bool(_) => CellValueKind::Bool,
+        CellValue::Error(_) => CellValueKind::Error,
+        CellValue::Date(_) => CellValueKind::Date,
+    }
+}
+
+fn build_csv_payload(
+    headers: &[String],
+    rows: &[Vec<Option<CellValue>>],
+    include_headers: bool,
+) -> String {
+    fn escape_csv(value: &str) -> String {
+        if value.contains(',')
+            || value.contains('"')
+            || value.contains('\n')
+            || value.contains('\r')
+        {
+            format!("\"{}\"", value.replace('"', "\"\""))
+        } else {
+            value.to_string()
+        }
+    }
+
+    let mut out = String::new();
+    if include_headers {
+        out.push_str(
+            &headers
+                .iter()
+                .map(|h| escape_csv(h))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push('\n');
+    }
+
+    for row in rows {
+        let line = row
+            .iter()
+            .map(|cell| match cell {
+                Some(CellValue::Text(s)) => escape_csv(s),
+                Some(CellValue::Number(n)) => n.to_string(),
+                Some(CellValue::Bool(b)) => b.to_string(),
+                Some(CellValue::Error(e)) => escape_csv(e),
+                Some(CellValue::Date(d)) => escape_csv(d),
+                None => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        out.push_str(&line);
+        out.push('\n');
+    }
+
+    out
+}
+
+fn dedupe_headers_in_place(headers: &mut [String]) {
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for header in headers.iter_mut() {
+        let base = if header.trim().is_empty() {
+            "column".to_string()
+        } else {
+            header.clone()
+        };
+        let counter = counts.entry(base.clone()).or_insert(0);
+        if *counter == 0 {
+            *header = base;
+        } else {
+            *header = format!("{}_{}", base, *counter + 1);
+        }
+        *counter += 1;
     }
 }
 
@@ -1473,6 +1870,114 @@ mod tests {
         assert_eq!(overview.sheet_name, "Sheet1");
         assert!(overview.detected_region_count >= overview.detected_regions.len() as u32);
         assert!(overview.detected_regions.len() <= 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn find_value_returns_matches_with_pagination() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("alpha");
+            sheet.get_cell_mut("A2").set_value("alpha");
+            sheet.get_cell_mut("A3").set_value("beta");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let result = session.find_value(SessionFindValueParams {
+            query: "alpha".to_string(),
+            limit: 1,
+            offset: Some(0),
+            ..SessionFindValueParams::default()
+        })?;
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.next_offset, Some(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_table_values_mode_returns_values_and_types() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Score");
+            sheet.get_cell_mut("A2").set_value("alpha");
+            sheet.get_cell_mut("B2").set_value_number(42.0);
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let table = session.read_table(SessionReadTableParams {
+            sheet_name: Some("Sheet1".to_string()),
+            range: Some("A1:B2".to_string()),
+            format: TableOutputFormat::Values,
+            include_headers: true,
+            include_types: true,
+            ..SessionReadTableParams::default()
+        })?;
+
+        assert_eq!(table.sheet_name, "Sheet1");
+        assert_eq!(table.headers, vec!["Name", "Score"]);
+        assert!(table.rows.is_empty());
+        assert_eq!(table.values.as_ref().map(Vec::len), Some(1));
+        assert_eq!(table.types.as_ref().map(Vec::len), Some(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_table_csv_preserves_date_and_text_values() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Date");
+            sheet.get_cell_mut("B1").set_value("Note");
+            sheet.get_cell_mut("A2").set_value_number(45292.0);
+            sheet
+                .get_style_mut("A2")
+                .get_number_format_mut()
+                .set_format_code("yyyy-mm-dd");
+            sheet.get_cell_mut("B2").set_value("ok");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let table = session.read_table(SessionReadTableParams {
+            sheet_name: Some("Sheet1".to_string()),
+            range: Some("A1:B2".to_string()),
+            format: TableOutputFormat::Csv,
+            ..SessionReadTableParams::default()
+        })?;
+
+        assert!(table.headers.is_empty());
+        let csv = table.csv.expect("csv");
+        assert!(csv.contains("-"));
+        assert!(csv.contains("ok"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_table_dedupes_duplicate_headers() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Dup");
+            sheet.get_cell_mut("B1").set_value("Dup");
+            sheet.get_cell_mut("A2").set_value("v1");
+            sheet.get_cell_mut("B2").set_value("v2");
+        });
+
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let table = session.read_table(SessionReadTableParams {
+            sheet_name: Some("Sheet1".to_string()),
+            range: Some("A1:B2".to_string()),
+            format: TableOutputFormat::Json,
+            ..SessionReadTableParams::default()
+        })?;
+
+        assert_eq!(table.headers, vec!["Dup", "Dup_2"]);
+        let row = table.rows.first().expect("row");
+        assert!(row.contains_key("Dup"));
+        assert!(row.contains_key("Dup_2"));
 
         Ok(())
     }

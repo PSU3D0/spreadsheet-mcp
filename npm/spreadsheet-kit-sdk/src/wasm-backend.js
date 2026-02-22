@@ -7,7 +7,9 @@ const {
   normalizeTransformBatchResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
-  normalizeSheetOverviewResult
+  normalizeSheetOverviewResult,
+  normalizeFindValueResult,
+  normalizeReadTableResult
 } = require("./backend")
 const { SpreadsheetSdkError, normalizeBackendError } = require("./errors")
 
@@ -149,6 +151,37 @@ class WasmBackend {
     })
 
     return normalizeRangeValuesResult(result, sheetName)
+  }
+
+  async findValue(input = {}) {
+    requireCapability(this, "supportsFindValue", "findValue")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const query = requiredString(input.query, "query")
+
+    const result = await this._call("findValue", sessionId, {
+      ...input,
+      query,
+      sheetName: input.sheetName ?? input.sheet_name,
+      caseSensitive: input.caseSensitive ?? input.case_sensitive,
+      limit: input.limit,
+      offset: input.offset
+    })
+
+    return normalizeFindValueResult(result, sessionId)
+  }
+
+  async readTable(input = {}) {
+    requireCapability(this, "supportsReadTable", "readTable")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+
+    const result = await this._call("readTable", sessionId, {
+      ...input,
+      sheetName: input.sheetName ?? input.sheet_name,
+      includeHeaders: input.includeHeaders ?? input.include_headers,
+      includeTypes: input.includeTypes ?? input.include_types
+    })
+
+    return normalizeReadTableResult(result, sessionId, input.sheetName || input.sheet_name)
   }
 
   async sheetPage(input = {}) {
