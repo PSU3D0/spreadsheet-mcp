@@ -188,7 +188,12 @@ pub async fn range_export(
     bail!("no data returned from range-values");
 }
 
-pub async fn inspect_cells(file: PathBuf, sheet: String, range: String) -> Result<Value> {
+pub async fn inspect_cells(
+    file: PathBuf,
+    sheet: String,
+    targets: Vec<String>,
+    include_empty: bool,
+) -> Result<Value> {
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
     let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
@@ -197,7 +202,8 @@ pub async fn inspect_cells(file: PathBuf, sheet: String, range: String) -> Resul
         InspectCellsParams {
             workbook_or_fork_id: workbook_id,
             sheet_name: sheet,
-            range,
+            targets,
+            include_empty: Some(include_empty),
         },
     )
     .await?;

@@ -755,8 +755,11 @@ pub struct InspectCellsParams {
     pub workbook_or_fork_id: WorkbookId,
     /// Sheet name
     pub sheet_name: String,
-    /// Single A1 range to inspect
-    pub range: String,
+    /// One or more A1 targets (cells or ranges) to inspect
+    pub targets: Vec<String>,
+    /// Include empty cells in the response (default: false)
+    #[serde(default)]
+    pub include_empty: Option<bool>,
 }
 
 pub async fn sheet_page(
@@ -3754,53 +3757,83 @@ pub async fn inspect_cells(
     state: Arc<AppState>,
     params: InspectCellsParams,
 ) -> Result<InspectCellsResponse> {
+    const DETAIL_LIMIT: usize = 25;
+
+    if params.targets.is_empty() {
+        return Err(anyhow!(
+            "inspect-cells requires at least one A1 target (cell or range)"
+        ));
+    }
+
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let config = state.config();
-    let max_cells = config.max_cells().unwrap_or(10_000);
+    let detail_limit = config
+        .max_cells()
+        .map(|limit| limit.min(DETAIL_LIMIT))
+        .unwrap_or(DETAIL_LIMIT)
+        .max(1);
     let max_payload_bytes = config.max_payload_bytes();
+    let include_empty = params.include_empty.unwrap_or(false);
 
-    let ((start_col, start_row), (end_col, end_row)) =
-        parse_range(&params.range).ok_or_else(|| {
-            anyhow!(
-                "invalid range '{}'; expected A1 notation like A1:C10",
-                params.range
-            )
-        })?;
+    let mut coords = Vec::new();
+    let mut seen = HashSet::new();
+    for target in &params.targets {
+        let ((start_col, start_row), (end_col, end_row)) =
+            parse_range(target).ok_or_else(|| {
+                anyhow!(
+                    "invalid target '{}'; expected A1 cell or range like A1:C10",
+                    target
+                )
+            })?;
 
-    let total_cells = ((end_col - start_col + 1) as usize) * ((end_row - start_row + 1) as usize);
-
-    let mut cells = workbook.with_sheet(&params.sheet_name, |sheet| {
-        let mut cells = Vec::new();
-        'rows: for row in start_row..=end_row {
+        for row in start_row..=end_row {
             for col in start_col..=end_col {
-                if cells.len() >= max_cells {
-                    break 'rows;
-                }
-                if let Some(cell) = sheet.get_cell((col, row)) {
-                    cells.push(build_cell_snapshot(cell, true, true));
-                } else {
-                    cells.push(CellSnapshot {
-                        address: format!("{}{}", column_number_to_name(col), row),
-                        value: None,
-                        formula: None,
-                        cached_value: None,
-                        number_format: None,
-                        style_tags: Vec::new(),
-                        notes: Vec::new(),
-                    });
+                if seen.insert((col, row)) {
+                    coords.push((col, row));
                 }
             }
         }
-        Ok::<_, anyhow::Error>(cells)
+    }
+
+    if coords.len() > detail_limit {
+        return Err(anyhow!(
+            "inspect-cells is a detail view and accepts up to {} cells per request (got {}). Narrow your selection or use sheet-page, range-values, or layout-page for broader discovery.",
+            detail_limit,
+            coords.len()
+        ));
+    }
+
+    let mut cells = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let mut out = Vec::new();
+        for (col, row) in &coords {
+            if let Some(cell) = sheet.get_cell((*col, *row)) {
+                out.push(build_cell_snapshot(cell, true, true));
+            } else if include_empty {
+                out.push(CellSnapshot {
+                    address: format!("{}{}", column_number_to_name(*col), row),
+                    value: None,
+                    formula: None,
+                    cached_value: None,
+                    number_format: None,
+                    style_tags: Vec::new(),
+                    notes: Vec::new(),
+                });
+            }
+        }
+        Ok::<_, anyhow::Error>(out)
     })??;
 
-    let mut truncated = cells.len() < total_cells;
-
+    let mut truncated = false;
     let cell_limit = cap_rows_by_payload_bytes(cells.len(), max_payload_bytes, |count| {
         let response = InspectCellsResponse {
             workbook_id: workbook.id.clone(),
             sheet_name: params.sheet_name.clone(),
-            range: params.range.clone(),
+            range: params.targets.join(","),
+            targets: if params.targets.len() > 1 {
+                params.targets.clone()
+            } else {
+                Vec::new()
+            },
             cells: cells[..count].to_vec(),
             truncated: false,
         };
@@ -3816,7 +3849,12 @@ pub async fn inspect_cells(
     Ok(InspectCellsResponse {
         workbook_id: workbook.id.clone(),
         sheet_name: params.sheet_name,
-        range: params.range,
+        range: params.targets.join(","),
+        targets: if params.targets.len() > 1 {
+            params.targets
+        } else {
+            Vec::new()
+        },
         cells,
         truncated,
     })

@@ -167,7 +167,8 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
         InspectCellsParams {
             workbook_or_fork_id: workbook_id.clone(),
             sheet_name: "Inputs".into(),
-            range: "B2:C3".into(),
+            targets: vec!["B2:C3".into()],
+            include_empty: Some(true),
         },
     )
     .await?;
