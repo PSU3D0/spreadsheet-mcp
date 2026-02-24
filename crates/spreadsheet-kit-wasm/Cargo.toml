@@ -18,4 +18,4 @@ thiserror = "1.0"
 spreadsheet-kit = { path = "../spreadsheet-kit", default-features = false, features = ["recalc-formualizer"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-umya-spreadsheet = "2.3.3"
+umya-spreadsheet = "2.3.2"

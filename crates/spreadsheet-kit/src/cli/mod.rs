@@ -282,21 +282,29 @@ pub enum Commands {
         force: bool,
     },
     #[command(
-        about = "Inspect one A1 range and return per-cell formula/value/style snapshots",
+        about = "Inspect detail snapshots for targeted A1 cells/ranges (detail view, max 25 cells)",
         after_long_help = "Examples:
-  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C10
-  agent-spreadsheet inspect-cells data.xlsx \"Q1 Actuals\" D4:F12
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C3
+  agent-spreadsheet inspect-cells data.xlsx \"Q1 Actuals\" D4 D7:F8
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 B2,C4 --include-empty
 
-inspect-cells is a triage-friendly read surface that combines formula text, value/cached_value, and style metadata per cell.
-For broader discovery, pair with range-values, find-formula, and formula-trace."
+inspect-cells is a detail view for formula/value/cached/style triage and enforces a small per-request cell budget.
+For broader discovery, use sheet-page, range-values, or layout-page."
     )]
     InspectCells {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
-        #[arg(value_name = "SHEET", help = "Sheet name containing the range")]
+        #[arg(value_name = "SHEET", help = "Sheet name containing the targets")]
         sheet: String,
-        #[arg(value_name = "RANGE", help = "Single A1 range to inspect")]
-        range: String,
+        #[arg(
+            value_name = "TARGET",
+            value_delimiter = ',',
+            num_args = 1..,
+            help = "One or more A1 cells/ranges (e.g. B2, A1:C3, D7:F8)"
+        )]
+        targets: Vec<String>,
+        #[arg(long, help = "Include empty cells in the response")]
+        include_empty: bool,
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
@@ -1209,9 +1217,12 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
-        Commands::InspectCells { file, sheet, range } => {
-            commands::read::inspect_cells(file, sheet, range).await
-        }
+        Commands::InspectCells {
+            file,
+            sheet,
+            targets,
+            include_empty,
+        } => commands::read::inspect_cells(file, sheet, targets, include_empty).await,
         Commands::SheetPage {
             file,
             sheet,
@@ -2011,14 +2022,22 @@ mod tests {
             "workbook.xlsx",
             "Sheet1",
             "A1:C10",
+            "D4",
+            "--include-empty",
         ])
         .expect("parse command");
 
         match cli.command {
-            Commands::InspectCells { file, sheet, range } => {
+            Commands::InspectCells {
+                file,
+                sheet,
+                targets,
+                include_empty,
+            } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
-                assert_eq!(range, "A1:C10");
+                assert_eq!(targets, vec!["A1:C10", "D4"]);
+                assert!(include_empty);
             }
             other => panic!("unexpected command: {other:?}"),
         }

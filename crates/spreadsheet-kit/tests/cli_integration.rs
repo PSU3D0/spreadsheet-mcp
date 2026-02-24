@@ -432,10 +432,11 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
         inspect_help.stderr
     );
     let inspect = parse_stdout_text(&inspect_help);
-    assert!(
-        inspect.contains("Inspect one A1 range and return per-cell formula/value/style snapshots")
-    );
-    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C10"));
+    assert!(inspect.contains(
+        "Inspect detail snapshots for targeted A1 cells/ranges (detail view, max 25 cells)"
+    ));
+    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C3"));
+    assert!(inspect.contains("--include-empty"));
 
     let sheet_page_help = run_cli(&["sheet-page", "--help"]);
     assert!(
@@ -542,7 +543,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "Machine continuation example:",
         "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
         "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
-        "`inspect-cells <file> <sheet> <range>`",
+        "`inspect-cells <file> <sheet> <target> [target...] [--include-empty]`",
         "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
@@ -3425,20 +3426,85 @@ fn cli_inspect_cells_returns_unified_snapshot() {
 }
 
 #[test]
-fn cli_inspect_cells_large_range_truncates_to_limits() {
+fn cli_inspect_cells_rejects_large_requests_with_hint() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("inspect-cells-large.xlsx");
     write_fixture(&workbook_path);
     let file = workbook_path.to_str().expect("path utf8");
 
     let output = run_cli(&["inspect-cells", file, "Sheet1", "A1:XFD10"]);
+    assert!(!output.status.success(), "stdout: {:?}", output.stdout);
+    let err = parse_stderr_json(&output);
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(message.contains("detail view"), "message={message}");
+    assert!(message.contains("sheet-page"), "message={message}");
+}
+
+#[test]
+fn cli_inspect_cells_supports_multi_targets_and_dedupes_overlap() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-multi.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "B2:C2", "C2", "A2"]);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     let payload = parse_stdout_json(&output);
 
-    assert_eq!(payload["truncated"], Value::Bool(true));
+    assert_eq!(payload["range"], "B2:C2,C2,A2");
+    assert_eq!(payload["targets"], serde_json::json!(["B2:C2", "C2", "A2"]));
+
     let cells = payload["cells"].as_array().expect("cells array");
-    assert!(!cells.is_empty());
-    assert!(cells.len() <= 10_000);
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2", "C2", "A2"]);
+}
+
+#[test]
+fn cli_inspect_cells_omits_empty_cells_by_default() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-empty-default.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "B2", "D2"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let cells = payload["cells"].as_array().expect("cells array");
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2"]);
+}
+
+#[test]
+fn cli_inspect_cells_include_empty_keeps_empty_addresses() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-empty-include.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "inspect-cells",
+        file,
+        "Sheet1",
+        "B2",
+        "D2",
+        "--include-empty",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let cells = payload["cells"].as_array().expect("cells array");
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2", "D2"]);
 }
 
 #[test]

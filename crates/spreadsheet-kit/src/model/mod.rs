@@ -933,7 +933,11 @@ pub struct RangeValuesEntry {
 pub struct InspectCellsResponse {
     pub workbook_id: WorkbookId,
     pub sheet_name: String,
+    /// Legacy single-range echo. For multi-target requests this is a comma-joined list.
     pub range: String,
+    /// Requested A1 targets when more than one was supplied.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
     pub cells: Vec<CellSnapshot>,
     pub truncated: bool,
 }

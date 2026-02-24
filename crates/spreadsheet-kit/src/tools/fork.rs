@@ -16,10 +16,12 @@ use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use formualizer_parse::tokenizer::Tokenizer;
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -2333,7 +2335,26 @@ pub(crate) fn apply_structure_ops_to_file(
         }
     }
 
+    let clamped_defined_names = clamp_out_of_bounds_defined_name_rows(&mut book);
+    if clamped_defined_names > 0 {
+        warnings.push(format!(
+            "Clamped {} defined name reference(s) to Excel max row 1048576 after structural edits.",
+            clamped_defined_names
+        ));
+    }
+
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    // Temporary guardrail: patch overflowing workbook-scoped defined-name row references
+    // directly in workbook.xml after structural writes. Remove once Formualizer/Umya
+    // perform named-range row-bound clamping during ingest/mutation.
+    let clamped_workbook_xml_defined_names = sanitize_workbook_xml_defined_name_rows(path)?;
+    if clamped_workbook_xml_defined_names > 0 {
+        warnings.push(format!(
+            "Clamped {} workbook.xml defined name reference(s) to Excel max row 1048576 after structural edits.",
+            clamped_workbook_xml_defined_names
+        ));
+    }
 
     let summary = ChangeSummary {
         op_kinds: vec!["structure_batch".to_string()],
@@ -2998,6 +3019,348 @@ fn rewrite_defined_name_formulas_for_sheet_structure_change(
     Ok(())
 }
 
+fn clamp_defined_name_refers_to_max_row(refers_to: &str) -> Option<String> {
+    const EXCEL_MAX_ROW: u32 = 1_048_576;
+
+    let trimmed = refers_to.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let had_equals = trimmed.starts_with('=');
+    let formula_in = if had_equals {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    };
+
+    let tokens = Tokenizer::new(&formula_in).ok()?.items;
+
+    let mut out = String::with_capacity(formula_in.len());
+    let mut cursor = 0usize;
+    let mut changed = false;
+
+    for token in &tokens {
+        if token.start > cursor {
+            out.push_str(&formula_in[cursor..token.start]);
+        }
+
+        let mut value = token.value.clone();
+        if token.subtype == formualizer_parse::TokenSubType::Range {
+            let clamped = clamp_range_token_max_row(&value, EXCEL_MAX_ROW);
+            if clamped != value {
+                value = clamped;
+                changed = true;
+            }
+        }
+
+        out.push_str(&value);
+        cursor = token.end;
+    }
+
+    if cursor < formula_in.len() {
+        out.push_str(&formula_in[cursor..]);
+    }
+
+    if !changed {
+        return None;
+    }
+
+    Some(if had_equals {
+        out
+    } else {
+        out.strip_prefix('=').unwrap_or(&out).to_string()
+    })
+}
+
+fn clamp_range_token_max_row(token_value: &str, max_row: u32) -> String {
+    if token_value == "#REF!" {
+        return token_value.to_string();
+    }
+
+    if let Some((sheet_part, coord_part)) = token_value.split_once('!') {
+        let clamped = clamp_coord_part_max_row(coord_part, max_row);
+        if clamped == coord_part {
+            token_value.to_string()
+        } else {
+            format!("{sheet_part}!{clamped}")
+        }
+    } else {
+        clamp_coord_part_max_row(token_value, max_row)
+    }
+}
+
+fn clamp_coord_part_max_row(coord_part: &str, max_row: u32) -> String {
+    let mut changed = false;
+    let mut union_out = Vec::new();
+
+    for union_piece in coord_part.split(',') {
+        let mut range_out = Vec::new();
+        let mut local_changed = false;
+
+        for segment in union_piece.split(':') {
+            let clamped = clamp_ref_segment_max_row(segment, max_row);
+            if clamped != segment {
+                local_changed = true;
+            }
+            range_out.push(clamped);
+        }
+
+        if local_changed {
+            changed = true;
+        }
+        union_out.push(range_out.join(":"));
+    }
+
+    if changed {
+        union_out.join(",")
+    } else {
+        coord_part.to_string()
+    }
+}
+
+fn clamp_ref_segment_max_row(segment: &str, max_row: u32) -> String {
+    use umya_spreadsheet::helper::coordinate::{
+        coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
+    };
+
+    let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
+
+    // Not a coordinate-like segment (e.g., structured reference); leave untouched.
+    if col.is_none() && row.is_none() {
+        return segment.to_string();
+    }
+
+    let row = row.map(|value| value.min(max_row));
+
+    match (col, row) {
+        (Some(c), Some(r)) => coordinate_from_index_with_lock(
+            &c,
+            &r,
+            &col_lock.unwrap_or(false),
+            &row_lock.unwrap_or(false),
+        ),
+        (Some(c), None) => {
+            let col_str = string_from_column_index(&c);
+            format!(
+                "{}{}",
+                if col_lock.unwrap_or(false) { "$" } else { "" },
+                col_str
+            )
+        }
+        (None, Some(r)) => format!("{}{}", if row_lock.unwrap_or(false) { "$" } else { "" }, r),
+        (None, None) => segment.to_string(),
+    }
+}
+
+fn clamp_out_of_bounds_defined_name_rows(book: &mut umya_spreadsheet::Spreadsheet) -> usize {
+    #[derive(Debug)]
+    struct Patch {
+        idx: usize,
+        name: String,
+        clamped_address: String,
+        hidden: bool,
+        local_sheet_id: Option<u32>,
+        sheet_hint: Option<String>,
+    }
+
+    fn extract_first_sheet_name(refers_to: &str) -> Option<String> {
+        let first = refers_to.split(',').next()?.trim();
+        let (sheet_part, _) = first.split_once('!')?;
+        let sheet_part = sheet_part.trim();
+        if let Some(inner) = sheet_part
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+        {
+            Some(inner.replace("''", "'"))
+        } else {
+            Some(sheet_part.to_string())
+        }
+    }
+
+    let mut patches = Vec::new();
+    for (idx, defined) in book.get_defined_names().iter().enumerate() {
+        let original = defined.get_address();
+        let trimmed = original.trim();
+
+        // Keep formula-like names on the tokenizer path; clamp plain address unions only.
+        if trimmed.starts_with('=') || trimmed.contains('(') || trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(clamped_address) = clamp_defined_name_refers_to_max_row(trimmed) {
+            patches.push(Patch {
+                idx,
+                name: defined.get_name().to_string(),
+                clamped_address,
+                hidden: *defined.get_hidden(),
+                local_sheet_id: if defined.has_local_sheet_id() {
+                    Some(*defined.get_local_sheet_id())
+                } else {
+                    None
+                },
+                sheet_hint: extract_first_sheet_name(trimmed),
+            });
+        }
+    }
+
+    let mut applied = 0usize;
+    for patch in patches {
+        let target_sheet = patch
+            .sheet_hint
+            .as_ref()
+            .filter(|name| book.get_sheet_by_name(name).is_some())
+            .cloned()
+            .or_else(|| {
+                book.get_sheet_collection_no_check()
+                    .first()
+                    .map(|sheet| sheet.get_name().to_string())
+            });
+
+        let Some(target_sheet) = target_sheet else {
+            continue;
+        };
+
+        let mut replacement = {
+            let Some(sheet) = book.get_sheet_by_name_mut(&target_sheet) else {
+                continue;
+            };
+            let before = sheet.get_defined_names().len();
+            if sheet
+                .add_defined_name(patch.name.clone(), patch.clamped_address.clone())
+                .is_err()
+            {
+                continue;
+            }
+            let Some(candidate) = sheet.get_defined_names().last().cloned() else {
+                sheet.get_defined_names_mut().truncate(before);
+                continue;
+            };
+            sheet.get_defined_names_mut().truncate(before);
+            candidate
+        };
+
+        replacement.set_hidden(patch.hidden);
+        if let Some(local_sheet_id) = patch.local_sheet_id {
+            replacement.set_local_sheet_id(local_sheet_id);
+        }
+
+        if let Some(slot) = book.get_defined_names_mut().get_mut(patch.idx) {
+            *slot = replacement;
+            applied += 1;
+        }
+    }
+
+    applied
+}
+
+fn clamp_defined_name_rows_in_workbook_xml(xml: &str) -> (String, usize) {
+    let defined_name_re =
+        Regex::new(r"(?s)(<definedName[^>]*>)([^<]*)(</definedName>)").expect("valid xml regex");
+
+    let mut clamped_entries = 0usize;
+    let rewritten = defined_name_re
+        .replace_all(xml, |caps: &regex::Captures<'_>| {
+            let full = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+            let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let body = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+            let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or_default();
+
+            if body.trim_start().starts_with('=') || body.contains('(') {
+                return full.to_string();
+            }
+
+            if let Some(clamped_body) = clamp_defined_name_refers_to_max_row(body) {
+                clamped_entries += 1;
+                format!("{prefix}{clamped_body}{suffix}")
+            } else {
+                full.to_string()
+            }
+        })
+        .to_string();
+
+    (rewritten, clamped_entries)
+}
+
+fn sanitize_workbook_xml_defined_name_rows(path: &Path) -> Result<usize> {
+    use zip::{ZipArchive, ZipWriter, write::FileOptions};
+
+    let input_file = fs::File::open(path)?;
+    let mut archive = ZipArchive::new(input_file)?;
+
+    #[derive(Debug)]
+    struct ZipEntry {
+        name: String,
+        is_dir: bool,
+        data: Vec<u8>,
+        compression: zip::CompressionMethod,
+        unix_mode: Option<u32>,
+        modified: zip::DateTime,
+    }
+
+    let mut entries: Vec<ZipEntry> = Vec::with_capacity(archive.len());
+    let mut clamped_defined_names = 0usize;
+
+    for idx in 0..archive.len() {
+        let mut file = archive.by_index(idx)?;
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let compression = file.compression();
+        let unix_mode = file.unix_mode();
+        let modified = file.last_modified();
+
+        let mut data = Vec::new();
+        if !is_dir {
+            file.read_to_end(&mut data)?;
+            if name == "xl/workbook.xml" {
+                let xml = String::from_utf8_lossy(&data);
+                let (rewritten, changed) = clamp_defined_name_rows_in_workbook_xml(&xml);
+                clamped_defined_names = changed;
+                if changed > 0 {
+                    data = rewritten.into_bytes();
+                }
+            }
+        }
+
+        entries.push(ZipEntry {
+            name,
+            is_dir,
+            data,
+            compression,
+            unix_mode,
+            modified,
+        });
+    }
+
+    if clamped_defined_names == 0 {
+        return Ok(0);
+    }
+
+    let temp_path = path.with_extension("xlsx.tmp");
+    let output_file = fs::File::create(&temp_path)?;
+    let mut writer = ZipWriter::new(output_file);
+
+    for entry in entries {
+        let mut options = FileOptions::default()
+            .compression_method(entry.compression)
+            .last_modified_time(entry.modified);
+        if let Some(mode) = entry.unix_mode {
+            options = options.unix_permissions(mode);
+        }
+
+        if entry.is_dir {
+            writer.add_directory(entry.name, options)?;
+        } else {
+            writer.start_file(entry.name, options)?;
+            writer.write_all(&entry.data)?;
+        }
+    }
+
+    writer.finish()?;
+    fs::rename(temp_path, path)?;
+    Ok(clamped_defined_names)
+}
+
 fn rewrite_formulas_for_sheet_col_insert(
     book: &mut umya_spreadsheet::Spreadsheet,
     sheet_name: &str,
@@ -3205,6 +3568,8 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
         coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
     };
 
+    const EXCEL_MAX_ROW: u32 = 1_048_576;
+
     let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
     let mut col = col;
     let mut row = row;
@@ -3221,7 +3586,9 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
         StructureAxis::Row => {
             if let Some(r) = row {
                 row = match edit {
-                    StructureEdit::Insert { at, count } => Some(adjust_insert(r, at, count)),
+                    StructureEdit::Insert { at, count } => {
+                        Some(adjust_insert_bounded(r, at, count, EXCEL_MAX_ROW))
+                    }
                     StructureEdit::Delete { start, count } => adjust_delete(r, start, count),
                 };
             }
@@ -3257,7 +3624,15 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
 }
 
 fn adjust_insert(value: u32, at: u32, count: u32) -> u32 {
-    if value >= at { value + count } else { value }
+    if value >= at {
+        value.saturating_add(count)
+    } else {
+        value
+    }
+}
+
+fn adjust_insert_bounded(value: u32, at: u32, count: u32, max_value: u32) -> u32 {
+    adjust_insert(value, at, count).min(max_value)
 }
 
 fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {
@@ -5733,5 +6108,83 @@ fn merge_summary_counts(dest: &mut ChangeSummary, src: &ChangeSummary) {
     }
     for (k, v) in &src.counts {
         *dest.counts.entry(k.clone()).or_insert(0) += v;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjust_ref_coord_part_row_insert_clamps_excel_max_row() {
+        let adjusted = adjust_ref_coord_part(
+            "$C$2:$P$1048576",
+            StructureAxis::Row,
+            StructureEdit::Insert { at: 1791, count: 7 },
+        )
+        .expect("adjust range");
+
+        assert_eq!(adjusted, "$C$2:$P$1048576");
+    }
+
+    #[test]
+    fn clamp_out_of_bounds_defined_name_rows_clamps_plain_ranges() {
+        let mut workbook = umya_spreadsheet::new_file();
+        workbook
+            .set_sheet_name(0, "GL Data".to_string())
+            .expect("rename default sheet");
+
+        let workbook_scoped = {
+            let sheet = workbook
+                .get_sheet_by_name_mut("GL Data")
+                .expect("GL Data sheet");
+            sheet
+                .add_defined_name("GLDATA", "'GL Data'!$C$2:$P$1048583")
+                .expect("add defined name");
+            let cloned = sheet
+                .get_defined_names()
+                .first()
+                .expect("sheet defined name")
+                .clone();
+            sheet.get_defined_names_mut().clear();
+            cloned
+        };
+        {
+            let defs = workbook.get_defined_names_mut();
+            defs.clear();
+            defs.push(workbook_scoped);
+        }
+
+        let changed = clamp_out_of_bounds_defined_name_rows(&mut workbook);
+        assert!(changed >= 1, "expected at least one clamped defined name");
+
+        let global_refers_to = workbook
+            .get_defined_names()
+            .iter()
+            .find(|item| item.get_name() == "GLDATA")
+            .map(|item| item.get_address().to_string())
+            .expect("global GLDATA defined name");
+        assert!(
+            global_refers_to.contains("$P$1048576"),
+            "expected clamped max-row bound, got: {global_refers_to}"
+        );
+        assert!(
+            !global_refers_to.contains("104858"),
+            "defined name should not overflow Excel max rows: {global_refers_to}"
+        );
+    }
+
+    #[test]
+    fn clamp_defined_name_rows_in_workbook_xml_clamps_overflow_rows() {
+        let xml = r#"<workbook><definedNames><definedName name="GLDATA" hidden="0">'GL Data'!$C$2:$P$1048583</definedName><definedName name="Calc">=SUM(Sheet1!A1:A10)</definedName></definedNames></workbook>"#;
+        let (rewritten, changed) = clamp_defined_name_rows_in_workbook_xml(xml);
+
+        assert_eq!(changed, 1);
+        assert!(rewritten.contains("'GL Data'!$C$2:$P$1048576"));
+        assert!(!rewritten.contains("1048583"));
+        assert!(
+            rewritten.contains("<definedName name=\"Calc\">=SUM(Sheet1!A1:A10)</definedName>"),
+            "formula-like defined names should not be rewritten"
+        );
     }
 }
