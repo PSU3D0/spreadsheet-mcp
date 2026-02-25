@@ -80,6 +80,8 @@ async fn mcp_inspect_cells_returns_budget_metadata() -> Result<()> {
         .expect("budget metadata required");
     assert_eq!(budget.max_cells, Some(25));
     assert_eq!(budget.cells_returned, 4);
+    assert_eq!(budget.rows_returned, 2);
+    assert_eq!(budget.total_rows_available, Some(2));
 
     // Verify serializable as JSON (agent-consumable)
     let json = serde_json::to_value(&response.0)?;
