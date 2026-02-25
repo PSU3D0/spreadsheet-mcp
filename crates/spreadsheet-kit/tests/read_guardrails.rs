@@ -315,7 +315,8 @@ async fn inspect_cells_returns_budget_metadata() -> Result<()> {
         .expect("budget metadata should always be present");
     assert_eq!(budget.max_cells, Some(25)); // DETAIL_LIMIT
     assert_eq!(budget.cells_returned, 9);
-    assert_eq!(budget.rows_returned, 9);
+    assert_eq!(budget.rows_returned, 3);
+    assert_eq!(budget.total_rows_available, Some(3));
     // No continuation when not truncated
     assert!(budget.continuation.is_none());
 

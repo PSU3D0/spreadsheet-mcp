@@ -4272,7 +4272,15 @@ pub async fn inspect_cells(
         Ok::<_, anyhow::Error>(out)
     })??;
 
-    let total_requested = coords.len();
+    let total_requested_rows = coords
+        .iter()
+        .map(|(_, row)| *row)
+        .collect::<HashSet<u32>>()
+        .len();
+    let mut cell_rows: Vec<u32> = cells
+        .iter()
+        .filter_map(|cell| parse_address(&cell.address).map(|(_, row)| row))
+        .collect();
     let mut truncated = false;
     let cell_limit = cap_rows_by_payload_bytes(cells.len(), max_payload_bytes, |count| {
         let response = InspectCellsResponse {
@@ -4294,16 +4302,18 @@ pub async fn inspect_cells(
     });
     if cell_limit < cells.len() {
         cells.truncate(cell_limit);
+        cell_rows.truncate(cell_limit);
         truncated = true;
     }
 
     let cells_returned = cells.len();
+    let rows_returned = cell_rows.into_iter().collect::<HashSet<u32>>().len();
     let budget = Some(ReadBudget {
         max_cells: Some(detail_limit),
         max_payload_bytes,
-        rows_returned: cells_returned,
+        rows_returned,
         cells_returned,
-        total_rows_available: Some(total_requested as u32),
+        total_rows_available: Some(total_requested_rows as u32),
         continuation: if truncated {
             Some(
                 "inspect-cells is a strict detail-view tool; narrow your targets or use sheet-page / range-values for bulk reads"
