@@ -204,6 +204,10 @@ pub async fn edit_batch(
     })
 }
 
+fn default_clone_count() -> u32 {
+    1
+}
+
 fn default_clear_values() -> bool {
     true
 }
@@ -1772,6 +1776,25 @@ pub enum StructureOp {
         sheet_name: String,
         at_row: u32,
         count: u32,
+        /// When true, simple SUM(Ax:Ay) formulas in the row directly adjacent
+        /// (below) to the insertion band are expanded to include the new rows.
+        /// Only unambiguous single-range SUM patterns are expanded; complex or
+        /// ambiguous formulas produce a warning and are left untouched.
+        #[serde(default)]
+        expand_adjacent_sums: bool,
+    },
+    CloneRow {
+        sheet_name: String,
+        /// 1-based row to use as the template.
+        source_row: u32,
+        /// 1-based row position at which to insert new rows.
+        insert_at: u32,
+        /// Number of copies to insert (default 1).
+        #[serde(default = "default_clone_count")]
+        count: u32,
+        /// When true, expand adjacent SUM formulas below the insertion band.
+        #[serde(default)]
+        expand_adjacent_sums: bool,
     },
     DeleteRows {
         sheet_name: String,
@@ -1829,6 +1852,7 @@ fn structure_ops_require_recalc(ops: &[StructureOp]) -> bool {
                 | StructureOp::InsertCols { .. }
                 | StructureOp::DeleteCols { .. }
                 | StructureOp::RenameSheet { .. }
+                | StructureOp::CloneRow { .. }
                 | StructureOp::CopyRange {
                     include_formulas: true,
                     ..
@@ -2080,6 +2104,7 @@ pub(crate) fn apply_structure_ops_to_file(
                 sheet_name,
                 at_row,
                 count,
+                expand_adjacent_sums,
             } => {
                 if *at_row == 0 || *count == 0 {
                     bail!("insert_rows requires at_row>=1 and count>=1");
@@ -2106,9 +2131,96 @@ pub(crate) fn apply_structure_ops_to_file(
                     policy,
                     &mut formula_parse_diagnostics_builder,
                 )?;
+                if *expand_adjacent_sums {
+                    let expansion_warnings =
+                        expand_adjacent_sum_formulas(&mut book, sheet_name, *at_row, *count)?;
+                    warnings.extend(expansion_warnings);
+                    counts
+                        .entry("sums_expanded".to_string())
+                        .and_modify(|v| *v += 1)
+                        .or_insert(1);
+                }
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::CloneRow {
+                sheet_name,
+                source_row,
+                insert_at,
+                count,
+                expand_adjacent_sums,
+            } => {
+                if *source_row == 0 || *insert_at == 0 || *count == 0 {
+                    bail!("clone_row requires source_row>=1, insert_at>=1, and count>=1");
+                }
+                // Step 1: Capture template row cells before insertion (pre-shift).
+                let template_cells = {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    capture_row_template(sheet, *source_row)?
+                };
+
+                // Step 2: Insert blank rows.
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.insert_new_row(insert_at, count);
+                }
+                rewrite_formulas_for_sheet_row_insert(
+                    &mut book,
+                    sheet_name,
+                    *insert_at,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
+                rewrite_defined_name_formulas_for_sheet_row_insert(
+                    &mut book,
+                    sheet_name,
+                    *insert_at,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
+
+                // Step 3: Fill inserted rows from the template.
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    let clone_warnings = stamp_template_rows(
+                        sheet,
+                        &template_cells,
+                        *source_row,
+                        *insert_at,
+                        *count,
+                    )?;
+                    warnings.extend(clone_warnings);
+                }
+
+                // Step 4: Optionally expand adjacent SUMs.
+                if *expand_adjacent_sums {
+                    let expansion_warnings =
+                        expand_adjacent_sum_formulas(&mut book, sheet_name, *insert_at, *count)?;
+                    warnings.extend(expansion_warnings);
+                    counts
+                        .entry("sums_expanded".to_string())
+                        .and_modify(|v| *v += 1)
+                        .or_insert(1);
+                }
+
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+                counts
+                    .entry("rows_cloned".to_string())
                     .and_modify(|v| *v += *count as u64)
                     .or_insert(*count as u64);
             }
@@ -3687,6 +3799,203 @@ fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {
     } else {
         Some(value)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Adjacent SUM expansion helpers (ticket 4104)
+// ---------------------------------------------------------------------------
+
+/// Regex for simple `SUM(ColRow:ColRow)` patterns (A1-style, no sheet prefix).
+/// Captures: full match, col1, row1, col2, row2.
+fn simple_sum_range_regex() -> Regex {
+    Regex::new(r"(?i)^SUM\(([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)\)$").expect("valid regex")
+}
+
+/// After inserting `count` rows at `at_row`, scan the subtotal row immediately
+/// below the insertion band (row `at_row + count`) for simple `SUM(Ax:Ay)`
+/// formulas whose range end was adjacent to the insertion point. Expand those
+/// ranges to include the newly inserted rows.
+///
+/// **Important**: `insert_new_row` shifts cell positions but the same-sheet
+/// formula rewriter is intentionally skipped (it only rewrites cross-sheet
+/// references). So the formula text at the subtotal row still contains
+/// pre-insert row references. If the range ended at `at_row - 1`, it was
+/// adjacent and should be expanded to `subtotal_row - 1`.
+///
+/// Only unambiguous single-range `SUM(Ax:Ay)` patterns are touched.
+/// Returns a list of warning strings for any skipped/ambiguous formulas.
+fn expand_adjacent_sum_formulas(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_row: u32,
+    count: u32,
+) -> Result<Vec<String>> {
+    let mut warnings: Vec<String> = Vec::new();
+    // The cell that was originally at `at_row` is now at `at_row + count`.
+    let subtotal_row = at_row + count;
+    let sum_re = simple_sum_range_regex();
+
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let max_col = sheet.get_highest_column();
+    if max_col == 0 {
+        return Ok(warnings);
+    }
+
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, subtotal_row)) else {
+            continue;
+        };
+        if !cell.is_formula() {
+            continue;
+        }
+        let formula_text = cell.get_formula().to_string();
+        if formula_text.is_empty() {
+            continue;
+        }
+        // Strip leading = if present (umya stores without it, but be safe).
+        let formula_bare = formula_text.strip_prefix('=').unwrap_or(&formula_text);
+
+        let Some(caps) = sum_re.captures(formula_bare) else {
+            // Not a simple SUM(range) pattern.
+            if formula_bare.to_ascii_uppercase().contains("SUM") {
+                warnings.push(format!(
+                    "WARN_SUM_EXPANSION_SKIPPED: {}!{} has complex SUM formula '{}'; skipped.",
+                    sheet_name,
+                    crate::utils::cell_address(col, subtotal_row),
+                    formula_bare
+                ));
+            }
+            continue;
+        };
+
+        let col1_str = caps.get(1).unwrap().as_str().to_ascii_uppercase();
+        let row1: u32 = caps.get(2).unwrap().as_str().parse().unwrap_or(0);
+        let col2_str = caps.get(3).unwrap().as_str().to_ascii_uppercase();
+        let row2: u32 = caps.get(4).unwrap().as_str().parse().unwrap_or(0);
+
+        // Only expand single-column SUM ranges.
+        if col1_str != col2_str {
+            warnings.push(format!(
+                "WARN_SUM_EXPANSION_SKIPPED: {}!{} SUM spans columns {}:{} — not a single-column range; skipped.",
+                sheet_name,
+                crate::utils::cell_address(col, subtotal_row),
+                col1_str,
+                col2_str,
+            ));
+            continue;
+        }
+
+        // The formula text still has pre-insert references because the
+        // same-sheet rewriter was skipped. Check adjacency: the range end
+        // (row2) should be at_row - 1 (immediately above the insertion point).
+        if at_row == 0 || row2 + 1 != at_row {
+            // Range end wasn't immediately before the insertion point.
+            continue;
+        }
+        if row1 > row2 || row1 == 0 {
+            continue;
+        }
+
+        // Expand the range end to include the newly inserted rows.
+        // New end = subtotal_row - 1 = at_row + count - 1.
+        let desired_end = subtotal_row - 1;
+
+        // Build expanded formula.
+        let new_formula = format!("SUM({}{}:{}{})", col1_str, row1, col2_str, desired_end);
+
+        let cell = sheet.get_cell_mut((col, subtotal_row));
+        cell.set_formula(new_formula);
+        cell.set_formula_result_default("");
+    }
+
+    Ok(warnings)
+}
+
+// ---------------------------------------------------------------------------
+// Clone-row helpers (ticket 4104)
+// ---------------------------------------------------------------------------
+
+/// Captured cell data from a template row.
+#[derive(Debug, Clone)]
+struct TemplateCellData {
+    col: u32,
+    value: String,
+    formula: Option<String>,
+    style: umya_spreadsheet::Style,
+}
+
+/// Capture every non-empty cell in `source_row` as template data.
+fn capture_row_template(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_row: u32,
+) -> Result<Vec<TemplateCellData>> {
+    let max_col = sheet.get_highest_column();
+    let mut cells = Vec::new();
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, source_row)) else {
+            continue;
+        };
+        let value = cell.get_value().to_string();
+        let formula = if cell.is_formula() {
+            Some(cell.get_formula().to_string())
+        } else {
+            None
+        };
+        let style = cell.get_style().clone();
+        cells.push(TemplateCellData {
+            col,
+            value,
+            formula,
+            style,
+        });
+    }
+    Ok(cells)
+}
+
+/// Stamp template data into each inserted row, shifting formulas by row delta.
+fn stamp_template_rows(
+    sheet: &mut umya_spreadsheet::Worksheet,
+    template: &[TemplateCellData],
+    source_row: u32,
+    insert_at: u32,
+    count: u32,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for copy_idx in 0..count {
+        let dest_row = insert_at + copy_idx;
+        let delta_row = dest_row as i32 - source_row as i32;
+        for tpl in template {
+            let dest_cell = sheet.get_cell_mut((tpl.col, dest_row));
+            dest_cell.set_style(tpl.style.clone());
+
+            if let Some(formula) = &tpl.formula {
+                // Shift formula references by delta_row rows.
+                match parse_base_formula(formula)
+                    .and_then(|ast| shift_formula_ast(&ast, 0, delta_row, RelativeMode::Excel))
+                {
+                    Ok(shifted) => {
+                        let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                        dest_cell.set_formula(shifted);
+                        dest_cell.set_formula_result_default("");
+                    }
+                    Err(err) => {
+                        warnings.push(format!(
+                            "WARN_CLONE_FORMULA_SHIFT: could not shift formula '{}' for row {}: {}; copied verbatim.",
+                            formula, dest_row, err
+                        ));
+                        dest_cell.set_formula(formula.clone());
+                        dest_cell.set_formula_result_default("");
+                    }
+                }
+            } else {
+                dest_cell.set_value(tpl.value.clone());
+            }
+        }
+    }
+    Ok(warnings)
 }
 
 fn sheet_part_matches(sheet_part: &str, old_name: &str) -> bool {

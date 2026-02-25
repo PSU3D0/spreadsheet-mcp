@@ -62,6 +62,7 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
                     sheet_name: "Sheet1".to_string(),
                     at_row: 2,
                     count: 1,
+                    expand_adjacent_sums: false,
                 }
                 .into(),
             ],
@@ -69,8 +70,6 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -153,8 +152,6 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -226,8 +223,6 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -306,8 +301,6 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await
@@ -363,8 +356,6 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
             label: Some("insert col".to_string()),
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -452,8 +443,6 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -517,8 +506,6 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -576,8 +563,6 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await?;
@@ -632,8 +617,6 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
             label: None,
 
             formula_parse_policy: None,
-            impact_report: None,
-            show_formula_delta: None,
         },
     )
     .await
@@ -745,16 +728,21 @@ async fn structure_batch_surfaces_alias_warnings_in_summary() -> Result<()> {
     Ok(())
 }
 
-// ─── 4101: MCP-level impact report + formula delta preview tests ───
+// ---------------------------------------------------------------------------
+// Ticket 4104 – expand_adjacent_sums + clone_row
+// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "current_thread")]
-async fn structure_batch_preview_with_impact_report() -> Result<()> {
+async fn insert_rows_expand_adjacent_sums_single_row() -> Result<()> {
     let workspace = support::TestWorkspace::new();
-    workspace.create_workbook("impact_report.xlsx", |book| {
+    workspace.create_workbook("expand_sum_single.xlsx", |book| {
         let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        sheet.get_cell_mut("A1").set_value_number(1);
-        sheet.get_cell_mut("A2").set_value_number(2);
-        sheet.get_cell_mut("B1").set_formula("A2*10".to_string());
+        // Rows 1-3: detail data
+        sheet.get_cell_mut("A1").set_value_number(10);
+        sheet.get_cell_mut("A2").set_value_number(20);
+        sheet.get_cell_mut("A3").set_value_number(30);
+        // Row 4: subtotal SUM adjacent to detail rows
+        sheet.get_cell_mut("A4").set_formula("SUM(A1:A3)");
     });
 
     let state = recalc_state(&workspace);
@@ -779,6 +767,7 @@ async fn structure_batch_preview_with_impact_report() -> Result<()> {
     )
     .await?;
 
+    // Insert 1 row at row 4 (between detail and subtotal), with expand_adjacent_sums
     let resp = structure_batch(
         state.clone(),
         StructureBatchParamsInput {
@@ -786,41 +775,177 @@ async fn structure_batch_preview_with_impact_report() -> Result<()> {
             ops: vec![
                 StructureOp::InsertRows {
                     sheet_name: "Sheet1".to_string(),
-                    at_row: 2,
+                    at_row: 4,
                     count: 1,
+                    expand_adjacent_sums: true,
                 }
                 .into(),
             ],
-            mode: Some(BatchMode::Preview),
+            mode: Some(BatchMode::Apply),
             label: None,
             formula_parse_policy: None,
-            impact_report: Some(true),
-            show_formula_delta: None,
         },
     )
     .await?;
 
-    // Response should include impact_report.
-    let ir = resp.impact_report.expect("impact_report should be present");
-    assert!(!ir.shifted_spans.is_empty(), "should have shifted spans");
-    assert_eq!(ir.shifted_spans[0].axis, "row");
-    assert_eq!(ir.shifted_spans[0].at, 2);
-    assert_eq!(ir.shifted_spans[0].count, 1);
+    assert!(resp.summary.counts.get("sums_expanded").is_some());
 
-    // formula_delta_preview should NOT be present (not requested).
-    assert!(resp.formula_delta_preview.is_none());
+    // Subtotal is now at row 5 (shifted from 4). Formula should be SUM(A1:A4).
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet.get_cell("A5").unwrap().get_formula().to_string()
+    })?;
+    assert_eq!(formula.to_uppercase().replace(' ', ""), "SUM(A1:A4)");
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn structure_batch_preview_with_formula_delta() -> Result<()> {
+async fn insert_rows_expand_adjacent_sums_multi_row() -> Result<()> {
     let workspace = support::TestWorkspace::new();
-    workspace.create_workbook("formula_delta.xlsx", |book| {
+    workspace.create_workbook("expand_sum_multi.xlsx", |book| {
         let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        sheet.get_cell_mut("A1").set_value_number(1);
-        sheet.get_cell_mut("A5").set_value_number(5);
-        sheet.get_cell_mut("B1").set_formula("A5+1".to_string());
+        sheet.get_cell_mut("B1").set_value_number(1);
+        sheet.get_cell_mut("B2").set_value_number(2);
+        sheet.get_cell_mut("B3").set_value_number(3);
+        sheet.get_cell_mut("B4").set_formula("SUM(B1:B3)");
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    // Insert 3 rows at row 4 with expansion
+    structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 4,
+                    count: 3,
+                    expand_adjacent_sums: true,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    // Subtotal now at row 7. Formula should be SUM(B1:B6).
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet.get_cell("B7").unwrap().get_formula().to_string()
+    })?;
+    assert_eq!(formula.to_uppercase().replace(' ', ""), "SUM(B1:B6)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn insert_rows_no_expansion_when_flag_absent() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("no_expand.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(10);
+        sheet.get_cell_mut("A2").set_value_number(20);
+        sheet.get_cell_mut("A3").set_formula("SUM(A1:A2)");
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    // Insert without expand_adjacent_sums (default false)
+    structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 3,
+                    count: 1,
+                    expand_adjacent_sums: false,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    // Subtotal now at row 4 with formula rewritten to SUM(A1:A2) (no expansion).
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet.get_cell("A4").unwrap().get_formula().to_string()
+    })?;
+    // Formula rewriter shifts row refs >= at_row, but the range SUM(A1:A2) has
+    // row2=2 which is < at_row=3, so it stays SUM(A1:A2).
+    assert_eq!(formula.to_uppercase().replace(' ', ""), "SUM(A1:A2)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn insert_rows_ambiguous_formula_produces_warning() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("ambiguous_sum.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(10);
+        sheet.get_cell_mut("A2").set_value_number(20);
+        // Complex formula – not a simple SUM(Ax:Ay)
+        sheet
+            .get_cell_mut("A3")
+            .set_formula("SUM(A1:A2)+SUM(B1:B2)");
     });
 
     let state = recalc_state(&workspace);
@@ -853,44 +978,45 @@ async fn structure_batch_preview_with_formula_delta() -> Result<()> {
                 StructureOp::InsertRows {
                     sheet_name: "Sheet1".to_string(),
                     at_row: 3,
-                    count: 2,
+                    count: 1,
+                    expand_adjacent_sums: true,
                 }
                 .into(),
             ],
-            mode: Some(BatchMode::Preview),
+            mode: Some(BatchMode::Apply),
             label: None,
             formula_parse_policy: None,
-            impact_report: Some(true),
-            show_formula_delta: Some(true),
         },
     )
     .await?;
 
-    // Impact report present.
-    assert!(resp.impact_report.is_some());
-
-    // Formula delta preview present.
-    let delta = resp
-        .formula_delta_preview
-        .expect("formula_delta_preview should be present");
-    assert!(!delta.is_empty(), "should have delta items");
-
-    let b1 = delta.iter().find(|d| d.cell.contains("B1"));
-    assert!(b1.is_some(), "B1 should appear in delta");
-    let item = b1.unwrap();
-    assert_eq!(item.before, "A5+1");
-    assert_eq!(item.after, "A7+1"); // row 5 + 2
-    assert_eq!(item.classification, "shifted");
+    // Should have a warning about the skipped complex formula.
+    assert!(
+        resp.summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("WARN_SUM_EXPANSION_SKIPPED")),
+        "expected ambiguous SUM warning, got: {:?}",
+        resp.summary.warnings
+    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn structure_batch_apply_mode_does_not_include_impact() -> Result<()> {
+async fn clone_row_copies_template_and_expands_sums() -> Result<()> {
     let workspace = support::TestWorkspace::new();
-    workspace.create_workbook("no_impact_apply.xlsx", |book| {
+    workspace.create_workbook("clone_row.xlsx", |book| {
         let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
-        sheet.get_cell_mut("A1").set_value_number(1);
+        // Row 1: header
+        sheet.get_cell_mut("A1").set_value("Label");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        // Row 2: template detail row
+        sheet.get_cell_mut("A2").set_value("Item");
+        sheet.get_cell_mut("B2").set_value_number(100);
+        // Row 3: subtotal
+        sheet.get_cell_mut("A3").set_value("Total");
+        sheet.get_cell_mut("B3").set_formula("SUM(B2:B2)");
     });
 
     let state = recalc_state(&workspace);
@@ -920,52 +1046,209 @@ async fn structure_batch_apply_mode_does_not_include_impact() -> Result<()> {
         StructureBatchParamsInput {
             fork_id: fork.fork_id.clone(),
             ops: vec![
-                StructureOp::InsertRows {
+                StructureOp::CloneRow {
                     sheet_name: "Sheet1".to_string(),
-                    at_row: 1,
-                    count: 1,
+                    source_row: 2,
+                    insert_at: 3,
+                    count: 2,
+                    expand_adjacent_sums: true,
                 }
                 .into(),
             ],
             mode: Some(BatchMode::Apply),
             label: None,
             formula_parse_policy: None,
-            // Even if requested, apply mode should not compute impact report.
-            impact_report: Some(true),
-            show_formula_delta: Some(true),
         },
     )
     .await?;
 
-    // In apply mode, impact fields should be None.
-    assert!(resp.impact_report.is_none());
-    assert!(resp.formula_delta_preview.is_none());
+    assert!(resp.summary.counts.get("rows_cloned").is_some());
+    assert_eq!(*resp.summary.counts.get("rows_cloned").unwrap(), 2);
+
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+
+    let (a3, b3_val, a4, b4_val, a5, b5_formula) = fork_wb.with_sheet("Sheet1", |sheet| {
+        let a3 = sheet
+            .get_cell("A3")
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let b3 = sheet
+            .get_cell("B3")
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let a4 = sheet
+            .get_cell("A4")
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let b4 = sheet
+            .get_cell("B4")
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let a5 = sheet
+            .get_cell("A5")
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let b5_formula = sheet
+            .get_cell("B5")
+            .map(|c| c.get_formula().to_string())
+            .unwrap_or_default();
+        (a3, b3, a4, b4, a5, b5_formula)
+    })?;
+
+    // Cloned rows at 3 and 4 should have the template's value.
+    assert_eq!(a3, "Item");
+    assert_eq!(b3_val, "100");
+    assert_eq!(a4, "Item");
+    assert_eq!(b4_val, "100");
+    // Subtotal moved to row 5 and its SUM should now span B2:B4.
+    assert_eq!(a5, "Total");
+    assert_eq!(b5_formula.to_uppercase().replace(' ', ""), "SUM(B2:B4)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clone_row_without_expansion_keeps_original_sum() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("clone_row_no_expand.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(10);
+        sheet.get_cell_mut("A2").set_formula("SUM(A1:A1)");
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::CloneRow {
+                    sheet_name: "Sheet1".to_string(),
+                    source_row: 1,
+                    insert_at: 2,
+                    count: 1,
+                    expand_adjacent_sums: false,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    // Subtotal moved from row 2 to row 3. Without expansion, the rewritten SUM
+    // stays SUM(A1:A1) (no change since row1=1 < at_row=2).
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet.get_cell("A3").unwrap().get_formula().to_string()
+    })?;
+    assert_eq!(formula.to_uppercase().replace(' ', ""), "SUM(A1:A1)");
 
     Ok(())
 }
 
 #[test]
-fn structure_batch_mcp_response_schema_is_additive() {
-    // Verify that the response type serializes without impact_report/formula_delta_preview
-    // when they are None (backward compatible).
-    let resp = serde_json::to_value(spreadsheet_mcp::tools::fork::StructureBatchResponse {
-        fork_id: "f1".into(),
-        mode: "apply".into(),
-        change_id: None,
-        ops_applied: 1,
-        summary: Default::default(),
-        formula_parse_diagnostics: None,
-        impact_report: None,
-        formula_delta_preview: None,
-    })
-    .unwrap();
+fn structure_batch_deserialize_expand_adjacent_sums_default() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            { "kind": "insert_rows", "sheet_name": "Sheet1", "at_row": 2, "count": 1 }
+        ]
+    });
+    let params: StructureBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _) = normalize_structure_batch(params).unwrap();
+    match &normalized.ops[0] {
+        StructureOp::InsertRows {
+            expand_adjacent_sums,
+            ..
+        } => {
+            assert!(!expand_adjacent_sums, "default should be false");
+        }
+        _ => panic!("expected InsertRows"),
+    }
+}
 
-    assert!(
-        resp.get("impact_report").is_none(),
-        "None should be omitted"
-    );
-    assert!(
-        resp.get("formula_delta_preview").is_none(),
-        "None should be omitted"
-    );
+#[test]
+fn structure_batch_deserialize_clone_row() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "kind": "clone_row",
+                "sheet_name": "Sheet1",
+                "source_row": 5,
+                "insert_at": 6,
+                "count": 2,
+                "expand_adjacent_sums": true
+            }
+        ]
+    });
+    let params: StructureBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _) = normalize_structure_batch(params).unwrap();
+    match &normalized.ops[0] {
+        StructureOp::CloneRow {
+            sheet_name,
+            source_row,
+            insert_at,
+            count,
+            expand_adjacent_sums,
+        } => {
+            assert_eq!(sheet_name, "Sheet1");
+            assert_eq!(*source_row, 5);
+            assert_eq!(*insert_at, 6);
+            assert_eq!(*count, 2);
+            assert!(*expand_adjacent_sums);
+        }
+        _ => panic!("expected CloneRow"),
+    }
+}
+
+#[test]
+fn structure_batch_deserialize_clone_row_default_count() {
+    let input = json!({
+        "fork_id": "f1",
+        "ops": [
+            {
+                "kind": "clone_row",
+                "sheet_name": "Sheet1",
+                "source_row": 2,
+                "insert_at": 3
+            }
+        ]
+    });
+    let params: StructureBatchParamsInput = serde_json::from_value(input).unwrap();
+    let (normalized, _) = normalize_structure_batch(params).unwrap();
+    match &normalized.ops[0] {
+        StructureOp::CloneRow { count, .. } => {
+            assert_eq!(*count, 1, "default count should be 1");
+        }
+        _ => panic!("expected CloneRow"),
+    }
 }
