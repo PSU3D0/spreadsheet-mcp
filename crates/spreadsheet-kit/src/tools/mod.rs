@@ -18,7 +18,7 @@ use crate::model::*;
 use crate::state::AppState;
 use crate::utils::column_number_to_name;
 use crate::workbook::{WorkbookContext, cell_to_value};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -1209,6 +1209,421 @@ pub async fn named_ranges(
         items,
     };
     Ok(response)
+}
+
+// ── Named Range CRUD ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DefineNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Name to define (e.g. "SalesTotal").
+    pub name: String,
+    /// Formula or range the name refers to (e.g. "Sheet1!$A$1:$B$10").
+    pub refers_to: String,
+    /// Scope: "workbook" (default) or "sheet".
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Required when scope is "sheet". The sheet to scope the name to.
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Existing name to update.
+    pub name: String,
+    /// New refers_to value. If omitted, keeps existing.
+    pub refers_to: Option<String>,
+    /// Scope filter to disambiguate: "workbook" or "sheet".
+    pub scope: Option<String>,
+    /// Sheet name to disambiguate when scope is "sheet".
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Name to delete.
+    pub name: String,
+    /// Scope filter: "workbook" or "sheet".
+    pub scope: Option<String>,
+    /// Sheet name to disambiguate when scope is "sheet".
+    pub scope_sheet_name: Option<String>,
+}
+
+pub fn parse_scope_kind(scope: Option<&str>) -> Result<NamedRangeScope> {
+    match scope {
+        Some("sheet") => Ok(NamedRangeScope::Sheet),
+        Some("workbook") | None => Ok(NamedRangeScope::Workbook),
+        Some(other) => Err(anyhow!(
+            "invalid scope '{}': expected 'workbook' or 'sheet'",
+            other
+        )),
+    }
+}
+
+pub fn parse_scope_kind_optional(scope: Option<&str>) -> Result<Option<NamedRangeScope>> {
+    match scope {
+        Some("sheet") => Ok(Some(NamedRangeScope::Sheet)),
+        Some("workbook") => Ok(Some(NamedRangeScope::Workbook)),
+        None => Ok(None),
+        Some(other) => Err(anyhow!(
+            "invalid scope '{}': expected 'workbook' or 'sheet'",
+            other
+        )),
+    }
+}
+
+fn resolve_sheet_index_on_book(
+    book: &umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+) -> Result<u32> {
+    for (idx, sheet) in book.get_sheet_collection().iter().enumerate() {
+        if sheet.get_name() == sheet_name {
+            return Ok(idx as u32);
+        }
+    }
+    Err(anyhow!("sheet '{}' not found", sheet_name))
+}
+
+/// Apply define_name to an on-disk workbook file.
+pub(crate) fn define_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    refers_to: &str,
+    scope_kind: NamedRangeScope,
+    scope_sheet_name: Option<&str>,
+) -> Result<()> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    match scope_kind {
+        NamedRangeScope::Sheet => {
+            let sn = scope_sheet_name
+                .ok_or_else(|| anyhow!("scope_sheet_name required for sheet scope"))?;
+            let sheet_index = resolve_sheet_index_on_book(&book, sn)?;
+            let sheet = book
+                .get_sheet_by_name_mut(sn)
+                .ok_or_else(|| anyhow!("sheet '{}' not found", sn))?;
+            sheet
+                .add_defined_name(name.to_string(), refers_to.to_string())
+                .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+            // Set local_sheet_id on the just-added entry.
+            let sheet = book
+                .get_sheet_by_name_mut(sn)
+                .ok_or_else(|| anyhow!("sheet '{}' disappeared", sn))?;
+            if let Some(last) = sheet.get_defined_names_mut().last_mut()
+                && last.get_name() == name
+            {
+                last.set_local_sheet_id(sheet_index);
+            }
+        }
+        NamedRangeScope::Workbook => {
+            // set_name is pub(crate) in umya, so we create through a sheet then move
+            // to workbook level.
+            let first_sheet: String = book
+                .get_sheet_collection()
+                .first()
+                .map(|s| s.get_name().to_string())
+                .ok_or_else(|| anyhow!("workbook has no sheets"))?;
+            let sheet = book
+                .get_sheet_by_name_mut(&first_sheet)
+                .ok_or_else(|| anyhow!("sheet '{}' not found", first_sheet))?;
+            sheet
+                .add_defined_name(name.to_string(), refers_to.to_string())
+                .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+            // Move the just-added entry from sheet-level to workbook-level.
+            let sheet = book
+                .get_sheet_by_name_mut(&first_sheet)
+                .ok_or_else(|| anyhow!("sheet disappeared"))?;
+            let entry = sheet.get_defined_names_mut().pop();
+            if let Some(entry) = entry {
+                book.add_defined_names(entry);
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok(())
+}
+
+/// Apply update_name to an on-disk workbook file.
+pub(crate) fn update_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    new_refers_to: Option<&str>,
+    scope_kind: Option<NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<(String, NamedRangeScope, Option<String>)> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    let mut found = false;
+    let mut previous_refers_to = String::new();
+    let mut effective_scope = NamedRangeScope::Workbook;
+    let mut effective_sheet: Option<String> = None;
+
+    // Try workbook-level defined names.
+    if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+        for defined in book.get_defined_names_mut().iter_mut() {
+            if defined.get_name() == name
+                && (scope_kind == Some(NamedRangeScope::Workbook) || !defined.has_local_sheet_id())
+            {
+                previous_refers_to = defined.get_address();
+                if let Some(new_addr) = new_refers_to {
+                    defined.set_address(new_addr.to_string());
+                }
+                effective_scope = NamedRangeScope::Workbook;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    // Try sheet-level.
+    if !found && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+        let sheet_names: Vec<String> = book
+            .get_sheet_collection()
+            .iter()
+            .map(|s: &umya_spreadsheet::Worksheet| s.get_name().to_string())
+            .collect();
+        for sn in &sheet_names {
+            if let Some(filter_sheet) = scope_sheet_name
+                && !sn.eq_ignore_ascii_case(filter_sheet)
+            {
+                continue;
+            }
+            if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                for defined in sheet.get_defined_names_mut().iter_mut() {
+                    if defined.get_name() == name {
+                        previous_refers_to = defined.get_address();
+                        if let Some(new_addr) = new_refers_to {
+                            defined.set_address(new_addr.to_string());
+                        }
+                        effective_scope = NamedRangeScope::Sheet;
+                        effective_sheet = Some(sn.clone());
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(anyhow!("named range '{}' not found", name));
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok((previous_refers_to, effective_scope, effective_sheet))
+}
+
+/// Apply delete_name to an on-disk workbook file.
+pub(crate) fn delete_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    scope_kind: Option<NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<bool> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    let mut deleted = false;
+
+    // Try workbook-level.
+    if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+        let names = book.get_defined_names_mut();
+        let before_len = names.len();
+        names.retain(|d: &umya_spreadsheet::DefinedName| d.get_name() != name);
+        if names.len() < before_len {
+            deleted = true;
+        }
+    }
+
+    // Try sheet-level.
+    if !deleted && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+        let sheet_names: Vec<String> = book
+            .get_sheet_collection()
+            .iter()
+            .map(|s: &umya_spreadsheet::Worksheet| s.get_name().to_string())
+            .collect();
+        for sn in &sheet_names {
+            if let Some(filter_sheet) = scope_sheet_name
+                && !sn.eq_ignore_ascii_case(filter_sheet)
+            {
+                continue;
+            }
+            if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                let names = sheet.get_defined_names_mut();
+                let before_len = names.len();
+                names.retain(|d: &umya_spreadsheet::DefinedName| d.get_name() != name);
+                if names.len() < before_len {
+                    deleted = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !deleted {
+        return Err(anyhow!("named range '{}' not found", name));
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok(true)
+}
+
+#[cfg(feature = "recalc")]
+pub async fn define_name(
+    state: Arc<AppState>,
+    params: DefineNameParams,
+) -> Result<DefineNameResponse> {
+    let scope_kind = parse_scope_kind(params.scope.as_deref())?;
+    if scope_kind == NamedRangeScope::Sheet && params.scope_sheet_name.is_none() {
+        return Err(anyhow!(
+            "scope_sheet_name is required when scope is 'sheet'"
+        ));
+    }
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+    if params.refers_to.trim().is_empty() {
+        return Err(anyhow!("refers_to must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let refers_to = params.refers_to.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    tokio::task::spawn_blocking(move || {
+        define_name_in_file(
+            &work_path,
+            &name,
+            &refers_to,
+            scope_kind,
+            scope_sheet.as_deref(),
+        )
+    })
+    .await??;
+
+    // Mark fork as needing recalc and invalidate cache.
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(DefineNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        refers_to: params.refers_to,
+        scope_kind,
+        scope_sheet_name: params.scope_sheet_name,
+    })
+}
+
+#[cfg(feature = "recalc")]
+pub async fn update_name(
+    state: Arc<AppState>,
+    params: UpdateNameParams,
+) -> Result<UpdateNameResponse> {
+    let scope_kind = parse_scope_kind_optional(params.scope.as_deref())?;
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let new_refers_to = params.refers_to.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    let (previous_refers_to, effective_scope, effective_sheet) =
+        tokio::task::spawn_blocking(move || {
+            update_name_in_file(
+                &work_path,
+                &name,
+                new_refers_to.as_deref(),
+                scope_kind,
+                scope_sheet.as_deref(),
+            )
+        })
+        .await??;
+
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    let final_refers_to = params
+        .refers_to
+        .unwrap_or_else(|| previous_refers_to.clone());
+
+    Ok(UpdateNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        refers_to: final_refers_to,
+        scope_kind: effective_scope,
+        scope_sheet_name: effective_sheet.or(params.scope_sheet_name),
+        previous_refers_to: Some(previous_refers_to),
+    })
+}
+
+#[cfg(feature = "recalc")]
+pub async fn delete_name(
+    state: Arc<AppState>,
+    params: DeleteNameParams,
+) -> Result<DeleteNameResponse> {
+    let scope_kind = parse_scope_kind_optional(params.scope.as_deref())?;
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    tokio::task::spawn_blocking(move || {
+        delete_name_in_file(&work_path, &name, scope_kind, scope_sheet.as_deref())
+    })
+    .await??;
+
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(DeleteNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        deleted: true,
+    })
 }
 
 struct PageBuildResult {

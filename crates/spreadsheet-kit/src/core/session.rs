@@ -1,10 +1,11 @@
 use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::model::{
-    CellSnapshot, CellValue, CellValueKind, CellValuePrimitive, FindValueMatch, FindValueResponse,
-    GridCell, GridColumnHint, GridPayload, GridRow, NamedRangesResponse, RangeValuesEntry,
-    ReadTableResponse, RowSnapshot, SheetOverviewResponse, SheetPageCompact, SheetPageFormat,
-    SheetPageResponse, SheetPageValues, StylePatch, TableOutputFormat, TableRow, Warning,
-    WorkbookDescription, WorkbookId,
+    CellSnapshot, CellValue, CellValueKind, CellValuePrimitive, DefineNameResponse,
+    DeleteNameResponse, FindValueMatch, FindValueResponse, GridCell, GridColumnHint, GridPayload,
+    GridRow, NamedRangesResponse, RangeValuesEntry, ReadTableResponse, RowSnapshot,
+    SheetOverviewResponse, SheetPageCompact, SheetPageFormat, SheetPageResponse, SheetPageValues,
+    StylePatch, TableOutputFormat, TableRow, UpdateNameResponse, Warning, WorkbookDescription,
+    WorkbookId,
 };
 use crate::styles::descriptor_from_style;
 use crate::workbook::{WorkbookContext, cell_to_value};
@@ -64,6 +65,263 @@ impl WorkbookSession {
         Ok(NamedRangesResponse {
             workbook_id: workbook.id.clone(),
             items,
+        })
+    }
+
+    /// Define a new named range.
+    pub fn define_name(
+        &mut self,
+        name: &str,
+        refers_to: &str,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> Result<DefineNameResponse> {
+        use crate::model::{DefineNameResponse, NamedRangeScope};
+
+        let scope_kind = match scope {
+            Some("sheet") => NamedRangeScope::Sheet,
+            Some("workbook") | None => NamedRangeScope::Workbook,
+            Some(other) => {
+                return Err(anyhow!(
+                    "invalid scope '{}': expected 'workbook' or 'sheet'",
+                    other
+                ));
+            }
+        };
+        if scope_kind == NamedRangeScope::Sheet && scope_sheet_name.is_none() {
+            return Err(anyhow!(
+                "scope_sheet_name is required when scope is 'sheet'"
+            ));
+        }
+        if name.trim().is_empty() {
+            return Err(anyhow!("name must not be empty"));
+        }
+        if refers_to.trim().is_empty() {
+            return Err(anyhow!("refers_to must not be empty"));
+        }
+
+        let book = &mut self.spreadsheet;
+
+        match scope_kind {
+            NamedRangeScope::Sheet => {
+                let sn = scope_sheet_name.unwrap();
+                let sheet_index = resolve_sheet_index_on_spreadsheet(book, sn)?;
+                let sheet = book
+                    .get_sheet_by_name_mut(sn)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sn))?;
+                sheet
+                    .add_defined_name(name.to_string(), refers_to.to_string())
+                    .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+                let sheet = book
+                    .get_sheet_by_name_mut(sn)
+                    .ok_or_else(|| anyhow!("sheet disappeared"))?;
+                if let Some(last) = sheet.get_defined_names_mut().last_mut()
+                    && last.get_name() == name
+                {
+                    last.set_local_sheet_id(sheet_index);
+                }
+            }
+            NamedRangeScope::Workbook => {
+                let first_sheet: String = book
+                    .get_sheet_collection()
+                    .first()
+                    .map(|s| s.get_name().to_string())
+                    .ok_or_else(|| anyhow!("workbook has no sheets"))?;
+                let sheet = book
+                    .get_sheet_by_name_mut(&first_sheet)
+                    .ok_or_else(|| anyhow!("sheet not found"))?;
+                sheet
+                    .add_defined_name(name.to_string(), refers_to.to_string())
+                    .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+                let sheet = book
+                    .get_sheet_by_name_mut(&first_sheet)
+                    .ok_or_else(|| anyhow!("sheet disappeared"))?;
+                let entry = sheet.get_defined_names_mut().pop();
+                if let Some(entry) = entry {
+                    book.add_defined_names(entry);
+                }
+            }
+        }
+
+        Ok(DefineNameResponse {
+            workbook_id: WorkbookId("session".to_string()),
+            name: name.to_string(),
+            refers_to: refers_to.to_string(),
+            scope_kind,
+            scope_sheet_name: scope_sheet_name.map(|s| s.to_string()),
+        })
+    }
+
+    /// Update an existing named range.
+    pub fn update_name(
+        &mut self,
+        name: &str,
+        refers_to: Option<&str>,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> Result<UpdateNameResponse> {
+        use crate::model::{NamedRangeScope, UpdateNameResponse};
+
+        let scope_kind = match scope {
+            Some("sheet") => Some(NamedRangeScope::Sheet),
+            Some("workbook") => Some(NamedRangeScope::Workbook),
+            None => None,
+            Some(other) => {
+                return Err(anyhow!(
+                    "invalid scope '{}': expected 'workbook' or 'sheet'",
+                    other
+                ));
+            }
+        };
+        if name.trim().is_empty() {
+            return Err(anyhow!("name must not be empty"));
+        }
+
+        let book = &mut self.spreadsheet;
+        let mut found = false;
+        let mut previous_refers_to = String::new();
+        let mut effective_scope = NamedRangeScope::Workbook;
+        let mut effective_sheet: Option<String> = None;
+
+        // Workbook-level.
+        if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+            for defined in book.get_defined_names_mut().iter_mut() {
+                if defined.get_name() == name
+                    && (scope_kind == Some(NamedRangeScope::Workbook)
+                        || !defined.has_local_sheet_id())
+                {
+                    previous_refers_to = defined.get_address();
+                    if let Some(new_addr) = refers_to {
+                        defined.set_address(new_addr.to_string());
+                    }
+                    effective_scope = NamedRangeScope::Workbook;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // Sheet-level.
+        if !found && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+            let sheet_names: Vec<String> = book
+                .get_sheet_collection()
+                .iter()
+                .map(|s| s.get_name().to_string())
+                .collect();
+            for sn in &sheet_names {
+                if let Some(filter) = scope_sheet_name
+                    && !sn.eq_ignore_ascii_case(filter)
+                {
+                    continue;
+                }
+                if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                    for defined in sheet.get_defined_names_mut().iter_mut() {
+                        if defined.get_name() == name {
+                            previous_refers_to = defined.get_address();
+                            if let Some(new_addr) = refers_to {
+                                defined.set_address(new_addr.to_string());
+                            }
+                            effective_scope = NamedRangeScope::Sheet;
+                            effective_sheet = Some(sn.clone());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(anyhow!("named range '{}' not found", name));
+        }
+
+        let final_refers_to = refers_to
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| previous_refers_to.clone());
+
+        Ok(UpdateNameResponse {
+            workbook_id: WorkbookId("session".to_string()),
+            name: name.to_string(),
+            refers_to: final_refers_to,
+            scope_kind: effective_scope,
+            scope_sheet_name: effective_sheet.or_else(|| scope_sheet_name.map(|s| s.to_string())),
+            previous_refers_to: Some(previous_refers_to),
+        })
+    }
+
+    /// Delete a named range.
+    pub fn delete_name(
+        &mut self,
+        name: &str,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> Result<DeleteNameResponse> {
+        use crate::model::{DeleteNameResponse, NamedRangeScope};
+
+        let scope_kind = match scope {
+            Some("sheet") => Some(NamedRangeScope::Sheet),
+            Some("workbook") => Some(NamedRangeScope::Workbook),
+            None => None,
+            Some(other) => {
+                return Err(anyhow!(
+                    "invalid scope '{}': expected 'workbook' or 'sheet'",
+                    other
+                ));
+            }
+        };
+        if name.trim().is_empty() {
+            return Err(anyhow!("name must not be empty"));
+        }
+
+        let book = &mut self.spreadsheet;
+        let mut deleted = false;
+
+        // Workbook-level.
+        if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+            let names = book.get_defined_names_mut();
+            let before_len = names.len();
+            names.retain(|d| d.get_name() != name);
+            if names.len() < before_len {
+                deleted = true;
+            }
+        }
+
+        // Sheet-level.
+        if !deleted && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+            let sheet_names: Vec<String> = book
+                .get_sheet_collection()
+                .iter()
+                .map(|s| s.get_name().to_string())
+                .collect();
+            for sn in &sheet_names {
+                if let Some(filter) = scope_sheet_name
+                    && !sn.eq_ignore_ascii_case(filter)
+                {
+                    continue;
+                }
+                if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                    let names = sheet.get_defined_names_mut();
+                    let before_len = names.len();
+                    names.retain(|d| d.get_name() != name);
+                    if names.len() < before_len {
+                        deleted = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !deleted {
+            return Err(anyhow!("named range '{}' not found", name));
+        }
+
+        Ok(DeleteNameResponse {
+            workbook_id: WorkbookId("session".to_string()),
+            name: name.to_string(),
+            deleted: true,
         })
     }
 
@@ -934,6 +1192,18 @@ struct RangeBounds {
     min_row: u32,
     max_col: u32,
     max_row: u32,
+}
+
+fn resolve_sheet_index_on_spreadsheet(
+    book: &umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+) -> Result<u32> {
+    for (idx, sheet) in book.get_sheet_collection().iter().enumerate() {
+        if sheet.get_name() == sheet_name {
+            return Ok(idx as u32);
+        }
+    }
+    Err(anyhow!("sheet '{}' not found", sheet_name))
 }
 
 fn parse_cell_ref(cell: &str) -> Result<(u32, u32)> {
@@ -2002,6 +2272,125 @@ mod tests {
             rows[0][0],
             Some(CellValue::Text(ref value)) if value == "path-load"
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn define_name_workbook_scope_roundtrips() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+            sheet.get_cell_mut("A2").set_value_number(100.0);
+        });
+        let mut session = WorkbookSession::from_bytes(bytes)?;
+
+        let resp = session.define_name("TotalRev", "Sheet1!$A$2", None, None)?;
+        assert_eq!(resp.name, "TotalRev");
+        assert_eq!(resp.scope_kind, crate::model::NamedRangeScope::Workbook);
+        assert!(resp.scope_sheet_name.is_none());
+
+        // Roundtrip: verify the name is visible after re-read.
+        let export = session.to_bytes()?;
+        let session2 = WorkbookSession::from_bytes(export)?;
+        let named = session2.named_ranges()?;
+        assert!(
+            named.items.iter().any(|item| item.name == "TotalRev"),
+            "TotalRev should be visible after roundtrip"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn define_name_sheet_scope_roundtrips() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+        });
+        let mut session = WorkbookSession::from_bytes(bytes)?;
+
+        let resp =
+            session.define_name("LocalName", "Sheet1!$A$1", Some("sheet"), Some("Sheet1"))?;
+        assert_eq!(resp.name, "LocalName");
+        assert_eq!(resp.scope_kind, crate::model::NamedRangeScope::Sheet);
+        assert_eq!(resp.scope_sheet_name.as_deref(), Some("Sheet1"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_name_changes_refers_to() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+            sheet
+                .add_defined_name("MyName", "Sheet1!$A$1")
+                .expect("defined name");
+        });
+        let mut session = WorkbookSession::from_bytes(bytes)?;
+
+        let resp = session.update_name("MyName", Some("Sheet1!$A$1:$B$5"), None, None)?;
+        assert_eq!(resp.name, "MyName");
+        assert!(resp.previous_refers_to.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_name_removes_defined_name() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+            sheet
+                .add_defined_name("ToDelete", "Sheet1!$A$1")
+                .expect("defined name");
+        });
+        let mut session = WorkbookSession::from_bytes(bytes)?;
+
+        let named_before = session.named_ranges()?;
+        assert!(named_before.items.iter().any(|i| i.name == "ToDelete"));
+
+        let resp = session.delete_name("ToDelete", None, None)?;
+        assert!(resp.deleted);
+
+        let named_after = session.named_ranges()?;
+        assert!(!named_after.items.iter().any(|i| i.name == "ToDelete"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_name_not_found_returns_error() -> Result<()> {
+        let bytes = workbook_bytes(|_| {});
+        let mut session = WorkbookSession::from_bytes(bytes)?;
+
+        let result = session.delete_name("NonExistent", None, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn named_ranges_scope_metadata_populated() -> Result<()> {
+        let bytes = workbook_bytes(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").expect("sheet");
+            sheet.get_cell_mut("A1").set_value("Revenue");
+            sheet
+                .add_defined_name("SheetLocal", "Sheet1!$A$1")
+                .expect("defined name");
+        });
+        let session = WorkbookSession::from_bytes(bytes)?;
+        let named = session.named_ranges()?;
+
+        for item in &named.items {
+            assert!(
+                item.scope_kind.is_some(),
+                "scope_kind should be populated for item '{}'",
+                item.name
+            );
+        }
 
         Ok(())
     }

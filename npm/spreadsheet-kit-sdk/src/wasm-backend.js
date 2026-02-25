@@ -118,6 +118,42 @@ class WasmBackend {
     return normalizeNamedRangesResult(result, sessionId)
   }
 
+  async defineName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "defineName")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const name = requiredString(input.name, "name")
+    const refersTo = requiredString(input.refersTo || input.refers_to, "refersTo")
+    return this._call("defineName", sessionId, {
+      name,
+      refersTo: refersTo,
+      scope: input.scope,
+      scopeSheetName: input.scopeSheetName ?? input.scope_sheet_name
+    })
+  }
+
+  async updateName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "updateName")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const name = requiredString(input.name, "name")
+    return this._call("updateName", sessionId, {
+      name,
+      refersTo: input.refersTo ?? input.refers_to,
+      scope: input.scope,
+      scopeSheetName: input.scopeSheetName ?? input.scope_sheet_name
+    })
+  }
+
+  async deleteName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "deleteName")
+    const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")
+    const name = requiredString(input.name, "name")
+    return this._call("deleteName", sessionId, {
+      name,
+      scope: input.scope,
+      scopeSheetName: input.scopeSheetName ?? input.scope_sheet_name
+    })
+  }
+
   async sheetOverview(input = {}) {
     requireCapability(this, "supportsSheetOverview", "sheetOverview")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")

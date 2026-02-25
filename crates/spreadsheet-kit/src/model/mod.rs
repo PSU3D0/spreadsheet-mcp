@@ -445,10 +445,23 @@ pub enum TraceDirection {
     Dependents,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NamedRangeScope {
+    Workbook,
+    Sheet,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct NamedRangeDescriptor {
     pub name: String,
     pub scope: Option<String>,
+    /// Explicit scope kind: "workbook" or "sheet".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<NamedRangeScope>,
+    /// Sheet name when scope_kind is "sheet".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
     pub refers_to: String,
     pub kind: NamedItemKind,
     pub sheet_name: Option<String>,
@@ -468,6 +481,35 @@ pub enum NamedItemKind {
 pub struct NamedRangesResponse {
     pub workbook_id: WorkbookId,
     pub items: Vec<NamedRangeDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DefineNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub refers_to: String,
+    pub scope_kind: NamedRangeScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub refers_to: String,
+    pub scope_kind: NamedRangeScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_refers_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
