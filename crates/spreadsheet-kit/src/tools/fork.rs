@@ -2132,13 +2132,15 @@ pub(crate) fn apply_structure_ops_to_file(
                     &mut formula_parse_diagnostics_builder,
                 )?;
                 if *expand_adjacent_sums {
-                    let expansion_warnings =
+                    let (expansion_warnings, expanded_count) =
                         expand_adjacent_sum_formulas(&mut book, sheet_name, *at_row, *count)?;
                     warnings.extend(expansion_warnings);
-                    counts
-                        .entry("sums_expanded".to_string())
-                        .and_modify(|v| *v += 1)
-                        .or_insert(1);
+                    if expanded_count > 0 {
+                        counts
+                            .entry("sums_expanded".to_string())
+                            .and_modify(|v| *v += expanded_count)
+                            .or_insert(expanded_count);
+                    }
                 }
                 affected_sheets.insert(sheet_name.clone());
                 counts
@@ -2163,6 +2165,12 @@ pub(crate) fn apply_structure_ops_to_file(
                         .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
                     capture_row_template(sheet, *source_row)?
                 };
+                if template_cells.is_empty() {
+                    warnings.push(format!(
+                        "WARN_CLONE_TEMPLATE_EMPTY: {} row {} has no template cells to clone.",
+                        sheet_name, source_row
+                    ));
+                }
 
                 // Step 2: Insert blank rows.
                 {
@@ -2205,13 +2213,15 @@ pub(crate) fn apply_structure_ops_to_file(
 
                 // Step 4: Optionally expand adjacent SUMs.
                 if *expand_adjacent_sums {
-                    let expansion_warnings =
+                    let (expansion_warnings, expanded_count) =
                         expand_adjacent_sum_formulas(&mut book, sheet_name, *insert_at, *count)?;
                     warnings.extend(expansion_warnings);
-                    counts
-                        .entry("sums_expanded".to_string())
-                        .and_modify(|v| *v += 1)
-                        .or_insert(1);
+                    if expanded_count > 0 {
+                        counts
+                            .entry("sums_expanded".to_string())
+                            .and_modify(|v| *v += expanded_count)
+                            .or_insert(expanded_count);
+                    }
                 }
 
                 affected_sheets.insert(sheet_name.clone());
@@ -3829,8 +3839,9 @@ fn expand_adjacent_sum_formulas(
     sheet_name: &str,
     at_row: u32,
     count: u32,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, u64)> {
     let mut warnings: Vec<String> = Vec::new();
+    let mut expanded_count: u64 = 0;
     // The cell that was originally at `at_row` is now at `at_row + count`.
     let subtotal_row = at_row + count;
     let sum_re = simple_sum_range_regex();
@@ -3841,7 +3852,7 @@ fn expand_adjacent_sum_formulas(
 
     let max_col = sheet.get_highest_column();
     if max_col == 0 {
-        return Ok(warnings);
+        return Ok((warnings, expanded_count));
     }
 
     for col in 1..=max_col {
@@ -3909,9 +3920,10 @@ fn expand_adjacent_sum_formulas(
         let cell = sheet.get_cell_mut((col, subtotal_row));
         cell.set_formula(new_formula);
         cell.set_formula_result_default("");
+        expanded_count += 1;
     }
 
-    Ok(warnings)
+    Ok((warnings, expanded_count))
 }
 
 // ---------------------------------------------------------------------------

@@ -788,7 +788,7 @@ async fn insert_rows_expand_adjacent_sums_single_row() -> Result<()> {
     )
     .await?;
 
-    assert!(resp.summary.counts.get("sums_expanded").is_some());
+    assert!(resp.summary.counts.contains_key("sums_expanded"));
 
     // Subtotal is now at row 5 (shifted from 4). Formula should be SUM(A1:A4).
     let fork_wb = state
@@ -864,6 +864,91 @@ async fn insert_rows_expand_adjacent_sums_multi_row() -> Result<()> {
         sheet.get_cell("B7").unwrap().get_formula().to_string()
     })?;
     assert_eq!(formula.to_uppercase().replace(' ', ""), "SUM(B1:B6)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn insert_rows_expand_adjacent_sums_counts_all_expanded_formulas() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("expand_sum_count.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(1);
+        sheet.get_cell_mut("A2").set_value_number(2);
+        sheet.get_cell_mut("A3").set_value_number(3);
+        sheet.get_cell_mut("B1").set_value_number(10);
+        sheet.get_cell_mut("B2").set_value_number(20);
+        sheet.get_cell_mut("B3").set_value_number(30);
+        sheet.get_cell_mut("A4").set_formula("SUM(A1:A3)");
+        sheet.get_cell_mut("B4").set_formula("SUM(B1:B3)");
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let resp = structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 4,
+                    count: 2,
+                    expand_adjacent_sums: true,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    assert_eq!(resp.summary.counts.get("sums_expanded").copied(), Some(2));
+
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let (a6, b6) = fork_wb.with_sheet("Sheet1", |sheet| {
+        let a6 = sheet
+            .get_cell("A6")
+            .unwrap()
+            .get_formula()
+            .to_string()
+            .to_uppercase()
+            .replace(' ', "");
+        let b6 = sheet
+            .get_cell("B6")
+            .unwrap()
+            .get_formula()
+            .to_string()
+            .to_uppercase()
+            .replace(' ', "");
+        (a6, b6)
+    })?;
+    assert_eq!(a6, "SUM(A1:A5)");
+    assert_eq!(b6, "SUM(B1:B5)");
 
     Ok(())
 }
@@ -1062,7 +1147,7 @@ async fn clone_row_copies_template_and_expands_sums() -> Result<()> {
     )
     .await?;
 
-    assert!(resp.summary.counts.get("rows_cloned").is_some());
+    assert!(resp.summary.counts.contains_key("rows_cloned"));
     assert_eq!(*resp.summary.counts.get("rows_cloned").unwrap(), 2);
 
     let fork_wb = state
@@ -1105,6 +1190,75 @@ async fn clone_row_copies_template_and_expands_sums() -> Result<()> {
     // Subtotal moved to row 5 and its SUM should now span B2:B4.
     assert_eq!(a5, "Total");
     assert_eq!(b5_formula.to_uppercase().replace(' ', ""), "SUM(B2:B4)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clone_row_source_below_insert_point_shifts_formula_to_new_row() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("clone_row_source_below.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A5").set_value_number(7);
+        sheet.get_cell_mut("B5").set_formula("A5+1");
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::CloneRow {
+                    sheet_name: "Sheet1".to_string(),
+                    source_row: 5,
+                    insert_at: 2,
+                    count: 1,
+                    expand_adjacent_sums: false,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    let fork_wb = state
+        .open_workbook(&WorkbookId(fork.fork_id.clone()))
+        .await?;
+    let cloned_formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet
+            .get_cell("B2")
+            .unwrap()
+            .get_formula()
+            .to_string()
+            .to_uppercase()
+            .replace(' ', "")
+    })?;
+    assert_eq!(cloned_formula, "A2+1");
 
     Ok(())
 }
