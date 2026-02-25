@@ -273,6 +273,7 @@ fn build_shifted_spans(ops: &[StructureOp]) -> Result<Vec<ShiftedSpan>> {
                 sheet_name,
                 at_row,
                 count,
+                ..
             } => {
                 spans.push(ShiftedSpan {
                     op_index: idx,
@@ -612,6 +613,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 5,
             count: 3,
+            expand_adjacent_sums: false,
         }];
         let spans = build_shifted_spans(&ops).unwrap();
         assert_eq!(spans.len(), 1);
@@ -650,6 +652,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 2,
             count: 1,
+            expand_adjacent_sums: false,
         }];
 
         let (report, _) = compute_structure_impact(&wb_path(&tmp), &ops, false).unwrap();
@@ -671,6 +674,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 3,
             count: 2,
+            expand_adjacent_sums: false,
         }];
 
         let (report, _) = compute_structure_impact(&wb_path(&tmp), &ops, false).unwrap();
@@ -699,6 +703,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 3,
             count: 2,
+            expand_adjacent_sums: false,
         }];
 
         let (_report, delta) = compute_structure_impact(&wb_path(&tmp), &ops, true).unwrap();
@@ -725,11 +730,13 @@ mod tests {
                 sheet_name: "Sheet1".to_string(),
                 at_row: 2,
                 count: 1,
+                expand_adjacent_sums: false,
             },
             StructureOp::InsertRows {
                 sheet_name: "Sheet1".to_string(),
                 at_row: 4,
                 count: 1,
+                expand_adjacent_sums: false,
             },
         ];
 
@@ -763,6 +770,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 1,
             count: 5,
+            expand_adjacent_sums: false,
         }];
 
         let _ = compute_structure_impact(&wb_path(&tmp), &ops, true).unwrap();
@@ -787,6 +795,7 @@ mod tests {
             sheet_name: "Sheet1".to_string(),
             at_row: 50,
             count: 1,
+            expand_adjacent_sums: false,
         }];
 
         let (report, _) = compute_structure_impact(&wb_path(&tmp), &ops, false).unwrap();

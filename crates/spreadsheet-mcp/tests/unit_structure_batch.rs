@@ -69,6 +69,8 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -151,6 +153,8 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -222,6 +226,8 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -300,6 +306,8 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -355,6 +363,8 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
             mode: Some(BatchMode::Preview),
             label: Some("insert col".to_string()),
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -442,6 +452,8 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
             mode: Some(BatchMode::Preview),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -505,6 +517,8 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -562,6 +576,8 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -616,6 +632,8 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
             mode: Some(BatchMode::Apply),
             label: None,
 
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -783,6 +801,8 @@ async fn insert_rows_expand_adjacent_sums_single_row() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -851,6 +871,8 @@ async fn insert_rows_expand_adjacent_sums_multi_row() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -920,6 +942,8 @@ async fn insert_rows_expand_adjacent_sums_counts_all_expanded_formulas() -> Resu
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -1001,6 +1025,8 @@ async fn insert_rows_no_expansion_when_flag_absent() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -1070,6 +1096,8 @@ async fn insert_rows_ambiguous_formula_produces_warning() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -1142,6 +1170,8 @@ async fn clone_row_copies_template_and_expands_sums() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -1241,6 +1271,8 @@ async fn clone_row_source_below_insert_point_shifts_formula_to_new_row() -> Resu
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
@@ -1310,6 +1342,8 @@ async fn clone_row_without_expansion_keeps_original_sum() -> Result<()> {
             ],
             mode: Some(BatchMode::Apply),
             label: None,
+            impact_report: None,
+            show_formula_delta: None,
             formula_parse_policy: None,
         },
     )
