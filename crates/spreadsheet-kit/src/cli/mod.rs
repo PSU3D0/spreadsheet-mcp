@@ -1233,6 +1233,76 @@ Note:
         #[command(subcommand)]
         command: SheetportCommands,
     },
+    #[command(
+        about = "Find and replace text in formula bodies (not values)",
+        after_long_help = r#"Examples:
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find '$64' --replace '$65' --dry-run
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find 'SUM' --replace 'SUMIFS' --in-place
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find 'Sheet1!' --replace 'Sheet2!' --range A1:Z100 --output fixed.xlsx
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find '(?i)old_name' --replace 'new_name' --regex --in-place
+
+Mode selection:
+  Choose exactly one of --dry-run, --in-place, or --output <PATH>.
+
+Behavior:
+  Only formula-bearing cells are considered. Literal values are never touched.
+  When --range is omitted, the used range of the sheet is scanned.
+  Output includes a count of changed formulas and sample diffs (address, before, after).
+
+Regex mode:
+  Use --regex for regular expression patterns. Capture groups are supported in --replace (e.g. $1).
+
+Formula parse policy:
+  After replacement, each new formula is validated. Policy controls behavior on malformed results:
+    fail (default) => reject and error
+    warn => report diagnostics but continue
+    off => skip validation"#
+    )]
+    ReplaceInFormulas {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            value_name = "SHEET",
+            help = "Sheet name containing formulas to update"
+        )]
+        sheet: String,
+        #[arg(long, help = "Text or pattern to find in formula bodies")]
+        find: String,
+        #[arg(long, help = "Replacement text")]
+        replace: String,
+        #[arg(
+            long,
+            value_name = "RANGE",
+            help = "Optional A1 range to scope replacement (default: used range)"
+        )]
+        range: Option<String>,
+        #[arg(long, help = "Interpret --find as a regular expression")]
+        regex: bool,
+        #[arg(long, help = "Case-sensitive matching (default: true)")]
+        case_sensitive: Option<bool>,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply replacement by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply replacement to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: fail (default), warn, or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
+    },
     #[command(about = "Recalculate workbook formulas")]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
@@ -1781,6 +1851,36 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                     .await
             }
         },
+        Commands::ReplaceInFormulas {
+            file,
+            sheet,
+            find,
+            replace,
+            range,
+            regex,
+            case_sensitive,
+            dry_run,
+            in_place,
+            output,
+            force,
+            formula_parse_policy,
+        } => {
+            commands::write::replace_in_formulas(
+                file,
+                sheet,
+                find,
+                replace,
+                range,
+                regex,
+                case_sensitive.unwrap_or(true),
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        }
         Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
         Commands::RunManifest {

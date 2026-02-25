@@ -6,6 +6,7 @@ const {
   normalizeGridExportResult,
   normalizeTransformBatchResult,
   normalizeStructureBatchResult,
+  normalizeReplaceInFormulasResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,
@@ -330,6 +331,31 @@ class McpBackend {
     })
 
     return normalizeStructureBatchResult(result)
+  }
+
+  async replaceInFormulas(input = {}) {
+    requireCapability(this, "supportsReplaceInFormulas", "replaceInFormulas")
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
+    )
+    const sheetName = requiredString(input.sheetName || input.sheet_name, "sheetName")
+    const find = requiredString(input.find, "find")
+
+    const result = await this._call("replace_in_formulas", {
+      fork_id: forkId,
+      sheet_name: sheetName,
+      find,
+      replace: input.replace ?? "",
+      range: input.range,
+      regex: input.regex ?? false,
+      case_sensitive: input.caseSensitive ?? input.case_sensitive ?? true,
+      mode: input.options?.dryRun ? "preview" : (input.mode ?? "apply"),
+      label: input.label,
+      formula_parse_policy: input.formulaParsePolicy ?? input.formula_parse_policy
+    })
+
+    return normalizeReplaceInFormulasResult(result)
   }
 
   async createFork(input = {}) {

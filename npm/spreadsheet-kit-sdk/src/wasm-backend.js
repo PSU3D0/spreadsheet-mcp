@@ -268,6 +268,15 @@ class WasmBackend {
     return normalizeTransformBatchResult(result)
   }
 
+  async replaceInFormulas() {
+    requireCapability(this, "supportsReplaceInFormulas", "replaceInFormulas")
+    throw new SpreadsheetSdkError("replaceInFormulas is not implemented for WASM backend (fork-only)", {
+      code: "UNSUPPORTED",
+      backend: this.kind,
+      operation: "replaceInFormulas"
+    })
+  }
+
   async exportWorkbook(input = {}) {
     requireCapability(this, "supportsExportWorkbook", "exportWorkbook")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")

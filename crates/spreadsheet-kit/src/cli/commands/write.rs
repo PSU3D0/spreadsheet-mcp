@@ -695,6 +695,209 @@ pub async fn transform_batch(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub async fn replace_in_formulas(
+    file: PathBuf,
+    sheet: String,
+    find: String,
+    replace: String,
+    range: Option<String>,
+    regex: bool,
+    case_sensitive: bool,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+    formula_parse_policy: Option<FormulaParsePolicy>,
+) -> Result<Value> {
+    use crate::tools::fork::{ReplaceInFormulasOp, apply_replace_in_formulas_to_file};
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: sheet.clone(),
+        find,
+        replace,
+        range,
+        regex,
+        case_sensitive,
+    };
+
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::Fail);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".replace-in-formulas-", |path| {
+                    apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error)
+                })?;
+
+            // Validate replaced formulas against parse policy.
+            let formula_parse_diagnostics =
+                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let would_change = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasDryRunResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                would_change,
+                recalc_needed: would_change,
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics,
+            })?)
+        }
+        BatchMutationMode::InPlace => {
+            let result = apply_in_place_with_temp(&source, ".replace-in-formulas-", |path| {
+                apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error)
+            })?;
+
+            let formula_parse_diagnostics =
+                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let changed = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                changed,
+                recalc_needed: changed,
+                source_path: source.display().to_string(),
+                target_path: source.display().to_string(),
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics,
+            })?)
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let result = apply_to_output_with_temp(
+                &source,
+                &target,
+                force,
+                ".replace-in-formulas-",
+                |path| apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error),
+            )?;
+
+            let formula_parse_diagnostics =
+                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let changed = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                changed,
+                recalc_needed: changed,
+                source_path: source.display().to_string(),
+                target_path: target.display().to_string(),
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics,
+            })?)
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasSampleRow {
+    address: String,
+    before: String,
+    after: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasDryRunResponse {
+    formulas_checked: u64,
+    formulas_changed: u64,
+    would_change: bool,
+    recalc_needed: bool,
+    samples: Vec<ReplaceInFormulasSampleRow>,
+    warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasApplyResponse {
+    formulas_checked: u64,
+    formulas_changed: u64,
+    changed: bool,
+    recalc_needed: bool,
+    source_path: String,
+    target_path: String,
+    samples: Vec<ReplaceInFormulasSampleRow>,
+    warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+fn validate_replaced_formula_samples(
+    samples: &[crate::tools::fork::FormulaReplaceSample],
+    sheet_name: &str,
+    policy: FormulaParsePolicy,
+) -> Result<Option<FormulaParseDiagnostics>> {
+    use crate::model::{FORMULA_PARSE_FAILED_PREFIX, validate_formula};
+
+    if policy == FormulaParsePolicy::Off || samples.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+
+    for sample in samples {
+        if let Err(err_msg) = validate_formula(&sample.after) {
+            if policy == FormulaParsePolicy::Fail {
+                bail!(
+                    "{}replaced formula at {} failed parse: {}",
+                    FORMULA_PARSE_FAILED_PREFIX,
+                    sample.address,
+                    err_msg
+                );
+            }
+            builder.record_error(sheet_name, &sample.address, &sample.after, &err_msg);
+        }
+    }
+
+    if builder.has_errors() {
+        Ok(Some(builder.build()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn range_import(
     file: PathBuf,
     sheet: String,

@@ -4292,6 +4292,361 @@ pub(crate) fn apply_transform_ops_to_file(
     })
 }
 
+// ── replace_in_formulas core ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReplaceInFormulasOp {
+    pub sheet_name: String,
+    pub find: String,
+    pub replace: String,
+    /// Optional A1 range to scope the replacement; defaults to the used range.
+    #[serde(default)]
+    pub range: Option<String>,
+    /// Enable regex mode (default: false).
+    #[serde(default)]
+    pub regex: bool,
+    /// Case-sensitive matching (default: true).
+    #[serde(default = "default_replace_case_sensitive")]
+    pub case_sensitive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct FormulaReplaceSample {
+    pub address: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Debug)]
+pub struct ReplaceInFormulasApplyResult {
+    pub formulas_checked: u64,
+    pub formulas_changed: u64,
+    pub samples: Vec<FormulaReplaceSample>,
+    pub warnings: Vec<String>,
+}
+
+const REPLACE_SAMPLE_LIMIT: usize = 20;
+
+pub fn apply_replace_in_formulas_to_file(
+    path: &Path,
+    op: &ReplaceInFormulasOp,
+) -> Result<ReplaceInFormulasApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let sheet = book
+        .get_sheet_by_name_mut(&op.sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
+
+    // Determine bounds (optional range or used range).
+    let (min_col, min_row, max_col, max_row) = if let Some(range) = &op.range {
+        let bounds = parse_range_bounds(range)?;
+        (
+            bounds.min_col,
+            bounds.min_row,
+            bounds.max_col,
+            bounds.max_row,
+        )
+    } else {
+        let (hc, hr) = sheet.get_highest_column_and_row();
+        (1, 1, hc.max(1), hr.max(1))
+    };
+
+    // Build matcher.
+    let compiled_regex: Option<Regex> = if op.regex {
+        let pattern = if op.case_sensitive {
+            op.find.clone()
+        } else {
+            format!("(?i){}", op.find)
+        };
+        Some(Regex::new(&pattern).map_err(|e| anyhow!("invalid regex pattern: {}", e))?)
+    } else {
+        None
+    };
+
+    let replace_formula = |formula: &str| -> Option<String> {
+        if let Some(re) = &compiled_regex {
+            let result = re.replace_all(formula, op.replace.as_str());
+            if result != formula {
+                Some(result.into_owned())
+            } else {
+                None
+            }
+        } else if op.case_sensitive {
+            if formula.contains(&op.find) {
+                Some(formula.replace(&op.find, &op.replace))
+            } else {
+                None
+            }
+        } else {
+            // Case-insensitive plain text replacement.
+            let find_lower = op.find.to_ascii_lowercase();
+            let formula_lower = formula.to_ascii_lowercase();
+            if !formula_lower.contains(&find_lower) {
+                return None;
+            }
+            // Rebuild with original casing for non-matched parts.
+            let mut result = String::with_capacity(formula.len());
+            let mut cursor = 0usize;
+            while let Some(pos) = formula_lower[cursor..].find(&find_lower) {
+                result.push_str(&formula[cursor..cursor + pos]);
+                result.push_str(&op.replace);
+                cursor += pos + op.find.len();
+            }
+            result.push_str(&formula[cursor..]);
+            Some(result)
+        }
+    };
+
+    let mut formulas_checked: u64 = 0;
+    let mut formulas_changed: u64 = 0;
+    let mut samples: Vec<FormulaReplaceSample> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for row in min_row..=max_row {
+        for col in min_col..=max_col {
+            let exists = sheet.get_cell((col, row)).is_some();
+            if !exists {
+                continue;
+            }
+            let cell = sheet.get_cell_mut((col, row));
+            if !cell.is_formula() {
+                continue;
+            }
+            let formula = cell.get_formula().to_string();
+            if formula.is_empty() {
+                continue;
+            }
+            formulas_checked += 1;
+
+            if let Some(next) = replace_formula(&formula) {
+                if samples.len() < REPLACE_SAMPLE_LIMIT {
+                    samples.push(FormulaReplaceSample {
+                        address: crate::utils::cell_address(col, row),
+                        before: formula.clone(),
+                        after: next.clone(),
+                    });
+                }
+                cell.set_formula(next);
+                cell.set_formula_result_default("");
+                formulas_changed += 1;
+            }
+        }
+    }
+
+    if formulas_changed == 0 {
+        warnings.push("WARN_NO_MATCH: no formula text matched the find pattern".to_string());
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    Ok(ReplaceInFormulasApplyResult {
+        formulas_checked,
+        formulas_changed,
+        samples,
+        warnings,
+    })
+}
+
+// ── replace_in_formulas MCP fork tool ─────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReplaceInFormulasParams {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub find: String,
+    pub replace: String,
+    /// Optional A1 range; defaults to the used range.
+    #[serde(default)]
+    pub range: Option<String>,
+    /// Enable regex mode (default: false).
+    #[serde(default)]
+    pub regex: bool,
+    /// Case-sensitive matching (default: true).
+    #[serde(default = "default_replace_case_sensitive")]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub mode: Option<BatchMode>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Formula parse policy: fail, warn (default), or off.
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ReplaceInFormulasResponse {
+    pub fork_id: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
+    pub formulas_checked: u64,
+    pub formulas_changed: u64,
+    pub recalc_needed: bool,
+    pub samples: Vec<FormulaReplaceSample>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReplaceInFormulasStagedPayload {
+    op: ReplaceInFormulasOp,
+}
+
+pub async fn replace_in_formulas(
+    state: Arc<AppState>,
+    params: ReplaceInFormulasParams,
+) -> Result<ReplaceInFormulasResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: params.sheet_name.clone(),
+        find: params.find.clone(),
+        replace: params.replace.clone(),
+        range: params.range.clone(),
+        regex: params.regex,
+        case_sensitive: params.case_sensitive,
+    };
+
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
+
+    let mode = params.mode.unwrap_or_default();
+
+    if mode.is_preview() {
+        let change_id = make_short_random_id("chg", 12);
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        std::fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        std::fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let op_clone = op.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            apply_replace_in_formulas_to_file(&snapshot_for_apply, &op_clone)
+        })
+        .await??;
+
+        let formula_parse_diagnostics =
+            validate_replacement_formulas(&snapshot_path, &op.sheet_name, &result.samples, policy)?;
+
+        let staged_op = StagedOp {
+            kind: "replace_in_formulas".to_string(),
+            payload: serde_json::to_value(ReplaceInFormulasStagedPayload { op: op.clone() })?,
+        };
+
+        let summary = ChangeSummary {
+            op_kinds: vec!["replace_in_formulas".to_string()],
+            affected_sheets: vec![op.sheet_name.clone()],
+            affected_bounds: op.range.clone().into_iter().collect(),
+            counts: {
+                let mut c = BTreeMap::new();
+                c.insert("formulas_checked".to_string(), result.formulas_checked);
+                c.insert("formulas_changed".to_string(), result.formulas_changed);
+                c
+            },
+            warnings: result.warnings.clone(),
+            ..Default::default()
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary,
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(ReplaceInFormulasResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: Some(change_id),
+            formulas_checked: result.formulas_checked,
+            formulas_changed: result.formulas_changed,
+            recalc_needed: fork_ctx.recalc_needed || result.formulas_changed > 0,
+            samples: result.samples,
+            warnings: result.warnings,
+            formula_parse_diagnostics,
+        })
+    } else {
+        let op_clone = op.clone();
+        let work_path_for_apply = work_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            apply_replace_in_formulas_to_file(&work_path_for_apply, &op_clone)
+        })
+        .await??;
+
+        let formula_parse_diagnostics =
+            validate_replacement_formulas(&work_path, &op.sheet_name, &result.samples, policy)?;
+
+        if result.formulas_changed > 0 {
+            registry.with_fork_mut(&params.fork_id, |ctx| {
+                ctx.recalc_needed = true;
+                Ok(())
+            })?;
+            let fork_workbook_id = WorkbookId(params.fork_id.clone());
+            let _ = state.close_workbook(&fork_workbook_id);
+        }
+
+        Ok(ReplaceInFormulasResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: None,
+            formulas_checked: result.formulas_checked,
+            formulas_changed: result.formulas_changed,
+            recalc_needed: result.formulas_changed > 0,
+            samples: result.samples,
+            warnings: result.warnings,
+            formula_parse_diagnostics,
+        })
+    }
+}
+
+/// Validate replaced formula text against the formula parse policy.
+fn validate_replacement_formulas(
+    _path: &Path,
+    _sheet_name: &str,
+    samples: &[FormulaReplaceSample],
+    policy: FormulaParsePolicy,
+) -> Result<Option<FormulaParseDiagnostics>> {
+    if policy == FormulaParsePolicy::Off || samples.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+
+    for sample in samples {
+        if let Err(err_msg) = validate_formula(&sample.after) {
+            if policy == FormulaParsePolicy::Fail {
+                bail!(
+                    "{}replaced formula at {} failed parse: {}",
+                    FORMULA_PARSE_FAILED_PREFIX,
+                    sample.address,
+                    err_msg
+                );
+            }
+            builder.record_error(_sheet_name, &sample.address, &sample.after, &err_msg);
+        }
+    }
+
+    if builder.has_errors() {
+        Ok(Some(builder.build()))
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
     use crate::styles::{
         StylePatchMode, apply_style_patch, descriptor_from_style, stable_style_id,

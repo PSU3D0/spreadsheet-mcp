@@ -346,6 +346,67 @@ test("mcp transformBatch normalizes context id to fork_id", async () => {
   assert.equal(result.opsApplied, 1)
 })
 
+test("mcp replaceInFormulas sends correct params and normalizes response", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "replace_in_formulas")
+        assert.equal(params.fork_id, "fork-abc")
+        assert.equal(params.sheet_name, "Sheet1")
+        assert.equal(params.find, "C2:C10")
+        assert.equal(params.replace, "D2:D20")
+        assert.equal(params.regex, false)
+        assert.equal(params.case_sensitive, true)
+        assert.equal(params.mode, "preview")
+        return {
+          fork_id: "fork-abc",
+          mode: "preview",
+          change_id: "chg-123",
+          formulas_checked: 5,
+          formulas_changed: 2,
+          recalc_needed: true,
+          samples: [
+            { address: "B2", before: "SUM(C2:C10)", after: "SUM(D2:D20)" }
+          ],
+          warnings: []
+        }
+      }
+    }
+  })
+
+  const result = await mcp.replaceInFormulas({
+    forkId: "fork-abc",
+    sheetName: "Sheet1",
+    find: "C2:C10",
+    replace: "D2:D20",
+    options: { dryRun: true }
+  })
+
+  assert.equal(result.forkId, "fork-abc")
+  assert.equal(result.mode, "preview")
+  assert.equal(result.changeId, "chg-123")
+  assert.equal(result.formulasChecked, 5)
+  assert.equal(result.formulasChanged, 2)
+  assert.equal(result.recalcNeeded, true)
+  assert.equal(result.samples.length, 1)
+  assert.equal(result.samples[0].address, "B2")
+})
+
+test("wasm replaceInFormulas throws unsupported error", async () => {
+  const wasm = new WasmBackend({ bindings: {} })
+
+  await assert.rejects(
+    () => wasm.replaceInFormulas({ sessionId: "session-1", sheetName: "Sheet1", find: "A", replace: "B" }),
+    (error) => {
+      assert.ok(error instanceof CapabilityError)
+      assert.equal(error.code, "UNSUPPORTED_CAPABILITY")
+      assert.equal(error.backend, "wasm")
+      assert.equal(error.capability, "supportsReplaceInFormulas")
+      return true
+    }
+  )
+})
+
 test("backend-specific no-op methods throw explicit unsupported errors", async () => {
   const mcp = new McpBackend({
     transport: {

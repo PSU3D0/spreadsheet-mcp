@@ -108,7 +108,7 @@ Fork-based editing allows 'what-if' analysis without modifying original files.
 WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
 2) Optional: checkpoint_fork before large edits.
-3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch: Apply edits to the fork.
+3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch/replace_in_formulas: Apply edits to the fork.
 4) recalculate: Trigger the configured recalc backend to recompute all formulas.
 5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
@@ -994,6 +994,29 @@ Scope filter: 'workbook' or 'sheet' to disambiguate."
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("rules_batch", e))
+    }
+
+    #[tool(
+        name = "replace_in_formulas",
+        description = "Find and replace text in formula bodies only (not cell values). \
+Supports plain text and regex modes with optional case sensitivity. \
+Scope to a range or default to the used range. \
+Mode: preview or apply (default apply). \
+Returns count of changed formulas and sample diffs."
+    )]
+    pub async fn replace_in_formulas(
+        &self,
+        Parameters(params): Parameters<tools::fork::ReplaceInFormulasParams>,
+    ) -> Result<Json<tools::fork::ReplaceInFormulasResponse>, McpError> {
+        self.ensure_recalc_enabled("replace_in_formulas")
+            .map_err(|e| to_mcp_error_for_tool("replace_in_formulas", e))?;
+        self.run_tool_with_timeout(
+            "replace_in_formulas",
+            tools::fork::replace_in_formulas(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("replace_in_formulas", e))
     }
 
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]
