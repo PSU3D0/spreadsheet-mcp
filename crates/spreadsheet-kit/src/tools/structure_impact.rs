@@ -67,7 +67,7 @@ pub struct FormulaDeltaItem {
     pub before: String,
     /// Predicted formula text after the structure edit.
     pub after: String,
-    /// Classification: `"shifted"`, `"deleted_ref"`, `"unchanged"`, `"no_expansion"`.
+    /// Classification: `"shifted"`, `"deleted_ref"`, or `"unchanged"`.
     pub classification: String,
     /// Optional warning code.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,22 +140,27 @@ pub fn compute_structure_impact(
                     (sheet_name.clone(), value.clone())
                 };
 
-                for span in &shifted_spans {
-                    if span.sheet_name != ref_sheet {
-                        continue;
-                    }
+                let relevant_spans: Vec<&ShiftedSpan> = shifted_spans
+                    .iter()
+                    .filter(|span| span.sheet_name == ref_sheet)
+                    .collect();
+                if relevant_spans.is_empty() {
+                    continue;
+                }
 
-                    // Check whether this token falls in the affected zone.
-                    let affects = ref_touches_zone(
+                // Count each token at most once as affected/unaffected, even when multiple
+                // structure spans target the same sheet in a single batch.
+                let mut token_affected = false;
+                for span in &relevant_spans {
+                    if ref_touches_zone(
                         &coord_part,
                         &span.axis,
                         span.at,
                         span.count,
                         &span.direction,
-                    );
-                    if affects {
+                    ) {
+                        token_affected = true;
                         cell_affected = true;
-                        tokens_affected += 1;
 
                         // Check for absolute refs at risk.
                         if has_absolute_component(&coord_part, &span.axis) {
@@ -175,17 +180,20 @@ pub fn compute_structure_impact(
                                 ),
                             });
                         }
-
-                        // Check single-cell range non-expansion.
-                        if is_single_cell_range(&coord_part) {
-                            notes.push(format!(
-                                "Single-cell range '{}' in {} will not expand on insert (like SUM(K54:K54))",
-                                value, full_cell
-                            ));
-                        }
-                    } else {
-                        tokens_unaffected += 1;
                     }
+                }
+
+                if token_affected {
+                    tokens_affected += 1;
+                    // Check single-cell range non-expansion.
+                    if is_single_cell_range(&coord_part) {
+                        notes.push(format!(
+                            "Single-cell range '{}' in {} will not expand on insert (like SUM(K54:K54))",
+                            value, full_cell
+                        ));
+                    }
+                } else {
+                    tokens_unaffected += 1;
                 }
             }
 
@@ -464,7 +472,8 @@ fn simulate_formula_after(
 
         let mut value = token.value.clone();
         if token.subtype == formualizer_parse::TokenSubType::Range {
-            let (ref_sheet, coord_part, prefix) = if let Some((sp, cp)) = value.split_once('!') {
+            let (ref_sheet, mut coord_part, prefix) = if let Some((sp, cp)) = value.split_once('!')
+            {
                 (extract_sheet_name(sp), cp.to_string(), format!("{}!", sp))
             } else {
                 (cell_sheet.to_string(), value.clone(), String::new())
@@ -474,11 +483,9 @@ fn simulate_formula_after(
                 if span.sheet_name != ref_sheet {
                     continue;
                 }
-                let adjusted = simulate_adjust_coord(&coord_part, span);
-                let new_val = format!("{}{}", prefix, adjusted);
-                value = new_val;
-                break; // apply first matching span
+                coord_part = simulate_adjust_coord(&coord_part, span);
             }
+            value = format!("{}{}", prefix, coord_part);
         }
 
         out.push_str(&value);
@@ -704,6 +711,42 @@ mod tests {
         assert_eq!(item.before, "A5*2");
         assert_eq!(item.after, "A7*2"); // row 5 shifted by +2
         assert_eq!(item.classification, "shifted");
+    }
+
+    #[test]
+    fn token_counts_do_not_double_count_across_multiple_spans() {
+        let tmp = create_test_workbook(|book| {
+            let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+            sheet.get_cell_mut("B1").set_formula("A5*2".to_string());
+        });
+
+        let ops = vec![
+            StructureOp::InsertRows {
+                sheet_name: "Sheet1".to_string(),
+                at_row: 2,
+                count: 1,
+            },
+            StructureOp::InsertRows {
+                sheet_name: "Sheet1".to_string(),
+                at_row: 4,
+                count: 1,
+            },
+        ];
+
+        let (report, delta) = compute_structure_impact(&wb_path(&tmp), &ops, true).unwrap();
+        assert_eq!(
+            report.tokens_affected, 1,
+            "single range token should count once"
+        );
+        assert_eq!(report.tokens_unaffected, 0);
+
+        let delta = delta.expect("delta should be present");
+        let item = delta
+            .iter()
+            .find(|d| d.cell == "Sheet1!B1")
+            .expect("B1 delta");
+        assert_eq!(item.before, "A5*2");
+        assert_eq!(item.after, "A7*2"); // sequential +1 at row>=2 then +1 at row>=4
     }
 
     #[test]
