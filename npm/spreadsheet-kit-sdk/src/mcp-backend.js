@@ -267,7 +267,7 @@ class McpBackend {
   }
 
   async structureBatch(input = {}) {
-    requireCapability(this, "supportsTransformBatch", "structureBatch")
+    requireCapability(this, "supportsStructureBatch", "structureBatch")
     const forkId = requiredString(
       input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
       "forkId"

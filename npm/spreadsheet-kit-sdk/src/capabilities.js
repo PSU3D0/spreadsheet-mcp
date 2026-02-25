@@ -10,6 +10,7 @@
  * @property {boolean} supportsSheetPage
  * @property {boolean} supportsGridExport
  * @property {boolean} supportsTransformBatch
+ * @property {boolean} supportsStructureBatch
  * @property {boolean} supportsForkLifecycle
  * @property {boolean} supportsStaging
  * @property {boolean} supportsSessionLifecycle
@@ -28,6 +29,7 @@ const MCP_CAPABILITIES = Object.freeze({
   supportsSheetPage: true,
   supportsGridExport: true,
   supportsTransformBatch: true,
+  supportsStructureBatch: true,
   supportsForkLifecycle: true,
   supportsStaging: true,
   supportsSessionLifecycle: false,
@@ -46,6 +48,7 @@ const WASM_CAPABILITIES = Object.freeze({
   supportsSheetPage: true,
   supportsGridExport: true,
   supportsTransformBatch: true,
+  supportsStructureBatch: false,
   supportsForkLifecycle: false,
   supportsStaging: false,
   supportsSessionLifecycle: true,
