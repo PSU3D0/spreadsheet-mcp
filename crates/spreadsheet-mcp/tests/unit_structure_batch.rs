@@ -69,6 +69,8 @@ async fn structure_batch_insert_rows_moves_cells() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -151,6 +153,8 @@ async fn structure_batch_copy_range_shifts_formulas_and_copies_style() -> Result
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -222,6 +226,8 @@ async fn structure_batch_move_range_moves_and_clears_source() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -300,6 +306,8 @@ async fn structure_batch_copy_range_rejects_overlap() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await
@@ -355,6 +363,8 @@ async fn structure_batch_preview_stages_and_apply() -> Result<()> {
             label: Some("insert col".to_string()),
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -442,6 +452,8 @@ async fn structure_batch_preview_includes_change_count() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -505,6 +517,8 @@ async fn structure_batch_rename_sheet_handles_quoted_sheet_names() -> Result<()>
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -562,6 +576,8 @@ async fn structure_batch_create_sheet_inserts_at_position() -> Result<()> {
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await?;
@@ -616,6 +632,8 @@ async fn structure_batch_delete_sheet_guard_prevents_last_sheet() -> Result<()> 
             label: None,
 
             formula_parse_policy: None,
+            impact_report: None,
+            show_formula_delta: None,
         },
     )
     .await
@@ -725,4 +743,229 @@ async fn structure_batch_surfaces_alias_warnings_in_summary() -> Result<()> {
     );
 
     Ok(())
+}
+
+// ─── 4101: MCP-level impact report + formula delta preview tests ───
+
+#[tokio::test(flavor = "current_thread")]
+async fn structure_batch_preview_with_impact_report() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("impact_report.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(1);
+        sheet.get_cell_mut("A2").set_value_number(2);
+        sheet.get_cell_mut("B1").set_formula("A2*10".to_string());
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let resp = structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 2,
+                    count: 1,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Preview),
+            label: None,
+            formula_parse_policy: None,
+            impact_report: Some(true),
+            show_formula_delta: None,
+        },
+    )
+    .await?;
+
+    // Response should include impact_report.
+    let ir = resp.impact_report.expect("impact_report should be present");
+    assert!(!ir.shifted_spans.is_empty(), "should have shifted spans");
+    assert_eq!(ir.shifted_spans[0].axis, "row");
+    assert_eq!(ir.shifted_spans[0].at, 2);
+    assert_eq!(ir.shifted_spans[0].count, 1);
+
+    // formula_delta_preview should NOT be present (not requested).
+    assert!(resp.formula_delta_preview.is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn structure_batch_preview_with_formula_delta() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("formula_delta.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(1);
+        sheet.get_cell_mut("A5").set_value_number(5);
+        sheet.get_cell_mut("B1").set_formula("A5+1".to_string());
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let resp = structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 3,
+                    count: 2,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Preview),
+            label: None,
+            formula_parse_policy: None,
+            impact_report: Some(true),
+            show_formula_delta: Some(true),
+        },
+    )
+    .await?;
+
+    // Impact report present.
+    assert!(resp.impact_report.is_some());
+
+    // Formula delta preview present.
+    let delta = resp
+        .formula_delta_preview
+        .expect("formula_delta_preview should be present");
+    assert!(!delta.is_empty(), "should have delta items");
+
+    let b1 = delta.iter().find(|d| d.cell.contains("B1"));
+    assert!(b1.is_some(), "B1 should appear in delta");
+    let item = b1.unwrap();
+    assert_eq!(item.before, "A5+1");
+    assert_eq!(item.after, "A7+1"); // row 5 + 2
+    assert_eq!(item.classification, "shifted");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn structure_batch_apply_mode_does_not_include_impact() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    workspace.create_workbook("no_impact_apply.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value_number(1);
+    });
+
+    let state = recalc_state(&workspace);
+    let list = list_workbooks(
+        state.clone(),
+        ListWorkbooksParams {
+            slug_prefix: None,
+            folder: None,
+            path_glob: None,
+            limit: None,
+            offset: None,
+            include_paths: None,
+        },
+    )
+    .await?;
+    let workbook_id = list.workbooks[0].workbook_id.clone();
+    let fork = create_fork(
+        state.clone(),
+        CreateForkParams {
+            workbook_or_fork_id: workbook_id,
+        },
+    )
+    .await?;
+
+    let resp = structure_batch(
+        state.clone(),
+        StructureBatchParamsInput {
+            fork_id: fork.fork_id.clone(),
+            ops: vec![
+                StructureOp::InsertRows {
+                    sheet_name: "Sheet1".to_string(),
+                    at_row: 1,
+                    count: 1,
+                }
+                .into(),
+            ],
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+            // Even if requested, apply mode should not compute impact report.
+            impact_report: Some(true),
+            show_formula_delta: Some(true),
+        },
+    )
+    .await?;
+
+    // In apply mode, impact fields should be None.
+    assert!(resp.impact_report.is_none());
+    assert!(resp.formula_delta_preview.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn structure_batch_mcp_response_schema_is_additive() {
+    // Verify that the response type serializes without impact_report/formula_delta_preview
+    // when they are None (backward compatible).
+    let resp = serde_json::to_value(spreadsheet_mcp::tools::fork::StructureBatchResponse {
+        fork_id: "f1".into(),
+        mode: "apply".into(),
+        change_id: None,
+        ops_applied: 1,
+        summary: Default::default(),
+        formula_parse_diagnostics: None,
+        impact_report: None,
+        formula_delta_preview: None,
+    })
+    .unwrap();
+
+    assert!(
+        resp.get("impact_report").is_none(),
+        "None should be omitted"
+    );
+    assert!(
+        resp.get("formula_delta_preview").is_none(),
+        "None should be omitted"
+    );
 }

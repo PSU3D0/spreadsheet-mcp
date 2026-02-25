@@ -1035,6 +1035,7 @@ pub async fn apply_formula_pattern(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn structure_batch(
     file: PathBuf,
     ops: String,
@@ -1043,7 +1044,17 @@ pub async fn structure_batch(
     output: Option<PathBuf>,
     force: bool,
     formula_parse_policy: Option<FormulaParsePolicy>,
+    impact_report: bool,
+    show_formula_delta: bool,
 ) -> Result<Value> {
+    // --impact-report and --show-formula-delta require --dry-run.
+    if (impact_report || show_formula_delta) && !dry_run {
+        bail!(
+            "invalid argument: --impact-report and --show-formula-delta require --dry-run. \
+             Add --dry-run to preview structural impact without mutating the file."
+        );
+    }
+
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
@@ -1059,6 +1070,8 @@ pub async fn structure_batch(
         mode: None,
         label: None,
         formula_parse_policy,
+        impact_report: None,
+        show_formula_delta: None,
     })
     .map_err(|error| invalid_ops_payload(error.to_string()))?;
 
@@ -1088,7 +1101,7 @@ pub async fn structure_batch(
             );
             let would_change = structure_summary_indicates_change(&result_counts);
 
-            dry_run_response(
+            let mut response = dry_run_response(
                 op_count,
                 operation_counts,
                 result_counts,
@@ -1096,7 +1109,24 @@ pub async fn structure_batch(
                 would_change,
                 formula_parse_diagnostics,
                 None,
-            )
+            )?;
+
+            // Attach optional impact report and formula delta preview.
+            if impact_report || show_formula_delta {
+                let (report, delta) = crate::tools::structure_impact::compute_structure_impact(
+                    &source,
+                    &normalized.ops,
+                    show_formula_delta,
+                )?;
+                if impact_report {
+                    response["impact_report"] = serde_json::to_value(&report)?;
+                }
+                if let Some(delta) = delta {
+                    response["formula_delta_preview"] = serde_json::to_value(&delta)?;
+                }
+            }
+
+            Ok(response)
         }
         BatchMutationMode::InPlace => {
             let apply_result = apply_in_place_with_temp(&source, ".structure-batch-", |path| {

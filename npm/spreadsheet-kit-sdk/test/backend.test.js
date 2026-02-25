@@ -369,3 +369,110 @@ test("backend-specific no-op methods throw explicit unsupported errors", async (
     }
   )
 })
+
+test("mcp structureBatch normalizes impact report fields", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "structure_batch")
+        assert.equal(params.fork_id, "fork-1")
+        assert.equal(params.impact_report, true)
+        assert.equal(params.show_formula_delta, true)
+        return {
+          fork_id: "fork-1",
+          mode: "preview",
+          change_id: "chg-abc",
+          ops_applied: 1,
+          summary: { op_kinds: ["structure_batch"], affected_sheets: ["Sheet1"] },
+          impact_report: {
+            shifted_spans: [{ op_index: 0, sheet_name: "Sheet1", axis: "row", description: "rows 2..∞ shift +1", at: 2, count: 1, direction: "insert" }],
+            absolute_ref_warnings: [],
+            tokens_affected: 3,
+            tokens_unaffected: 1,
+            notes: []
+          },
+          formula_delta_preview: [
+            { cell: "Sheet1!B1", before: "A5*2", after: "A6*2", classification: "shifted", warning_code: null }
+          ]
+        }
+      }
+    }
+  })
+
+  const result = await mcp.structureBatch({
+    forkId: "fork-1",
+    ops: [{ kind: "insert_rows", sheet_name: "Sheet1", at_row: 2, count: 1 }],
+    mode: "preview",
+    impactReport: true,
+    showFormulaDelta: true
+  })
+
+  assert.equal(result.forkId, "fork-1")
+  assert.equal(result.mode, "preview")
+  assert.equal(result.changeId, "chg-abc")
+  assert.equal(result.opsApplied, 1)
+
+  // Impact report fields
+  assert.ok(result.impactReport, "impactReport should be present")
+  assert.equal(result.impactReport.shifted_spans.length, 1)
+  assert.equal(result.impactReport.tokens_affected, 3)
+
+  // Formula delta preview
+  assert.ok(result.formulaDeltaPreview, "formulaDeltaPreview should be present")
+  assert.equal(result.formulaDeltaPreview.length, 1)
+  assert.equal(result.formulaDeltaPreview[0].cell, "Sheet1!B1")
+  assert.equal(result.formulaDeltaPreview[0].classification, "shifted")
+})
+
+test("mcp structureBatch omits impact fields when not requested", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "structure_batch")
+        // Backend should not return impact fields
+        return {
+          fork_id: "fork-1",
+          mode: "apply",
+          ops_applied: 1,
+          summary: {}
+        }
+      }
+    }
+  })
+
+  const result = await mcp.structureBatch({
+    forkId: "fork-1",
+    ops: [],
+    mode: "apply"
+  })
+
+  assert.equal(result.forkId, "fork-1")
+  assert.equal(result.impactReport, undefined)
+  assert.equal(result.formulaDeltaPreview, undefined)
+})
+
+test("normalizeStructureBatchResult handles snake_case and camelCase", () => {
+  const { normalizeStructureBatchResult } = require("../src/backend")
+
+  const snake = normalizeStructureBatchResult({
+    fork_id: "f1",
+    ops_applied: 2,
+    impact_report: { shifted_spans: [] },
+    formula_delta_preview: [{ cell: "A1" }]
+  })
+  assert.equal(snake.forkId, "f1")
+  assert.equal(snake.opsApplied, 2)
+  assert.ok(snake.impactReport)
+  assert.equal(snake.formulaDeltaPreview.length, 1)
+
+  const camel = normalizeStructureBatchResult({
+    forkId: "f2",
+    opsApplied: 3,
+    impactReport: { shifted_spans: [1] },
+    formulaDeltaPreview: []
+  })
+  assert.equal(camel.forkId, "f2")
+  assert.equal(camel.opsApplied, 3)
+  assert.ok(camel.impactReport)
+  assert.equal(camel.formulaDeltaPreview.length, 0)
+})

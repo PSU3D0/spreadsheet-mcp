@@ -7347,3 +7347,163 @@ fn edit_help_mentions_formula_cache_and_modes() {
         "edit help should mention provenance diagnostics"
     );
 }
+
+// ─── 4101: structure-batch impact report & formula delta preview ───
+
+#[test]
+fn structure_batch_impact_report_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("impact-report.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("impact-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":3}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--impact-report",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // Standard dry-run fields are still present.
+    assert!(payload["would_change"].as_bool().unwrap_or(false));
+    assert!(payload["op_count"].as_u64().is_some());
+
+    // Impact report is present.
+    let ir = &payload["impact_report"];
+    assert!(!ir.is_null(), "impact_report should be present");
+    assert!(
+        !ir["shifted_spans"].as_array().unwrap().is_empty(),
+        "should have at least one shifted span"
+    );
+    assert!(ir["tokens_affected"].is_number());
+    assert!(ir["tokens_unaffected"].is_number());
+}
+
+#[test]
+fn structure_batch_show_formula_delta_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-delta.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("delta-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--show-formula-delta",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // Formula delta preview should be present.
+    let fdp = &payload["formula_delta_preview"];
+    assert!(fdp.is_array(), "formula_delta_preview should be an array");
+    let items = fdp.as_array().unwrap();
+    assert!(!items.is_empty(), "should have at least one delta item");
+
+    // Each item should have the expected fields.
+    let first = &items[0];
+    assert!(first["cell"].is_string());
+    assert!(first["before"].is_string());
+    assert!(first["after"].is_string());
+    assert!(first["classification"].is_string());
+}
+
+#[test]
+fn structure_batch_impact_flags_require_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("impact-no-dry.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("impact-no-dry-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    // --impact-report without --dry-run → error
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--impact-report",
+    ]);
+    assert!(!output.status.success(), "should fail without --dry-run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--dry-run") || stderr.contains("dry-run"),
+        "error should mention --dry-run: {}",
+        stderr
+    );
+
+    // --show-formula-delta without --dry-run → error
+    let output2 = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--show-formula-delta",
+    ]);
+    assert!(!output2.status.success(), "should fail without --dry-run");
+}
+
+#[test]
+fn structure_batch_dry_run_without_impact_flags_is_backward_compatible() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("compat.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("compat-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // impact_report and formula_delta_preview should NOT be present when not requested.
+    assert!(
+        payload.get("impact_report").is_none() || payload["impact_report"].is_null(),
+        "impact_report should be absent when not requested"
+    );
+    assert!(
+        payload.get("formula_delta_preview").is_none()
+            || payload["formula_delta_preview"].is_null(),
+        "formula_delta_preview should be absent when not requested"
+    );
+}

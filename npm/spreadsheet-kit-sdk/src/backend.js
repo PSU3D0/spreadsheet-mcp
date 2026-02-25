@@ -231,12 +231,34 @@ function normalizeReadTableResult(result, fallbackWorkbookId, fallbackSheetName)
   }
 }
 
+/**
+ * @param {unknown} result
+ */
+function normalizeStructureBatchResult(result) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid structureBatch response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+  return {
+    forkId: result.forkId ?? result.fork_id,
+    mode: result.mode,
+    changeId: result.changeId ?? result.change_id,
+    opsApplied: result.opsApplied ?? result.ops_applied,
+    summary: result.summary,
+    formulaParseDiagnostics: result.formulaParseDiagnostics ?? result.formula_parse_diagnostics,
+    impactReport: result.impactReport ?? result.impact_report,
+    formulaDeltaPreview: result.formulaDeltaPreview ?? result.formula_delta_preview
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
   normalizeSheetPageResult,
   normalizeGridExportResult,
   normalizeTransformBatchResult,
+  normalizeStructureBatchResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,

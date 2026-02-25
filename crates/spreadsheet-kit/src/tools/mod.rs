@@ -6,6 +6,8 @@ pub mod param_enums;
 pub mod rules_batch;
 #[cfg(feature = "recalc")]
 pub mod sheet_layout;
+#[cfg(feature = "recalc")]
+pub mod structure_impact;
 pub mod vba;
 #[cfg(feature = "recalc")]
 pub mod write_normalize;
