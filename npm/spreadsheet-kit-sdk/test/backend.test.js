@@ -476,3 +476,78 @@ test("normalizeStructureBatchResult handles snake_case and camelCase", () => {
   assert.ok(camel.impactReport)
   assert.equal(camel.formulaDeltaPreview.length, 0)
 })
+
+test("mcp defineName normalizes payload without leaking camelCase aliases", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "define_name")
+        assert.deepEqual(params, {
+          fork_id: "fork-1",
+          name: "MyRange",
+          refers_to: "Sheet1!$A$1:$B$2",
+          scope: "sheet",
+          scope_sheet_name: "Sheet1"
+        })
+        return { ok: true }
+      }
+    }
+  })
+
+  await mcp.defineName({
+    forkId: "fork-1",
+    name: "MyRange",
+    refersTo: "Sheet1!$A$1:$B$2",
+    scope: "sheet",
+    scopeSheetName: "Sheet1"
+  })
+})
+
+test("mcp updateName allows scope-only updates", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "update_name")
+        assert.deepEqual(params, {
+          fork_id: "fork-1",
+          name: "MyRange",
+          refers_to: undefined,
+          scope: "sheet",
+          scope_sheet_name: "Sheet1"
+        })
+        return { ok: true }
+      }
+    }
+  })
+
+  await mcp.updateName({
+    forkId: "fork-1",
+    name: "MyRange",
+    scope: "sheet",
+    scopeSheetName: "Sheet1"
+  })
+})
+
+test("mcp deleteName normalizes payload", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "delete_name")
+        assert.deepEqual(params, {
+          fork_id: "fork-1",
+          name: "MyRange",
+          scope: "workbook",
+          scope_sheet_name: undefined
+        })
+        return { deleted: true }
+      }
+    }
+  })
+
+  const result = await mcp.deleteName({
+    forkId: "fork-1",
+    name: "MyRange",
+    scope: "workbook"
+  })
+  assert.equal(result.deleted, true)
+})

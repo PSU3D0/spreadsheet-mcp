@@ -495,8 +495,8 @@ For broader discovery, use sheet-page, range-values, or layout-page."
         force: bool,
     },
     #[command(
-        about = "Update an existing named range's refers_to address",
-        after_long_help = "Examples:\n  agent-spreadsheet update-name data.xlsx MyRange 'Sheet1!$A$1:$C$20' --in-place\n  agent-spreadsheet update-name data.xlsx SheetLocal 'Sheet1!$B$2' --scope sheet --scope-sheet-name Sheet1 --in-place"
+        about = "Update an existing named range",
+        after_long_help = "Examples:\n  agent-spreadsheet update-name data.xlsx MyRange 'Sheet1!$A$1:$C$20' --in-place\n  agent-spreadsheet update-name data.xlsx SheetLocal --scope sheet --scope-sheet-name Sheet1 --in-place\n\nNote: REFERS_TO is optional. Omit it to update scope metadata only."
     )]
     UpdateName {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -505,9 +505,9 @@ For broader discovery, use sheet-page, range-values, or layout-page."
         name: String,
         #[arg(
             value_name = "REFERS_TO",
-            help = "New range or formula the name refers to"
+            help = "Optional new range or formula the name refers to"
         )]
-        refers_to: String,
+        refers_to: Option<String>,
         #[arg(long, value_name = "SCOPE", help = "Scope filter: workbook or sheet")]
         scope: Option<String>,
         #[arg(

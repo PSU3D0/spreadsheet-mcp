@@ -2663,7 +2663,7 @@ pub async fn define_name(
 pub async fn update_name(
     file: PathBuf,
     name: String,
-    refers_to: String,
+    refers_to: Option<String>,
     scope: Option<String>,
     scope_sheet_name: Option<String>,
     dry_run: bool,
@@ -2677,6 +2677,11 @@ pub async fn update_name(
     if name.trim().is_empty() {
         bail!("name must not be empty");
     }
+    if let Some(refers_to) = refers_to.as_ref()
+        && refers_to.trim().is_empty()
+    {
+        bail!("refers_to must not be empty when provided");
+    }
 
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
@@ -2689,7 +2694,7 @@ pub async fn update_name(
                     update_name_in_file(
                         path,
                         &name,
-                        Some(&refers_to),
+                        refers_to.as_deref(),
                         scope_kind,
                         scope_sheet_name.as_deref(),
                     )
@@ -2699,10 +2704,13 @@ pub async fn update_name(
                 crate::model::NamedRangeScope::Workbook => "workbook",
                 crate::model::NamedRangeScope::Sheet => "sheet",
             };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
             Ok(serde_json::to_value(UpdateNameCliResponse {
                 file: source.display().to_string(),
                 name,
-                refers_to,
+                refers_to: final_refers_to,
                 scope_kind: scope_str.to_string(),
                 scope_sheet_name: eff_sheet.or(scope_sheet_name),
                 previous_refers_to: Some(previous_refers_to),
@@ -2717,7 +2725,7 @@ pub async fn update_name(
                     update_name_in_file(
                         path,
                         &name,
-                        Some(&refers_to),
+                        refers_to.as_deref(),
                         scope_kind,
                         scope_sheet_name.as_deref(),
                     )
@@ -2726,10 +2734,13 @@ pub async fn update_name(
                 crate::model::NamedRangeScope::Workbook => "workbook",
                 crate::model::NamedRangeScope::Sheet => "sheet",
             };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
             Ok(serde_json::to_value(UpdateNameCliResponse {
                 file: source.display().to_string(),
                 name,
-                refers_to,
+                refers_to: final_refers_to,
                 scope_kind: scope_str.to_string(),
                 scope_sheet_name: eff_sheet.or(scope_sheet_name),
                 previous_refers_to: Some(previous_refers_to),
@@ -2744,7 +2755,7 @@ pub async fn update_name(
                     update_name_in_file(
                         path,
                         &name,
-                        Some(&refers_to),
+                        refers_to.as_deref(),
                         scope_kind,
                         scope_sheet_name.as_deref(),
                     )
@@ -2753,10 +2764,13 @@ pub async fn update_name(
                 crate::model::NamedRangeScope::Workbook => "workbook",
                 crate::model::NamedRangeScope::Sheet => "sheet",
             };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
             Ok(serde_json::to_value(UpdateNameCliResponse {
                 file: source.display().to_string(),
                 name,
-                refers_to,
+                refers_to: final_refers_to,
                 scope_kind: scope_str.to_string(),
                 scope_sheet_name: eff_sheet.or(scope_sheet_name),
                 previous_refers_to: Some(previous_refers_to),
