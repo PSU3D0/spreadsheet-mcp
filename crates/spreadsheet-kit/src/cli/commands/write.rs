@@ -1904,6 +1904,7 @@ fn summarize_structure_operation_counts(ops: &[StructureOp]) -> BTreeMap<String,
             StructureOp::MoveRange { .. } => "move_range",
             StructureOp::MergeCells { .. } => "merge_cells",
             StructureOp::UnmergeCells { .. } => "unmerge_cells",
+            StructureOp::CloneRow { .. } => "clone_row",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }

@@ -8030,3 +8030,114 @@ fn cli_recalculate_parse_output_and_force_flags() {
         other => panic!("unexpected command: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Ticket 4104 – CLI integration: insert_rows expand_adjacent_sums + clone_row
+// ---------------------------------------------------------------------------
+
+fn write_sum_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
+    sheet.get_cell_mut("A1").set_value_number(10.0);
+    sheet.get_cell_mut("A2").set_value_number(20.0);
+    sheet.get_cell_mut("A3").set_value_number(30.0);
+    sheet.get_cell_mut("A4").set_formula("SUM(A1:A3)");
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write fixture");
+}
+
+#[test]
+fn cli_structure_batch_insert_rows_expand_adjacent_sums() {
+    let tmp = tempdir().expect("tempdir");
+    let wb = tmp.path().join("expand_sum.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_sum_fixture(&wb);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":4,"count":1,"expand_adjacent_sums":true}]}"#,
+    );
+
+    let file = wb.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let book = umya_spreadsheet::reader::xlsx::read(&wb).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").unwrap();
+    // Subtotal shifted to row 5; formula expanded to include new row 4.
+    let formula = sheet.get_cell("A5").unwrap().get_formula().to_string();
+    assert_eq!(
+        formula.to_uppercase().replace(' ', ""),
+        "SUM(A1:A4)",
+        "SUM should expand to include inserted row"
+    );
+}
+
+#[test]
+fn cli_structure_batch_clone_row_in_place() {
+    let tmp = tempdir().expect("tempdir");
+    let wb = tmp.path().join("clone_row.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+
+    // Build fixture: header, template row, subtotal
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("Header");
+        sheet.get_cell_mut("B1").set_value_number(100.0);
+        sheet.get_cell_mut("A2").set_value("Total");
+        sheet.get_cell_mut("B2").set_formula("SUM(B1:B1)");
+        umya_spreadsheet::writer::xlsx::write(&workbook, &wb).expect("write fixture");
+    }
+
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"clone_row","sheet_name":"Sheet1","source_row":1,"insert_at":2,"count":2,"expand_adjacent_sums":true}]}"#,
+    );
+
+    let file = wb.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload = parse_stdout_json(&output);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let book = umya_spreadsheet::reader::xlsx::read(&wb).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").unwrap();
+
+    // Cloned rows at 2 and 3 should copy template values.
+    let a2 = sheet.get_cell("A2").unwrap().get_value().to_string();
+    assert_eq!(a2, "Header");
+    let b2 = sheet.get_cell("B2").unwrap().get_value().to_string();
+    assert_eq!(b2, "100");
+
+    // Subtotal shifted to row 4; formula expanded.
+    let formula = sheet.get_cell("B4").unwrap().get_formula().to_string();
+    assert_eq!(
+        formula.to_uppercase().replace(' ', ""),
+        "SUM(B1:B3)",
+        "SUM should expand to include cloned rows"
+    );
+}
