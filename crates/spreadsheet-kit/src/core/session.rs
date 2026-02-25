@@ -1774,6 +1774,8 @@ fn build_sheet_page_response(
         compact: compact_payload,
         values_only: values_only_payload,
         format,
+        truncated: false,
+        budget: None,
     }
 }
 
