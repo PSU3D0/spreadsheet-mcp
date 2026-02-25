@@ -963,6 +963,16 @@ Cache note:
             help = "Formula parse policy: fail, warn (default for structure-batch), or off"
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
+        #[arg(
+            long = "impact-report",
+            help = "Include a structural impact report (shifted spans, absolute-ref warnings). Requires --dry-run."
+        )]
+        impact_report: bool,
+        #[arg(
+            long = "show-formula-delta",
+            help = "Include before/after formula delta preview samples. Requires --dry-run."
+        )]
+        show_formula_delta: bool,
     },
     #[command(
         about = "Apply stateless column sizing operations from an @ops payload",
@@ -1478,6 +1488,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             force,
             print_schema,
             formula_parse_policy,
+            impact_report,
+            show_formula_delta,
         } => {
             if print_schema {
                 commands::write::batch_payload_schema(
@@ -1498,6 +1510,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                     output,
                     force,
                     formula_parse_policy,
+                    impact_report,
+                    show_formula_delta,
                 )
                 .await
             }

@@ -1636,6 +1636,10 @@ pub struct StructureBatchParams {
     pub label: Option<String>,
     #[serde(default)]
     pub formula_parse_policy: Option<FormulaParsePolicy>,
+    #[serde(default)]
+    pub impact_report: Option<bool>,
+    #[serde(default)]
+    pub show_formula_delta: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1647,6 +1651,14 @@ pub struct StructureBatchParamsInput {
     pub label: Option<String>,
     #[serde(default)]
     pub formula_parse_policy: Option<FormulaParsePolicy>,
+    /// Request a structural impact report (shifted spans, absolute-ref warnings).
+    /// Only honoured in preview mode.
+    #[serde(default)]
+    pub impact_report: Option<bool>,
+    /// Request before/after formula delta samples.
+    /// Only honoured in preview mode.
+    #[serde(default)]
+    pub show_formula_delta: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1738,6 +1750,8 @@ pub fn normalize_structure_batch(
             mode: input.mode,
             label: input.label,
             formula_parse_policy: input.formula_parse_policy,
+            impact_report: input.impact_report,
+            show_formula_delta: input.show_formula_delta,
         },
         warnings,
     ))
@@ -1836,6 +1850,12 @@ pub struct StructureBatchResponse {
     pub summary: ChangeSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+    /// Structural impact report (only present when explicitly requested in preview mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub impact_report: Option<crate::tools::structure_impact::StructureImpactReport>,
+    /// Formula delta preview (only present when explicitly requested in preview mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_delta_preview: Option<Vec<crate::tools::structure_impact::FormulaDeltaItem>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1849,6 +1869,8 @@ pub async fn structure_batch(
     state: Arc<AppState>,
     params: StructureBatchParamsInput,
 ) -> Result<StructureBatchResponse> {
+    let want_impact = params.impact_report.unwrap_or(false);
+    let want_delta = params.show_formula_delta.unwrap_or(false);
     let (params, warnings) = normalize_structure_batch(params)?;
     let policy =
         params
@@ -1930,6 +1952,23 @@ pub async fn structure_batch(
 
         registry.add_staged_change(&params.fork_id, staged)?;
 
+        // Compute impact report / formula delta preview if requested in preview mode.
+        let (ir, fdp) = if want_impact || want_delta {
+            let ops_for_impact = params.ops.clone();
+            let base_path = work_path.clone();
+            let (report, delta) = tokio::task::spawn_blocking(move || {
+                crate::tools::structure_impact::compute_structure_impact(
+                    &base_path,
+                    &ops_for_impact,
+                    want_delta,
+                )
+            })
+            .await??;
+            (if want_impact { Some(report) } else { None }, delta)
+        } else {
+            (None, None)
+        };
+
         Ok(StructureBatchResponse {
             fork_id: params.fork_id,
             mode: mode.as_str().to_string(),
@@ -1937,6 +1976,8 @@ pub async fn structure_batch(
             ops_applied: apply_result.ops_applied,
             summary,
             formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
+            impact_report: ir,
+            formula_delta_preview: fdp,
         })
     } else {
         let ops_for_apply = params.ops.clone();
@@ -1967,6 +2008,8 @@ pub async fn structure_batch(
             ops_applied: apply_result.ops_applied,
             summary,
             formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
+            impact_report: None,
+            formula_delta_preview: None,
         })
     }
 }

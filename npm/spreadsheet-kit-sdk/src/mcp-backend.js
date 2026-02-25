@@ -5,6 +5,7 @@ const {
   normalizeSheetPageResult,
   normalizeGridExportResult,
   normalizeTransformBatchResult,
+  normalizeStructureBatchResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,
@@ -263,6 +264,24 @@ class McpBackend {
     })
 
     return normalizeTransformBatchResult(result)
+  }
+
+  async structureBatch(input = {}) {
+    requireCapability(this, "supportsTransformBatch", "structureBatch")
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
+    )
+    const result = await this._call("structure_batch", {
+      ...input,
+      fork_id: forkId,
+      ops: input.ops,
+      mode: input.mode ?? "apply",
+      impact_report: input.impactReport ?? input.impact_report,
+      show_formula_delta: input.showFormulaDelta ?? input.show_formula_delta
+    })
+
+    return normalizeStructureBatchResult(result)
   }
 
   async createFork(input = {}) {
