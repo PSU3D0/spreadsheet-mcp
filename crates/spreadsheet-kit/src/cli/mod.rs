@@ -1254,8 +1254,8 @@ Regex mode:
 
 Formula parse policy:
   After replacement, each new formula is validated. Policy controls behavior on malformed results:
-    fail (default) => reject and error
-    warn => report diagnostics but continue
+    warn (default) => report diagnostics and skip invalid replacements
+    fail => reject and error
     off => skip validation"#
     )]
     ReplaceInFormulas {
@@ -1299,7 +1299,7 @@ Formula parse policy:
             long = "formula-parse-policy",
             value_enum,
             value_name = "POLICY",
-            help = "Formula parse policy: fail (default), warn, or off"
+            help = "Formula parse policy: warn (default), fail, or off"
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
     },

@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use serde_json::Value;
+use spreadsheet_kit::model::FormulaParsePolicy;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -59,7 +60,7 @@ fn replace_plain_text_in_formula_body() {
         case_sensitive: true,
     };
 
-    let result = apply_replace_in_formulas_to_file(&work, &op).unwrap();
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Off).unwrap();
 
     assert_eq!(
         result.formulas_changed, 2,
@@ -103,7 +104,7 @@ fn replace_regex_mode() {
         case_sensitive: true,
     };
 
-    let result = apply_replace_in_formulas_to_file(&work, &op).unwrap();
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Off).unwrap();
 
     assert_eq!(result.formulas_changed, 1, "only B4 references Sheet1!D");
 
@@ -133,7 +134,7 @@ fn no_op_when_pattern_absent() {
         case_sensitive: true,
     };
 
-    let result = apply_replace_in_formulas_to_file(&work, &op).unwrap();
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Off).unwrap();
 
     assert_eq!(result.formulas_changed, 0);
     assert!(
@@ -165,7 +166,7 @@ fn range_scoped_replace_touches_only_target_area() {
         case_sensitive: true,
     };
 
-    let result = apply_replace_in_formulas_to_file(&work, &op).unwrap();
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Off).unwrap();
 
     assert_eq!(result.formulas_changed, 1, "only B2 is in the range");
 
@@ -201,7 +202,7 @@ fn case_insensitive_plain_text_replace() {
         case_sensitive: false,
     };
 
-    let result = apply_replace_in_formulas_to_file(&work, &op).unwrap();
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Off).unwrap();
 
     assert_eq!(
         result.formulas_changed, 1,
@@ -214,6 +215,82 @@ fn case_insensitive_plain_text_replace() {
         sheet.get_cell("B2").unwrap().get_formula(),
         "SUMPRODUCT(C2:C10)"
     );
+}
+
+#[test]
+fn parse_policy_fail_validates_all_replacements_not_just_samples() {
+    use spreadsheet_kit::tools::fork::{ReplaceInFormulasOp, apply_replace_in_formulas_to_file};
+
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("fail-all.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        for row in 1..=30 {
+            sheet
+                .get_cell_mut((2, row))
+                .set_formula("SUM(C2:C10)".to_string());
+        }
+    });
+
+    let tmp = tempdir().unwrap();
+    let work = tmp.path().join("fail-all.xlsx");
+    std::fs::copy(&path, &work).unwrap();
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: "Sheet1".to_string(),
+        find: "SUM(".to_string(),
+        replace: "SUM((".to_string(),
+        range: None,
+        regex: false,
+        case_sensitive: true,
+    };
+
+    let err = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Fail)
+        .expect_err("invalid replacement formulas should fail under fail policy");
+    assert!(
+        err.to_string().contains("failed parse"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_policy_warn_skips_invalid_replacements_and_reports_diagnostics() {
+    use spreadsheet_kit::tools::fork::{ReplaceInFormulasOp, apply_replace_in_formulas_to_file};
+
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("warn-invalid.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        for row in 1..=30 {
+            sheet
+                .get_cell_mut((2, row))
+                .set_formula("SUM(C2:C10)".to_string());
+        }
+    });
+
+    let tmp = tempdir().unwrap();
+    let work = tmp.path().join("warn-invalid.xlsx");
+    std::fs::copy(&path, &work).unwrap();
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: "Sheet1".to_string(),
+        find: "SUM(".to_string(),
+        replace: "SUM((".to_string(),
+        range: None,
+        regex: false,
+        case_sensitive: true,
+    };
+
+    let result = apply_replace_in_formulas_to_file(&work, &op, FormulaParsePolicy::Warn)
+        .expect("warn policy should not fail");
+
+    assert_eq!(result.formulas_checked, 30);
+    assert_eq!(
+        result.formulas_changed, 0,
+        "invalid replacements should be skipped"
+    );
+    let diagnostics = result
+        .formula_parse_diagnostics
+        .expect("warn policy should return diagnostics");
+    assert!(diagnostics.total_errors >= 30);
 }
 
 // ── CLI integration tests ────────────────────────────────────────────────────
@@ -286,6 +363,51 @@ async fn cli_in_place_writes_expected_formulas() -> Result<()> {
     assert_eq!(
         sheet.get_cell("B3").unwrap().get_formula(),
         "AVERAGE(D2:D20)"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cli_in_place_fail_policy_rejects_without_mutating_source() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let path = workspace.create_workbook("inplace-fail-policy.xlsx", |book| {
+        let sheet = book.get_sheet_by_name_mut("Sheet1").unwrap();
+        for row in 1..=30 {
+            sheet
+                .get_cell_mut((2, row))
+                .set_formula("SUM(C2:C10)".to_string());
+        }
+    });
+
+    let before = std::fs::read(&path)?;
+
+    let err = spreadsheet_kit::cli::commands::write::replace_in_formulas(
+        path.clone(),
+        "Sheet1".to_string(),
+        "SUM(".to_string(),
+        "SUM((".to_string(),
+        None,
+        false,
+        true,
+        false,
+        true,
+        None,
+        false,
+        Some(FormulaParsePolicy::Fail),
+    )
+    .await
+    .expect_err("fail policy should reject invalid replacement formulas");
+
+    assert!(
+        err.to_string().contains("failed parse"),
+        "unexpected error: {err}"
+    );
+
+    let after = std::fs::read(&path)?;
+    assert_eq!(
+        before, after,
+        "source workbook must remain unchanged on failure"
     );
 
     Ok(())

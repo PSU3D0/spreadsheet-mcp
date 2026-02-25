@@ -4323,6 +4323,7 @@ pub struct ReplaceInFormulasApplyResult {
     pub formulas_changed: u64,
     pub samples: Vec<FormulaReplaceSample>,
     pub warnings: Vec<String>,
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 const REPLACE_SAMPLE_LIMIT: usize = 20;
@@ -4330,6 +4331,7 @@ const REPLACE_SAMPLE_LIMIT: usize = 20;
 pub fn apply_replace_in_formulas_to_file(
     path: &Path,
     op: &ReplaceInFormulasOp,
+    policy: FormulaParsePolicy,
 ) -> Result<ReplaceInFormulasApplyResult> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
 
@@ -4401,6 +4403,7 @@ pub fn apply_replace_in_formulas_to_file(
     let mut formulas_changed: u64 = 0;
     let mut samples: Vec<FormulaReplaceSample> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut formula_parse_diagnostics_builder = FormulaParseDiagnosticsBuilder::new(policy);
 
     for row in min_row..=max_row {
         for col in min_col..=max_col {
@@ -4419,9 +4422,32 @@ pub fn apply_replace_in_formulas_to_file(
             formulas_checked += 1;
 
             if let Some(next) = replace_formula(&formula) {
+                let address = crate::utils::cell_address(col, row);
+
+                if policy != FormulaParsePolicy::Off
+                    && let Err(err_msg) = validate_formula(&next)
+                {
+                    if policy == FormulaParsePolicy::Fail {
+                        bail!(
+                            "{}replaced formula at {} failed parse: {}",
+                            FORMULA_PARSE_FAILED_PREFIX,
+                            address,
+                            err_msg
+                        );
+                    }
+                    formula_parse_diagnostics_builder.record_error(
+                        &op.sheet_name,
+                        &address,
+                        &next,
+                        &err_msg,
+                    );
+                    // Warn mode: keep the original formula untouched.
+                    continue;
+                }
+
                 if samples.len() < REPLACE_SAMPLE_LIMIT {
                     samples.push(FormulaReplaceSample {
-                        address: crate::utils::cell_address(col, row),
+                        address,
                         before: formula.clone(),
                         after: next.clone(),
                     });
@@ -4439,11 +4465,18 @@ pub fn apply_replace_in_formulas_to_file(
 
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
 
+    let formula_parse_diagnostics = if formula_parse_diagnostics_builder.has_errors() {
+        Some(formula_parse_diagnostics_builder.build())
+    } else {
+        None
+    };
+
     Ok(ReplaceInFormulasApplyResult {
         formulas_checked,
         formulas_changed,
         samples,
         warnings,
+        formula_parse_diagnostics,
     })
 }
 
@@ -4531,12 +4564,9 @@ pub async fn replace_in_formulas(
         let snapshot_for_apply = snapshot_path.clone();
         let op_clone = op.clone();
         let result = tokio::task::spawn_blocking(move || {
-            apply_replace_in_formulas_to_file(&snapshot_for_apply, &op_clone)
+            apply_replace_in_formulas_to_file(&snapshot_for_apply, &op_clone, policy)
         })
         .await??;
-
-        let formula_parse_diagnostics =
-            validate_replacement_formulas(&snapshot_path, &op.sheet_name, &result.samples, policy)?;
 
         let staged_op = StagedOp {
             kind: "replace_in_formulas".to_string(),
@@ -4577,18 +4607,16 @@ pub async fn replace_in_formulas(
             recalc_needed: fork_ctx.recalc_needed || result.formulas_changed > 0,
             samples: result.samples,
             warnings: result.warnings,
-            formula_parse_diagnostics,
+            formula_parse_diagnostics: result.formula_parse_diagnostics,
         })
     } else {
+        let prior_recalc_needed = fork_ctx.recalc_needed;
         let op_clone = op.clone();
         let work_path_for_apply = work_path.clone();
         let result = tokio::task::spawn_blocking(move || {
-            apply_replace_in_formulas_to_file(&work_path_for_apply, &op_clone)
+            apply_replace_in_formulas_to_file(&work_path_for_apply, &op_clone, policy)
         })
         .await??;
-
-        let formula_parse_diagnostics =
-            validate_replacement_formulas(&work_path, &op.sheet_name, &result.samples, policy)?;
 
         if result.formulas_changed > 0 {
             registry.with_fork_mut(&params.fork_id, |ctx| {
@@ -4605,45 +4633,11 @@ pub async fn replace_in_formulas(
             change_id: None,
             formulas_checked: result.formulas_checked,
             formulas_changed: result.formulas_changed,
-            recalc_needed: result.formulas_changed > 0,
+            recalc_needed: prior_recalc_needed || result.formulas_changed > 0,
             samples: result.samples,
             warnings: result.warnings,
-            formula_parse_diagnostics,
+            formula_parse_diagnostics: result.formula_parse_diagnostics,
         })
-    }
-}
-
-/// Validate replaced formula text against the formula parse policy.
-fn validate_replacement_formulas(
-    _path: &Path,
-    _sheet_name: &str,
-    samples: &[FormulaReplaceSample],
-    policy: FormulaParsePolicy,
-) -> Result<Option<FormulaParseDiagnostics>> {
-    if policy == FormulaParsePolicy::Off || samples.is_empty() {
-        return Ok(None);
-    }
-
-    let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
-
-    for sample in samples {
-        if let Err(err_msg) = validate_formula(&sample.after) {
-            if policy == FormulaParsePolicy::Fail {
-                bail!(
-                    "{}replaced formula at {} failed parse: {}",
-                    FORMULA_PARSE_FAILED_PREFIX,
-                    sample.address,
-                    err_msg
-                );
-            }
-            builder.record_error(_sheet_name, &sample.address, &sample.after, &err_msg);
-        }
-    }
-
-    if builder.has_errors() {
-        Ok(Some(builder.build()))
-    } else {
-        Ok(None)
     }
 }
 

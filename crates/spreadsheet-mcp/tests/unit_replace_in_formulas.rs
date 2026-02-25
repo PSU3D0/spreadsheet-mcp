@@ -263,3 +263,94 @@ async fn replace_in_formulas_no_op() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn replace_in_formulas_fail_policy_rejects_invalid_replacements() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let state = recalc_state(&workspace);
+    let fork_id = fork_workbook(&workspace, &state, "fail_policy.xlsx").await?;
+
+    let err = replace_in_formulas(
+        state.clone(),
+        ReplaceInFormulasParams {
+            fork_id: fork_id.clone(),
+            sheet_name: "Sheet1".to_string(),
+            find: "SUM(".to_string(),
+            replace: "SUM((".to_string(),
+            range: None,
+            regex: false,
+            case_sensitive: true,
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: Some(spreadsheet_mcp::model::FormulaParsePolicy::Fail),
+        },
+    )
+    .await
+    .expect_err("fail policy should reject invalid replacements");
+
+    assert!(
+        err.to_string().contains("failed parse"),
+        "unexpected error: {err}"
+    );
+
+    // Ensure fork workbook was not mutated.
+    let fork_wb = state.open_workbook(&WorkbookId(fork_id.clone())).await?;
+    let b2_formula = fork_wb.with_sheet("Sheet1", |sheet| {
+        sheet.get_cell("B2").unwrap().get_formula().to_string()
+    })?;
+    assert_eq!(b2_formula, "SUM(C2:C10)");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn replace_in_formulas_noop_preserves_prior_recalc_needed_state() -> Result<()> {
+    let workspace = support::TestWorkspace::new();
+    let state = recalc_state(&workspace);
+    let fork_id = fork_workbook(&workspace, &state, "recalc_state.xlsx").await?;
+
+    // First mutation sets recalc_needed=true on the fork.
+    let first = replace_in_formulas(
+        state.clone(),
+        ReplaceInFormulasParams {
+            fork_id: fork_id.clone(),
+            sheet_name: "Sheet1".to_string(),
+            find: "C2:C10".to_string(),
+            replace: "D2:D20".to_string(),
+            range: None,
+            regex: false,
+            case_sensitive: true,
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+    assert!(first.recalc_needed);
+
+    // No-op replacement should still report recalc_needed=true from prior fork state.
+    let second = replace_in_formulas(
+        state.clone(),
+        ReplaceInFormulasParams {
+            fork_id: fork_id.clone(),
+            sheet_name: "Sheet1".to_string(),
+            find: "NONEXISTENT".to_string(),
+            replace: "WHATEVER".to_string(),
+            range: None,
+            regex: false,
+            case_sensitive: true,
+            mode: Some(BatchMode::Apply),
+            label: None,
+            formula_parse_policy: None,
+        },
+    )
+    .await?;
+
+    assert_eq!(second.formulas_changed, 0);
+    assert!(
+        second.recalc_needed,
+        "prior fork recalc_needed state should be preserved"
+    );
+
+    Ok(())
+}

@@ -724,20 +724,19 @@ pub async fn replace_in_formulas(
         case_sensitive,
     };
 
-    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::Fail);
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
+        CommandClass::BatchWrite,
+    ));
 
     match mode {
         BatchMutationMode::DryRun => {
             let (result, _temp_path) =
                 apply_to_temp_copy(&source, source.parent(), ".replace-in-formulas-", |path| {
-                    apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error)
+                    apply_replace_in_formulas_to_file(path, &op, policy)
+                        .map_err(classify_apply_error)
                 })?;
 
-            // Validate replaced formulas against parse policy.
-            let formula_parse_diagnostics =
-                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
-
-            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
             let would_change = result.formulas_changed > 0;
 
             Ok(serde_json::to_value(ReplaceInFormulasDryRunResponse {
@@ -755,18 +754,15 @@ pub async fn replace_in_formulas(
                     })
                     .collect(),
                 warnings,
-                formula_parse_diagnostics,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
             })?)
         }
         BatchMutationMode::InPlace => {
             let result = apply_in_place_with_temp(&source, ".replace-in-formulas-", |path| {
-                apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error)
+                apply_replace_in_formulas_to_file(path, &op, policy).map_err(classify_apply_error)
             })?;
 
-            let formula_parse_diagnostics =
-                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
-
-            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
             let changed = result.formulas_changed > 0;
 
             Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
@@ -786,7 +782,7 @@ pub async fn replace_in_formulas(
                     })
                     .collect(),
                 warnings,
-                formula_parse_diagnostics,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
             })?)
         }
         BatchMutationMode::Output { target, force } => {
@@ -798,13 +794,13 @@ pub async fn replace_in_formulas(
                 &target,
                 force,
                 ".replace-in-formulas-",
-                |path| apply_replace_in_formulas_to_file(path, &op).map_err(classify_apply_error),
+                |path| {
+                    apply_replace_in_formulas_to_file(path, &op, policy)
+                        .map_err(classify_apply_error)
+                },
             )?;
 
-            let formula_parse_diagnostics =
-                validate_replaced_formula_samples(&result.samples, &sheet, policy)?;
-
-            let warnings = warning_strings_to_cli_warnings(result.warnings);
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
             let changed = result.formulas_changed > 0;
 
             Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
@@ -824,7 +820,7 @@ pub async fn replace_in_formulas(
                     })
                     .collect(),
                 warnings,
-                formula_parse_diagnostics,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
             })?)
         }
     }
@@ -861,40 +857,6 @@ struct ReplaceInFormulasApplyResponse {
     warnings: Vec<Warning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
-}
-
-fn validate_replaced_formula_samples(
-    samples: &[crate::tools::fork::FormulaReplaceSample],
-    sheet_name: &str,
-    policy: FormulaParsePolicy,
-) -> Result<Option<FormulaParseDiagnostics>> {
-    use crate::model::{FORMULA_PARSE_FAILED_PREFIX, validate_formula};
-
-    if policy == FormulaParsePolicy::Off || samples.is_empty() {
-        return Ok(None);
-    }
-
-    let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
-
-    for sample in samples {
-        if let Err(err_msg) = validate_formula(&sample.after) {
-            if policy == FormulaParsePolicy::Fail {
-                bail!(
-                    "{}replaced formula at {} failed parse: {}",
-                    FORMULA_PARSE_FAILED_PREFIX,
-                    sample.address,
-                    err_msg
-                );
-            }
-            builder.record_error(sheet_name, &sample.address, &sample.after, &err_msg);
-        }
-    }
-
-    if builder.has_errors() {
-        Ok(Some(builder.build()))
-    } else {
-        Ok(None)
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
