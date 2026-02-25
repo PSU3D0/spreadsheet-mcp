@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tempfile::Builder;
 
 #[derive(Debug, Serialize)]
 struct RecalculateResponse {
@@ -44,7 +45,9 @@ pub async fn recalculate(file: PathBuf, output: Option<PathBuf>, force: bool) ->
             })?)
         }
         Some(output_path) => {
-            // Output mode: copy source → target, recalculate target, source unchanged
+            // Output mode: copy source to a temp file in the target directory,
+            // recalculate temp, then atomically move into place. This keeps an
+            // existing target untouched if recalc fails.
             let target = runtime.normalize_destination_path(&output_path)?;
             ensure_output_path_is_distinct(&source, &target)?;
 
@@ -56,7 +59,21 @@ pub async fn recalculate(file: PathBuf, output: Option<PathBuf>, force: bool) ->
                 );
             }
 
-            runtime.copy_file(&source, &target).map_err(|error| {
+            let target_parent = target.parent().unwrap_or_else(|| Path::new("."));
+            let temp_file = Builder::new()
+                .prefix(".recalculate-")
+                .suffix(".xlsx")
+                .tempfile_in(target_parent)
+                .map_err(|error| {
+                    anyhow!(
+                        "write failed: unable to create temp output in '{}': {}",
+                        target_parent.display(),
+                        error
+                    )
+                })?;
+            let temp_path = temp_file.path().to_path_buf();
+
+            runtime.copy_file(&source, &temp_path).map_err(|error| {
                 anyhow!(
                     "write failed: unable to copy workbook from '{}' to '{}': {}",
                     source.display(),
@@ -65,14 +82,25 @@ pub async fn recalculate(file: PathBuf, output: Option<PathBuf>, force: bool) ->
                 )
             })?;
 
-            let outcome = match runtime.recalculate_file(&target).await {
-                Ok(outcome) => outcome,
-                Err(recalc_error) => {
-                    // Clean up the target on recalc failure (best-effort)
-                    let _ = fs::remove_file(&target);
-                    return Err(recalc_error);
-                }
-            };
+            let outcome = runtime.recalculate_file(&temp_path).await?;
+
+            if target_exists {
+                fs::remove_file(&target).map_err(|error| {
+                    anyhow!(
+                        "write failed: unable to remove existing output '{}': {}",
+                        target.display(),
+                        error
+                    )
+                })?;
+            }
+
+            temp_file.persist(&target).map_err(|error| {
+                anyhow!(
+                    "write failed: unable to persist recalculated output to '{}': {}",
+                    target.display(),
+                    error.error
+                )
+            })?;
 
             Ok(serde_json::to_value(RecalculateResponse {
                 file: target.display().to_string(),
