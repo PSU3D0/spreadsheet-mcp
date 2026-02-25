@@ -252,6 +252,28 @@ function normalizeStructureBatchResult(result) {
   }
 }
 
+/**
+ * @param {unknown} result
+ */
+function normalizeReplaceInFormulasResult(result) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid replaceInFormulas response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+  return {
+    forkId: result.forkId ?? result.fork_id,
+    mode: result.mode,
+    changeId: result.changeId ?? result.change_id,
+    formulasChecked: result.formulasChecked ?? result.formulas_checked ?? 0,
+    formulasChanged: result.formulasChanged ?? result.formulas_changed ?? 0,
+    recalcNeeded: result.recalcNeeded ?? result.recalc_needed ?? false,
+    samples: Array.isArray(result.samples) ? result.samples : [],
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    formulaParseDiagnostics: result.formulaParseDiagnostics ?? result.formula_parse_diagnostics
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
@@ -259,6 +281,7 @@ module.exports = {
   normalizeGridExportResult,
   normalizeTransformBatchResult,
   normalizeStructureBatchResult,
+  normalizeReplaceInFormulasResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,
