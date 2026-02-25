@@ -2511,6 +2511,343 @@ fn write_failed(message: impl AsRef<str>) -> anyhow::Error {
     anyhow!("write failed: {}", message.as_ref())
 }
 
+// ── Named Range CRUD CLI ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct DefineNameCliResponse {
+    file: String,
+    name: String,
+    refers_to: String,
+    scope_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateNameCliResponse {
+    file: String,
+    name: String,
+    refers_to: String,
+    scope_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_refers_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteNameCliResponse {
+    file: String,
+    name: String,
+    deleted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn define_name(
+    file: PathBuf,
+    name: String,
+    refers_to: String,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{define_name_in_file, parse_scope_kind};
+
+    let scope_kind = parse_scope_kind(scope.as_deref())?;
+    if scope_kind == crate::model::NamedRangeScope::Sheet && scope_sheet_name.is_none() {
+        bail!("--scope-sheet-name is required when --scope is 'sheet'");
+    }
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+    if refers_to.trim().is_empty() {
+        bail!("refers_to must not be empty");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    let scope_str = match scope_kind {
+        crate::model::NamedRangeScope::Workbook => "workbook",
+        crate::model::NamedRangeScope::Sheet => "sheet",
+    };
+
+    match mode {
+        EditMutationMode::DryRun => {
+            // Validate only.
+            let _ = apply_to_temp_copy(&source, source.parent(), ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            apply_in_place_with_temp(&source, ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            apply_to_output_with_temp(&source, &target, f, ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_name(
+    file: PathBuf,
+    name: String,
+    refers_to: String,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{parse_scope_kind_optional, update_name_in_file};
+
+    let scope_kind = parse_scope_kind_optional(scope.as_deref())?;
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    match mode {
+        EditMutationMode::DryRun => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_to_temp_copy(&source, source.parent(), ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        Some(&refers_to),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?
+                .0;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_in_place_with_temp(&source, ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        Some(&refers_to),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_to_output_with_temp(&source, &target, f, ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        Some(&refers_to),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn delete_name(
+    file: PathBuf,
+    name: String,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{delete_name_in_file, parse_scope_kind_optional};
+
+    let scope_kind = parse_scope_kind_optional(scope.as_deref())?;
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    match mode {
+        EditMutationMode::DryRun => {
+            let _ = apply_to_temp_copy(&source, source.parent(), ".delname-", |path| {
+                delete_name_in_file(path, &name, scope_kind, scope_sheet_name.as_deref())
+            })?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            delete_name_in_file_via_helper(
+                &source,
+                &name,
+                scope_kind,
+                scope_sheet_name.as_deref(),
+            )?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            apply_to_output_with_temp(&source, &target, f, ".delname-", |path| {
+                delete_name_in_file(path, &name, scope_kind, scope_sheet_name.as_deref())
+            })?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+fn delete_name_in_file_via_helper(
+    source: &Path,
+    name: &str,
+    scope_kind: Option<crate::model::NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<bool> {
+    use crate::tools::delete_name_in_file;
+    apply_in_place_with_temp(source, ".delname-", |path| {
+        delete_name_in_file(path, name, scope_kind, scope_sheet_name)
+    })
+}
+
 pub fn parse_shorthand_for_tests(entries: Vec<String>) -> Result<(Vec<CellEdit>, Vec<Warning>)> {
     let mut edits = Vec::with_capacity(entries.len());
     let mut warnings = Vec::new();

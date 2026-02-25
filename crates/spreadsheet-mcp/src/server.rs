@@ -1,11 +1,12 @@
 use crate::config::ServerConfig;
 use crate::errors::InvalidParamsError;
 use crate::model::{
-    CloseWorkbookResponse, FindFormulaResponse, FindValueResponse, FormulaTraceResponse,
-    LayoutPageResponse, ManifestStubResponse, NamedRangesResponse, RangeValuesResponse,
-    ReadTableResponse, SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse,
-    SheetPageResponse, SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse,
-    VolatileScanResponse, WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    CloseWorkbookResponse, DefineNameResponse, DeleteNameResponse, FindFormulaResponse,
+    FindValueResponse, FormulaTraceResponse, LayoutPageResponse, ManifestStubResponse,
+    NamedRangesResponse, RangeValuesResponse, ReadTableResponse, SheetFormulaMapResponse,
+    SheetListResponse, SheetOverviewResponse, SheetPageResponse, SheetStatisticsResponse,
+    SheetStylesResponse, TableProfileResponse, UpdateNameResponse, VolatileScanResponse,
+    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
     WorkbookSummaryResponse,
 };
 use crate::response_prune::Pruned;
@@ -914,6 +915,66 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("structure_batch", e))
+    }
+
+    #[tool(
+        name = "define_name",
+        description = "Define a new named range in a fork. Scope: 'workbook' (default) or 'sheet'. \
+Requires scope_sheet_name when scope is 'sheet'."
+    )]
+    pub async fn define_name(
+        &self,
+        Parameters(params): Parameters<tools::DefineNameParams>,
+    ) -> Result<Json<DefineNameResponse>, McpError> {
+        self.ensure_recalc_enabled("define_name")
+            .map_err(|e| to_mcp_error_for_tool("define_name", e))?;
+        self.run_tool_with_timeout(
+            "define_name",
+            tools::define_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("define_name", e))
+    }
+
+    #[tool(
+        name = "update_name",
+        description = "Update an existing named range's refers_to in a fork. \
+Scope filter: 'workbook' or 'sheet' to disambiguate."
+    )]
+    pub async fn update_name(
+        &self,
+        Parameters(params): Parameters<tools::UpdateNameParams>,
+    ) -> Result<Json<UpdateNameResponse>, McpError> {
+        self.ensure_recalc_enabled("update_name")
+            .map_err(|e| to_mcp_error_for_tool("update_name", e))?;
+        self.run_tool_with_timeout(
+            "update_name",
+            tools::update_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("update_name", e))
+    }
+
+    #[tool(
+        name = "delete_name",
+        description = "Delete a named range from a fork. \
+Scope filter: 'workbook' or 'sheet' to disambiguate."
+    )]
+    pub async fn delete_name(
+        &self,
+        Parameters(params): Parameters<tools::DeleteNameParams>,
+    ) -> Result<Json<DeleteNameResponse>, McpError> {
+        self.ensure_recalc_enabled("delete_name")
+            .map_err(|e| to_mcp_error_for_tool("delete_name", e))?;
+        self.run_tool_with_timeout(
+            "delete_name",
+            tools::delete_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("delete_name", e))
     }
 
     #[tool(

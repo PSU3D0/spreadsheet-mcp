@@ -2,6 +2,7 @@
  * @typedef {object} BackendCapabilities
  * @property {boolean} supportsDescribeWorkbook
  * @property {boolean} supportsNamedRanges
+ * @property {boolean} supportsNamedRangeMutations
  * @property {boolean} supportsSheetOverview
  * @property {boolean} supportsListSheets
  * @property {boolean} supportsRangeValues
@@ -21,6 +22,7 @@
 const MCP_CAPABILITIES = Object.freeze({
   supportsDescribeWorkbook: true,
   supportsNamedRanges: true,
+  supportsNamedRangeMutations: true,
   supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,
@@ -40,6 +42,7 @@ const MCP_CAPABILITIES = Object.freeze({
 const WASM_CAPABILITIES = Object.freeze({
   supportsDescribeWorkbook: true,
   supportsNamedRanges: true,
+  supportsNamedRangeMutations: true,
   supportsSheetOverview: true,
   supportsListSheets: true,
   supportsRangeValues: true,

@@ -463,6 +463,95 @@ For broader discovery, use sheet-page, range-values, or layout-page."
         name_prefix: Option<String>,
     },
     #[command(
+        about = "Define a new named range in a workbook",
+        after_long_help = "Examples:\n  agent-spreadsheet define-name data.xlsx MyRange 'Sheet1!$A$1:$B$10'\n  agent-spreadsheet define-name data.xlsx SheetLocal 'Sheet1!$A$1' --scope sheet --scope-sheet-name Sheet1 --in-place"
+    )]
+    DefineName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to define")]
+        name: String,
+        #[arg(value_name = "REFERS_TO", help = "Range or formula the name refers to")]
+        refers_to: String,
+        #[arg(
+            long,
+            value_name = "SCOPE",
+            help = "Scope: workbook (default) or sheet"
+        )]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name when scope is 'sheet'"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Update an existing named range's refers_to address",
+        after_long_help = "Examples:\n  agent-spreadsheet update-name data.xlsx MyRange 'Sheet1!$A$1:$C$20' --in-place\n  agent-spreadsheet update-name data.xlsx SheetLocal 'Sheet1!$B$2' --scope sheet --scope-sheet-name Sheet1 --in-place"
+    )]
+    UpdateName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to update")]
+        name: String,
+        #[arg(
+            value_name = "REFERS_TO",
+            help = "New range or formula the name refers to"
+        )]
+        refers_to: String,
+        #[arg(long, value_name = "SCOPE", help = "Scope filter: workbook or sheet")]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name to disambiguate"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Delete a named range from a workbook",
+        after_long_help = "Examples:\n  agent-spreadsheet delete-name data.xlsx MyRange --in-place\n  agent-spreadsheet delete-name data.xlsx SheetLocal --scope sheet --scope-sheet-name Sheet1 --in-place"
+    )]
+    DeleteName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to delete")]
+        name: String,
+        #[arg(long, value_name = "SCOPE", help = "Scope filter: workbook or sheet")]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name to disambiguate"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
         about = "Find formulas containing a text query with pagination",
         after_long_help = "Examples:\n  agent-spreadsheet find-formula data.xlsx SUM(\n  agent-spreadsheet find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50\n\nRelated:\n  Use inspect-cells for per-cell formula/value/cached/style snapshots in a target range."
     )]
@@ -1299,6 +1388,76 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             name_prefix,
         } => commands::read::named_ranges(file, sheet, name_prefix).await,
+        Commands::DefineName {
+            file,
+            name,
+            refers_to,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::define_name(
+                file,
+                name,
+                refers_to,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
+        Commands::UpdateName {
+            file,
+            name,
+            refers_to,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::update_name(
+                file,
+                name,
+                refers_to,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
+        Commands::DeleteName {
+            file,
+            name,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::delete_name(
+                file,
+                name,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
         Commands::FindFormula {
             file,
             query,

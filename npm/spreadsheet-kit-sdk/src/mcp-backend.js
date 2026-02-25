@@ -118,6 +118,57 @@ class McpBackend {
     return normalizeNamedRangesResult(result, workbookId)
   }
 
+  async defineName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "defineName")
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
+    )
+    const name = requiredString(input.name, "name")
+    const refersTo = requiredString(input.refersTo || input.refers_to, "refersTo")
+    return this._call("define_name", {
+      ...input,
+      fork_id: forkId,
+      name,
+      refers_to: refersTo,
+      scope: input.scope,
+      scope_sheet_name: input.scope_sheet_name ?? input.scopeSheetName
+    })
+  }
+
+  async updateName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "updateName")
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
+    )
+    const name = requiredString(input.name, "name")
+    return this._call("update_name", {
+      ...input,
+      fork_id: forkId,
+      name,
+      refers_to: input.refersTo ?? input.refers_to,
+      scope: input.scope,
+      scope_sheet_name: input.scope_sheet_name ?? input.scopeSheetName
+    })
+  }
+
+  async deleteName(input = {}) {
+    requireCapability(this, "supportsNamedRangeMutations", "deleteName")
+    const forkId = requiredString(
+      input.forkId || input.fork_id || input.workbookId || input.workbook_id || input.contextId,
+      "forkId"
+    )
+    const name = requiredString(input.name, "name")
+    return this._call("delete_name", {
+      ...input,
+      fork_id: forkId,
+      name,
+      scope: input.scope,
+      scope_sheet_name: input.scope_sheet_name ?? input.scopeSheetName
+    })
+  }
+
   async sheetOverview(input = {}) {
     requireCapability(this, "supportsSheetOverview", "sheetOverview")
     const workbookId = requiredString(

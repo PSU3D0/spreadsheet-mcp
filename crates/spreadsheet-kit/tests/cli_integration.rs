@@ -7507,3 +7507,252 @@ fn structure_batch_dry_run_without_impact_flags_is_backward_compatible() {
         "formula_delta_preview should be absent when not requested"
     );
 }
+
+// ── Named Range CRUD Tests ───────────────────────────────────────────────────
+
+#[test]
+fn cli_define_name_dry_run_validates_without_mutating() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-dry-run.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "NewRange",
+        "Sheet1!$A$1:$C$4",
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "NewRange");
+    assert_eq!(payload["refers_to"], "Sheet1!$A$1:$C$4");
+    assert_eq!(payload["scope_kind"], "workbook");
+    assert_eq!(payload["dry_run"], true);
+
+    // Verify the original file is unchanged: no NewRange should exist.
+    let check = run_cli(&["named-ranges", file, "--name-prefix", "NewRange"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    // Empty arrays are pruned by the output layer, so items may be absent or empty.
+    let items = check_payload["items"].as_array();
+    assert!(
+        items.is_none() || items.unwrap().is_empty(),
+        "dry-run should not have mutated the file"
+    );
+}
+
+#[test]
+fn cli_define_name_in_place_creates_workbook_scoped_name() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-inplace.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "TotalSales",
+        "Sheet1!$B$2:$B$4",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "TotalSales");
+    assert_eq!(payload["scope_kind"], "workbook");
+    assert_eq!(payload["dry_run"], false);
+
+    // Verify the name is now visible.
+    let check = run_cli(&["named-ranges", file, "--name-prefix", "TotalSales"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    let items = check_payload["items"].as_array().expect("items array");
+    assert!(
+        !items.is_empty(),
+        "TotalSales should exist after define-name --in-place"
+    );
+    assert_eq!(items[0]["name"], "TotalSales");
+}
+
+#[test]
+fn cli_define_name_sheet_scoped_with_output() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-sheet.xlsx");
+    let output_path = tmp.path().join("define-name-sheet-out.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+    let output_file = output_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "LocalName",
+        "Sheet1!$A$1",
+        "--scope",
+        "sheet",
+        "--scope-sheet-name",
+        "Sheet1",
+        "--output",
+        output_file,
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "LocalName");
+    assert_eq!(payload["scope_kind"], "sheet");
+    assert_eq!(payload["scope_sheet_name"], "Sheet1");
+
+    // Verify in the output file.
+    let check = run_cli(&["named-ranges", output_file, "--name-prefix", "LocalName"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    let items = check_payload["items"].as_array().expect("items array");
+    assert!(!items.is_empty(), "LocalName should exist in output file");
+}
+
+#[test]
+fn cli_update_name_in_place_changes_refers_to() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("update-name.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // First define a name.
+    let def = run_cli(&[
+        "define-name",
+        file,
+        "MyRange",
+        "Sheet1!$A$1:$B$2",
+        "--in-place",
+    ]);
+    assert!(def.status.success(), "define failed: {:?}", def.stderr);
+
+    // Update it.
+    let output = run_cli(&[
+        "update-name",
+        file,
+        "MyRange",
+        "Sheet1!$A$1:$D$10",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "MyRange");
+    assert_eq!(payload["refers_to"], "Sheet1!$A$1:$D$10");
+    assert!(payload["previous_refers_to"].is_string());
+    assert_eq!(payload["dry_run"], false);
+}
+
+#[test]
+fn cli_update_name_scope_only_keeps_existing_refers_to() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("update-name-scope-only.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let def = run_cli(&[
+        "define-name",
+        file,
+        "ScopeOnlyName",
+        "Sheet1!$A$1:$B$2",
+        "--in-place",
+    ]);
+    assert!(def.status.success(), "define failed: {:?}", def.stderr);
+
+    let output = run_cli(&[
+        "update-name",
+        file,
+        "ScopeOnlyName",
+        "--scope",
+        "sheet",
+        "--scope-sheet-name",
+        "Sheet1",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "ScopeOnlyName");
+    assert_eq!(payload["refers_to"], "'Sheet1'!$A$1:$B$2");
+    assert_eq!(payload["scope_kind"], "sheet");
+    assert_eq!(payload["scope_sheet_name"], "Sheet1");
+    assert!(payload["previous_refers_to"].is_string());
+}
+
+#[test]
+fn cli_delete_name_in_place_removes_name() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("delete-name.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // The fixture already has Sales_Amount.
+    let before = run_cli(&["named-ranges", file, "--name-prefix", "Sales_Amount"]);
+    assert!(before.status.success());
+    let before_payload = parse_stdout_json(&before);
+    let before_items = before_payload["items"].as_array().expect("items");
+    assert!(
+        !before_items.is_empty(),
+        "Sales_Amount should exist before delete"
+    );
+
+    let output = run_cli(&["delete-name", file, "Sales_Amount", "--in-place"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "Sales_Amount");
+    assert_eq!(payload["deleted"], true);
+
+    // Verify it's gone.
+    let after = run_cli(&["named-ranges", file, "--name-prefix", "Sales_Amount"]);
+    assert!(after.status.success());
+    let after_payload = parse_stdout_json(&after);
+    let after_items = after_payload["items"].as_array();
+    assert!(
+        after_items.is_none() || after_items.unwrap().is_empty(),
+        "Sales_Amount should not exist after delete"
+    );
+}
+
+#[test]
+fn cli_delete_name_not_found_returns_error() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("delete-name-notfound.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["delete-name", file, "NonExistent", "--in-place"]);
+    assert!(
+        !output.status.success(),
+        "should fail for non-existent name"
+    );
+}
+
+#[test]
+fn cli_named_ranges_includes_scope_metadata() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("scope-metadata.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["named-ranges", file]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    let items = payload["items"].as_array().expect("items array");
+    assert!(!items.is_empty());
+
+    // All items should have scope_kind.
+    for item in items {
+        let scope_kind = item["scope_kind"].as_str();
+        assert!(
+            scope_kind == Some("workbook") || scope_kind == Some("sheet"),
+            "item {:?} should have scope_kind 'workbook' or 'sheet', got {:?}",
+            item["name"],
+            scope_kind
+        );
+        if scope_kind == Some("sheet") {
+            assert!(
+                item["scope_sheet_name"].is_string(),
+                "sheet-scoped item should have scope_sheet_name"
+            );
+        }
+    }
+}

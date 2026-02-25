@@ -311,6 +311,83 @@ impl SessionApi {
         Ok(response)
     }
 
+    pub fn define_name(
+        &self,
+        session_id: &str,
+        name: &str,
+        refers_to: &str,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> SessionResult<spreadsheet_kit::model::DefineNameResponse> {
+        let mut store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response = session
+            .define_name(name, refers_to, scope, scope_sheet_name)
+            .map_err(|err| SessionApiError::InvalidArgument {
+                message: err.to_string(),
+            })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
+    pub fn update_name(
+        &self,
+        session_id: &str,
+        name: &str,
+        refers_to: Option<&str>,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> SessionResult<spreadsheet_kit::model::UpdateNameResponse> {
+        let mut store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response = session
+            .update_name(name, refers_to, scope, scope_sheet_name)
+            .map_err(|err| SessionApiError::InvalidArgument {
+                message: err.to_string(),
+            })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
+    pub fn delete_name(
+        &self,
+        session_id: &str,
+        name: &str,
+        scope: Option<&str>,
+        scope_sheet_name: Option<&str>,
+    ) -> SessionResult<spreadsheet_kit::model::DeleteNameResponse> {
+        let mut store = self.lock_store()?;
+        let session =
+            store
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| SessionApiError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
+
+        let mut response = session
+            .delete_name(name, scope, scope_sheet_name)
+            .map_err(|err| SessionApiError::InvalidArgument {
+                message: err.to_string(),
+            })?;
+        response.workbook_id = spreadsheet_kit::model::WorkbookId(session_id.to_string());
+        Ok(response)
+    }
+
     pub fn sheet_overview(
         &self,
         session_id: &str,
@@ -586,6 +663,73 @@ mod wasm_bindings {
     #[wasm_bindgen(js_name = namedRanges)]
     pub fn named_ranges_js(session_id: String) -> Result<JsValue, JsValue> {
         let result = api().named_ranges(&session_id).map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = defineName)]
+    pub fn define_name_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DefineNameJsParams {
+            name: String,
+            refers_to: String,
+            scope: Option<String>,
+            scope_sheet_name: Option<String>,
+        }
+        let p: DefineNameJsParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api()
+            .define_name(
+                &session_id,
+                &p.name,
+                &p.refers_to,
+                p.scope.as_deref(),
+                p.scope_sheet_name.as_deref(),
+            )
+            .map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = updateName)]
+    pub fn update_name_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct UpdateNameJsParams {
+            name: String,
+            refers_to: Option<String>,
+            scope: Option<String>,
+            scope_sheet_name: Option<String>,
+        }
+        let p: UpdateNameJsParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api()
+            .update_name(
+                &session_id,
+                &p.name,
+                p.refers_to.as_deref(),
+                p.scope.as_deref(),
+                p.scope_sheet_name.as_deref(),
+            )
+            .map_err(to_js_error)?;
+        to_js_value(&result)
+    }
+
+    #[wasm_bindgen(js_name = deleteName)]
+    pub fn delete_name_js(session_id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DeleteNameJsParams {
+            name: String,
+            scope: Option<String>,
+            scope_sheet_name: Option<String>,
+        }
+        let p: DeleteNameJsParams = from_js_value(params).map_err(to_js_error)?;
+        let result = api()
+            .delete_name(
+                &session_id,
+                &p.name,
+                p.scope.as_deref(),
+                p.scope_sheet_name.as_deref(),
+            )
+            .map_err(to_js_error)?;
         to_js_value(&result)
     }
 
