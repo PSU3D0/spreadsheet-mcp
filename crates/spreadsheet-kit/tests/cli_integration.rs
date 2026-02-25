@@ -7756,3 +7756,277 @@ fn cli_named_ranges_includes_scope_metadata() {
         }
     }
 }
+
+// ─── 4105: Recalculate output mode and stateless safety ───
+
+#[test]
+fn cli_recalculate_in_place_preserves_existing_behavior() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("recalc-inplace.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", file]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert!(payload["file"].as_str().is_some(), "file field present");
+    assert!(
+        payload["backend"].as_str().is_some(),
+        "backend field present"
+    );
+    assert!(
+        payload["duration_ms"].as_u64().is_some(),
+        "duration_ms present"
+    );
+    // In-place mode should NOT have source_path/target_path/changed
+    assert!(
+        payload.get("source_path").is_none(),
+        "in-place should not emit source_path"
+    );
+    assert!(
+        payload.get("target_path").is_none(),
+        "in-place should not emit target_path"
+    );
+    assert!(
+        payload.get("changed").is_none(),
+        "in-place should not emit changed"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_mode_copies_and_recalcs_target() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-output-source.xlsx");
+    let target_path = tmp.path().join("recalc-output-target.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    // Capture source bytes before recalc
+    let source_bytes_before = fs::read(&source_path).expect("read source before");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+
+    // Response metadata fields
+    assert!(
+        payload["source_path"].as_str().is_some(),
+        "source_path should be present in output mode"
+    );
+    assert!(
+        payload["target_path"].as_str().is_some(),
+        "target_path should be present in output mode"
+    );
+    assert_eq!(
+        payload["changed"], true,
+        "changed should be true in output mode"
+    );
+
+    // file field points to the target
+    assert_json_path_eq(&payload, "target_path", target);
+    assert_json_path_eq(&payload, "source_path", source);
+
+    // Target file should exist
+    assert!(
+        target_path.exists(),
+        "target file should exist after recalculate --output"
+    );
+
+    // Source should be unchanged
+    let source_bytes_after = fs::read(&source_path).expect("read source after");
+    assert_eq!(
+        source_bytes_before, source_bytes_after,
+        "source file should remain unchanged in output mode"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_mode_rejects_existing_target_without_force() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-target.xlsx");
+    write_fixture(&source_path);
+    // Create an existing target
+    write_fixture(&target_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(
+        !output.status.success(),
+        "should fail when target exists without --force"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "OUTPUT_EXISTS", "unexpected error: {err}");
+}
+
+#[test]
+fn cli_recalculate_output_mode_allows_existing_target_with_force() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-ok-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-ok-target.xlsx");
+    write_fixture(&source_path);
+    write_fixture(&target_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target, "--force"]);
+    assert!(
+        output.status.success(),
+        "should succeed with --force, stderr: {:?}",
+        output.stderr
+    );
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["changed"], true);
+    assert_json_path_eq(&payload, "target_path", target);
+}
+
+#[test]
+fn cli_recalculate_output_force_failure_preserves_existing_target() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-fail-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-fail-target.xlsx");
+
+    // Invalid source payload to force recalc failure.
+    fs::write(&source_path, b"not-an-xlsx").expect("write invalid source");
+    write_fixture(&target_path);
+
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let target_before = fs::read(&target_path).expect("read target before");
+
+    let output = run_cli(&["recalculate", source, "--output", target, "--force"]);
+    assert!(
+        !output.status.success(),
+        "recalc should fail for invalid source payload"
+    );
+
+    // Existing target must remain untouched on failure.
+    assert!(
+        target_path.exists(),
+        "target should still exist after failure"
+    );
+    let target_after = fs::read(&target_path).expect("read target after");
+    assert_eq!(
+        target_before, target_after,
+        "existing target content should be preserved on recalc failure"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_rejects_same_path_as_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-same.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", source]);
+    assert!(
+        !output.status.success(),
+        "should fail when output == source"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(
+        err["code"], "INVALID_ARGUMENT",
+        "unexpected error envelope: {err}"
+    );
+}
+
+#[test]
+fn cli_recalculate_force_without_output_is_invalid() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-alone.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--force"]);
+    assert!(
+        !output.status.success(),
+        "should fail when --force used without --output"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(
+        err["code"], "INVALID_ARGUMENT",
+        "unexpected error envelope: {err}"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_invalid_parent_dir_returns_error() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-invalid-output.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let bad_target = tmp.path().join("nonexistent_dir").join("output.xlsx");
+    let target = bad_target.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(
+        !output.status.success(),
+        "should fail when output parent dir doesn't exist"
+    );
+}
+
+#[test]
+fn cli_recalculate_help_shows_output_mode_docs() {
+    let help = run_cli(&["recalculate", "--help"]);
+    assert!(help.status.success(), "stderr: {:?}", help.stderr);
+    let text = parse_stdout_text(&help);
+    assert!(text.contains("--output"), "help should document --output");
+    assert!(text.contains("--force"), "help should document --force");
+    assert!(
+        text.contains("source stays unchanged"),
+        "help should explain source safety"
+    );
+}
+
+#[test]
+fn cli_recalculate_parse_output_and_force_flags() {
+    use clap::Parser;
+    use spreadsheet_kit::cli::{Cli, Commands};
+
+    let cli = Cli::try_parse_from([
+        "agent-spreadsheet",
+        "recalculate",
+        "workbook.xlsx",
+        "--output",
+        "out.xlsx",
+        "--force",
+    ])
+    .expect("parse recalculate with output and force");
+
+    match cli.command {
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+        } => {
+            assert_eq!(file, PathBuf::from("workbook.xlsx"));
+            assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+            assert!(force);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+
+    // Without output/force
+    let cli2 = Cli::try_parse_from(["agent-spreadsheet", "recalculate", "workbook.xlsx"])
+        .expect("parse recalculate without flags");
+
+    match cli2.command {
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+        } => {
+            assert_eq!(file, PathBuf::from("workbook.xlsx"));
+            assert!(output.is_none());
+            assert!(!force);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}

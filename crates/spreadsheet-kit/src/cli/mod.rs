@@ -1303,10 +1303,21 @@ Formula parse policy:
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
     },
-    #[command(about = "Recalculate workbook formulas")]
+    #[command(
+        about = "Recalculate workbook formulas",
+        after_long_help = "Examples:\n  agent-spreadsheet recalculate data.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx --force\n\nDefault (no flags): recalculate the file in-place.\n--output <PATH>: copy source to output, recalculate the copy, leave source unchanged.\n--force: allow overwriting an existing --output file."
+    )]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Recalculate into this output path (source stays unchanged)"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
     },
     #[command(
         about = "Diff two workbook versions and report changed cells",
@@ -1881,7 +1892,11 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
-        Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+        } => commands::recalc::recalculate(file, output, force).await,
         Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
         Commands::RunManifest {
             file,

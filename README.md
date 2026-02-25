@@ -247,7 +247,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
 | `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
 | `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
-| `recalculate <file>` | Recalculate formulas via backend |
+| `recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
 | `diff <original> <modified>` | Diff two workbook versions |
 
 #### Formula write-path provenance (`write_path_provenance`)
