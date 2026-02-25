@@ -2,11 +2,11 @@ use crate::config::ServerConfig;
 use crate::errors::InvalidParamsError;
 use crate::model::{
     CloseWorkbookResponse, DefineNameResponse, DeleteNameResponse, FindFormulaResponse,
-    FindValueResponse, FormulaTraceResponse, LayoutPageResponse, ManifestStubResponse,
-    NamedRangesResponse, RangeValuesResponse, ReadTableResponse, SheetFormulaMapResponse,
-    SheetListResponse, SheetOverviewResponse, SheetPageResponse, SheetStatisticsResponse,
-    SheetStylesResponse, TableProfileResponse, UpdateNameResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    FindValueResponse, FormulaTraceResponse, InspectCellsResponse, LayoutPageResponse,
+    ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
+    SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
+    SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, UpdateNameResponse,
+    VolatileScanResponse, WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
     WorkbookSummaryResponse,
 };
 use crate::response_prune::Pruned;
@@ -52,7 +52,11 @@ Use range param to scope to specific region.
 - formula_trace: Trace ONE cell's precedents/dependents. Use AFTER formula_map \
 to dive deep on specific outputs (e.g., trace the total cell to understand calc flow).
 - sheet_page: Raw cell dump. Use ONLY when region detection fails or for \
-unstructured sheets. Prefer read_table for tabular data.
+unstructured sheets. Prefer read_table for tabular data. \
+Responses include a budget object with cell/byte limits and continuation hints when truncated.
+- inspect_cells: Strict detail-view for up to 25 cells. Returns full metadata (value, formula, \
+style, number format) per cell. Use for spot-checking specific cells AFTER discovering them \
+via sheet_overview or find_value. NOT for bulk reads — use sheet-page or range-values instead.
 - find_value with mode='label': For key-value layouts (label in col A, value in col B). \
 Use direction='right' or 'below' hints.
 - find_formula: Search formulas. Default returns no context and only first 50 matches. \
@@ -74,6 +78,8 @@ OUTPUT DEFAULTS (token-dense profile):
 - list_sheets defaults to include_bounds=false (no row/column counts). Set include_bounds=true to show them.
 - workbook_summary defaults to summary_only=true (no entry points/named ranges). Set summary_only=false or include_entry_points/include_named_ranges.
 - Pagination fields (next_offset/next_start_row) only appear when more data exists.
+- Read surfaces (sheet_page, inspect_cells) include a budget object when truncation occurs \
+or limits are configured. Check budget.continuation for agent-safe next-step guidance.
 
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 
@@ -452,6 +458,25 @@ impl SpreadsheetServer {
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("range_values", e))
+    }
+
+    #[tool(
+        name = "inspect_cells",
+        description = "Detail-view: inspect up to 25 individual cells with full metadata (value, formula, style, number format). Use sheet-page or range-values for bulk reads."
+    )]
+    pub async fn inspect_cells(
+        &self,
+        Parameters(params): Parameters<tools::InspectCellsParams>,
+    ) -> Result<Json<InspectCellsResponse>, McpError> {
+        self.ensure_tool_enabled("inspect_cells")
+            .map_err(|e| to_mcp_error_for_tool("inspect_cells", e))?;
+        self.run_tool_with_timeout(
+            "inspect_cells",
+            tools::inspect_cells(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("inspect_cells", e))
     }
 
     #[tool(

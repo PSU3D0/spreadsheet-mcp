@@ -815,6 +815,7 @@ pub async fn sheet_page(
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();
     let cells_per_row = page.rows.first().map(|row| row.cells.len()).unwrap_or(0);
+    let original_row_count = page.rows.len();
     let mut row_limit = cap_rows_by_cells(page.rows.len(), cells_per_row, max_cells);
 
     if row_limit > 0 {
@@ -834,7 +835,8 @@ pub async fn sheet_page(
         });
     }
 
-    if row_limit < page.rows.len() {
+    let truncated = row_limit < original_row_count;
+    if truncated {
         page.rows.truncate(row_limit);
     }
 
@@ -849,7 +851,32 @@ pub async fn sheet_page(
         None
     };
 
-    Ok(build_sheet_page_response(
+    let rows_returned = page.rows.len();
+    let cells_returned = rows_returned * cells_per_row;
+    let total_rows_available = metrics.metrics.row_count;
+
+    // Build budget metadata when truncation occurred or limits are configured.
+    let budget = if truncated || max_cells.is_some() || max_payload_bytes.is_some() {
+        let continuation = next_start_row.map(|nsr| {
+            format!(
+                "use start_row={} to fetch the next page ({} rows remaining)",
+                nsr,
+                total_rows_available.saturating_sub(last_row_index)
+            )
+        });
+        Some(ReadBudget {
+            max_cells,
+            max_payload_bytes,
+            rows_returned,
+            cells_returned,
+            total_rows_available: Some(total_rows_available),
+            continuation,
+        })
+    } else {
+        None
+    };
+
+    let mut response = build_sheet_page_response(
         &workbook,
         &params.sheet_name,
         format,
@@ -857,7 +884,10 @@ pub async fn sheet_page(
         &page.header,
         &page.rows,
         next_start_row,
-    ))
+    );
+    response.truncated = truncated;
+    response.budget = budget;
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2187,6 +2217,8 @@ fn build_sheet_page_response(
         compact: compact_payload,
         values_only: values_only_payload,
         format,
+        truncated: false,
+        budget: None,
     }
 }
 
@@ -4240,6 +4272,7 @@ pub async fn inspect_cells(
         Ok::<_, anyhow::Error>(out)
     })??;
 
+    let total_requested = coords.len();
     let mut truncated = false;
     let cell_limit = cap_rows_by_payload_bytes(cells.len(), max_payload_bytes, |count| {
         let response = InspectCellsResponse {
@@ -4253,6 +4286,7 @@ pub async fn inspect_cells(
             },
             cells: cells[..count].to_vec(),
             truncated: false,
+            budget: None,
         };
         serde_json::to_vec(&response)
             .map(|payload| payload.len())
@@ -4262,6 +4296,23 @@ pub async fn inspect_cells(
         cells.truncate(cell_limit);
         truncated = true;
     }
+
+    let cells_returned = cells.len();
+    let budget = Some(ReadBudget {
+        max_cells: Some(detail_limit),
+        max_payload_bytes,
+        rows_returned: cells_returned,
+        cells_returned,
+        total_rows_available: Some(total_requested as u32),
+        continuation: if truncated {
+            Some(
+                "inspect-cells is a strict detail-view tool; narrow your targets or use sheet-page / range-values for bulk reads"
+                    .to_string(),
+            )
+        } else {
+            None
+        },
+    });
 
     Ok(InspectCellsResponse {
         workbook_id: workbook.id.clone(),
@@ -4274,6 +4325,7 @@ pub async fn inspect_cells(
         },
         cells,
         truncated,
+        budget,
     })
 }
 

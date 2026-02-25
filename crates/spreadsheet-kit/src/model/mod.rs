@@ -221,6 +221,40 @@ pub struct SheetPageResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values_only: Option<SheetPageValues>,
     pub format: SheetPageFormat,
+    /// True when the response was truncated by cell/payload budget limits.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    /// Machine-consumable budget/continuation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ReadBudget>,
+}
+
+/// Machine-consumable output-budget metadata attached to read-surface responses.
+///
+/// Allows agents to detect truncation deterministically and build continuation
+/// requests without guessing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadBudget {
+    /// Maximum cells allowed in a single response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cells: Option<usize>,
+    /// Maximum payload bytes allowed in a single response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_payload_bytes: Option<usize>,
+    /// Number of rows actually returned.
+    pub rows_returned: usize,
+    /// Number of cells actually returned.
+    pub cells_returned: usize,
+    /// Total rows available in the queried range (if known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows_available: Option<u32>,
+    /// Human/agent-readable continuation hint (e.g. "use start_row=51 to continue").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<String>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -982,6 +1016,9 @@ pub struct InspectCellsResponse {
     pub targets: Vec<String>,
     pub cells: Vec<CellSnapshot>,
     pub truncated: bool,
+    /// Machine-consumable budget/continuation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ReadBudget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
