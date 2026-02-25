@@ -127,7 +127,6 @@ class McpBackend {
     const name = requiredString(input.name, "name")
     const refersTo = requiredString(input.refersTo || input.refers_to, "refersTo")
     return this._call("define_name", {
-      ...input,
       fork_id: forkId,
       name,
       refers_to: refersTo,
@@ -144,7 +143,6 @@ class McpBackend {
     )
     const name = requiredString(input.name, "name")
     return this._call("update_name", {
-      ...input,
       fork_id: forkId,
       name,
       refers_to: input.refersTo ?? input.refers_to,
@@ -161,7 +159,6 @@ class McpBackend {
     )
     const name = requiredString(input.name, "name")
     return this._call("delete_name", {
-      ...input,
       fork_id: forkId,
       name,
       scope: input.scope,
