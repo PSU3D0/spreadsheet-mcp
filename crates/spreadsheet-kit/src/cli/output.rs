@@ -30,11 +30,8 @@ pub fn emit_value(
 
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
-    if compact || quiet {
-        serde_json::to_writer(&mut handle, &value)?;
-    } else {
-        serde_json::to_writer_pretty(&mut handle, &value)?;
-    }
+    let _ = (compact, quiet);
+    serde_json::to_writer(&mut handle, &value)?;
     use std::io::Write;
     handle.write_all(b"\n")?;
     Ok(())
@@ -55,12 +52,9 @@ fn apply_shape(value: &mut Value, shape: OutputShape, projection_target: Compact
 }
 
 fn project_range_values_compact(value: &mut Value) {
-    // Policy (ticket 3104): compact mode only changes projection for range-values.
-    // Single-entry responses flatten `values[0]` into top-level fields; multi-entry
-    // responses retain the `values` array. Flattening is keyed by entry count and
-    // mandatory `range`, so continuation-only entries (`next_start_row`) remain
-    // representable even if payload branches were pruned.
-    flatten_single_range_values(value);
+    // Keep range-values contract stable across canonical/compact. Global pruning
+    // already removes empty wrappers before projection.
+    let _ = value;
 }
 
 fn project_read_table_compact(value: &mut Value) {
@@ -106,45 +100,6 @@ fn drop_empty_wrappers(target: &mut Map<String, Value>, keys: &[&str]) {
         if should_remove {
             target.remove(*key);
         }
-    }
-}
-
-fn flatten_single_range_values(value: &mut Value) {
-    let Value::Object(obj) = value else {
-        return;
-    };
-
-    let looks_like_range_values_response = obj.get("workbook_id").is_some()
-        && obj.get("sheet_name").is_some()
-        && obj.get("values").is_some();
-    if !looks_like_range_values_response {
-        return;
-    }
-
-    let Some(Value::Array(entries)) = obj.get("values") else {
-        return;
-    };
-
-    if entries.len() != 1 {
-        return;
-    }
-
-    let Some(Value::Object(entry)) = entries.first() else {
-        return;
-    };
-
-    if entry.get("range").is_none() {
-        return;
-    }
-
-    let entry_fields = entry.clone();
-    obj.remove("values");
-    merge_entry_fields(obj, entry_fields);
-}
-
-fn merge_entry_fields(target: &mut Map<String, Value>, entry_fields: Map<String, Value>) {
-    for (key, value) in entry_fields {
-        target.insert(key, value);
     }
 }
 
@@ -219,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_shape_3109_range_values_flattening_remains_targeted() {
+    fn compact_shape_3109_range_values_keeps_stable_shape() {
         let base_payload = json!({
             "workbook_id": "wb",
             "sheet_name": "Sheet1",
@@ -236,9 +191,8 @@ mod tests {
             OutputShape::Compact,
             CompactProjectionTarget::RangeValues,
         );
-        assert!(compact_range_values.get("values").is_none());
-        assert_eq!(compact_range_values["range"], json!("A1:B2"));
-        assert_eq!(compact_range_values["next_start_row"], json!(3));
+        assert!(compact_range_values.get("values").is_some());
+        assert!(compact_range_values.get("range").is_none());
 
         let mut compact_none_target = base_payload;
         apply_shape(

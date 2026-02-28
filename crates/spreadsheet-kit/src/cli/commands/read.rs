@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::cli::{
     FindValueMode, FormulaSort, LabelDirectionArg, LayoutModeArg, LayoutRenderArg,
-    SheetPageFormatArg, TableReadFormat, TableSampleModeArg, TraceDirectionArg,
+    RangeValuesFormatArg, SheetPageFormatArg, TableReadFormat, TableSampleModeArg,
+    TraceDirectionArg,
 };
 use crate::model::{
     FindMode, FormulaParsePolicy, LabelDirection, LayoutMode, LayoutRender, SheetPageFormat,
@@ -68,6 +69,7 @@ pub async fn range_values(
     file: PathBuf,
     sheet: String,
     ranges: Vec<String>,
+    format: Option<RangeValuesFormatArg>,
     include_formulas: Option<bool>,
 ) -> Result<Value> {
     if ranges.is_empty() {
@@ -76,6 +78,9 @@ pub async fn range_values(
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
     let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
+    let resolved_format = format
+        .map(map_range_values_format)
+        .unwrap_or(TableOutputFormat::Dense);
     let response = tools::range_values(
         state,
         RangeValuesParams {
@@ -84,7 +89,7 @@ pub async fn range_values(
             ranges,
             include_headers: None,
             include_formulas,
-            format: Some(TableOutputFormat::Json),
+            format: Some(resolved_format),
             page_size: None,
         },
     )
@@ -193,7 +198,13 @@ pub async fn inspect_cells(
     sheet: String,
     targets: Vec<String>,
     include_empty: bool,
+    budget: Option<u32>,
 ) -> Result<Value> {
+    if let Some(b) = budget {
+        if b < 1 || b > 200 {
+            bail!("--budget must be between 1 and 200 (got {b})");
+        }
+    }
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;
     let sheet = resolve_sheet_name(&state, &workbook_id, &sheet).await?;
@@ -204,6 +215,7 @@ pub async fn inspect_cells(
             sheet_name: sheet,
             targets,
             include_empty: Some(include_empty),
+            budget,
         },
     )
     .await?;
@@ -546,6 +558,16 @@ fn map_table_read_format(format: TableReadFormat) -> TableOutputFormat {
         TableReadFormat::Json => TableOutputFormat::Json,
         TableReadFormat::Values => TableOutputFormat::Values,
         TableReadFormat::Csv => TableOutputFormat::Csv,
+    }
+}
+
+fn map_range_values_format(format: RangeValuesFormatArg) -> TableOutputFormat {
+    match format {
+        RangeValuesFormatArg::Json => TableOutputFormat::Json,
+        RangeValuesFormatArg::Values => TableOutputFormat::Values,
+        RangeValuesFormatArg::Csv => TableOutputFormat::Csv,
+        RangeValuesFormatArg::Dense => TableOutputFormat::Dense,
+        RangeValuesFormatArg::Rows => TableOutputFormat::Rows,
     }
 }
 

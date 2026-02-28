@@ -27,7 +27,19 @@ impl RecalcBackend for FormualizerBackend {
         timeout_ms: Option<u64>,
     ) -> Result<RecalcResult> {
         let path = fork_work_path.to_path_buf();
-        tokio::task::spawn_blocking(move || recalc_sync(&path, timeout_ms)).await?
+        // Use a dedicated thread with a 32 MiB stack instead of
+        // tokio::task::spawn_blocking (which uses 2 MiB by default).
+        // Deep formula chains (e.g. 30k cascading rows) can exceed 2 MiB
+        // in debug builds.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("formualizer-recalc".into())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let _ = tx.send(recalc_sync(&path, timeout_ms));
+            })
+            .map_err(|e| anyhow!("failed to spawn recalc thread: {e}"))?;
+        rx.await.map_err(|_| anyhow!("recalc thread panicked"))?
     }
 
     fn is_available(&self) -> bool {

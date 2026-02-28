@@ -1,0 +1,5 @@
+# The Commands enum (50+ variants with nested subcommands) exceeds the default
+# 2 MiB test-thread stack when compiled in debug profile. 8 MiB matches the
+# main-thread default and avoids stack overflows in clap derive tests.
+[env]
+RUST_MIN_STACK = "8388608"

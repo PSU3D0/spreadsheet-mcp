@@ -397,7 +397,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let diff_help = run_cli(&["diff", "--help"]);
     assert!(diff_help.status.success(), "stderr: {:?}", diff_help.stderr);
     let diff = parse_stdout_text(&diff_help);
-    assert!(diff.contains("Diff two workbook versions and report changed cells"));
+    assert!(diff.contains("Diff two workbook versions with summary-first, paged details"));
     assert!(diff.contains("Examples:"));
     assert!(diff.contains("diff baseline.xlsx candidate.xlsx"));
 
@@ -423,7 +423,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(range.contains("Examples:"));
     assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
     assert!(range.contains("--include-formulas"));
-    assert!(range.contains("formulas matrix"));
+    assert!(range.contains("dense JSON encoding"));
+    assert!(range.contains("sparse list in dense mode"));
 
     let inspect_help = run_cli(&["inspect-cells", "--help"]);
     assert!(
@@ -433,7 +434,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     );
     let inspect = parse_stdout_text(&inspect_help);
     assert!(inspect.contains(
-        "Inspect detail snapshots for targeted A1 cells/ranges (detail view, max 25 cells)"
+        "Inspect detail snapshots for targeted A1 cells/ranges (detail view, default max 25 cells)"
     ));
     assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C3"));
     assert!(inspect.contains("--include-empty"));
@@ -541,8 +542,9 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`",
         "Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.",
         "Machine continuation example:",
-        "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
-        "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
+        "`range-values <file> <sheet> <range> [range...] [--format dense\\|json\\|values\\|csv] [--include-formulas]`",
+        "range-values default encoding:** dense JSON (`dense.encoding = \"dense_v1\"`)",
+        "range-values `--include-formulas`:** includes sparse formula coordinates in dense mode",
         "`inspect-cells <file> <sheet> <target> [target...] [--include-empty]`",
         "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
@@ -552,7 +554,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "#### Financial presentation starter defaults",
         "Keep label columns (often column A) explicitly sized",
         "Percent: `0.0%`",
-        "Compact (single range):** flatten that entry to top-level fields",
+        "range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
         "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
@@ -3138,7 +3140,7 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     assert_eq!(canonical_values.len(), 1);
     let canonical_entry = canonical_values.first().expect("single range entry");
     assert_eq!(canonical_entry["range"], "A1:C4");
-    assert!(canonical_entry.get("rows").is_some());
+    assert!(canonical_entry.get("dense").is_some());
 
     let compact = run_cli(&[
         "--shape",
@@ -3152,13 +3154,16 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     let compact_payload = parse_stdout_json(&compact);
     assert!(compact_payload.get("workbook_id").is_some());
     assert!(compact_payload.get("workbook_short_id").is_none());
-    assert!(compact_payload.get("values").is_none());
-    assert_eq!(compact_payload["range"], "A1:C4");
-    assert!(compact_payload.get("rows").is_some());
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact single-range values");
+    assert_eq!(compact_values.len(), 1);
+    assert_eq!(compact_values[0]["range"], "A1:C4");
+    assert!(compact_values[0].get("dense").is_some());
 }
 
 #[test]
-fn cli_range_values_include_formulas_returns_formula_matrix() {
+fn cli_range_values_include_formulas_returns_dense_sparse_formulas() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("range-values-include-formulas.xlsx");
     write_fixture(&workbook_path);
@@ -3184,11 +3189,14 @@ fn cli_range_values_include_formulas_returns_formula_matrix() {
         .cloned()
         .expect("range entry");
 
-    let formulas = entry["formulas"].as_array().expect("formulas matrix rows");
+    let dense = entry["dense"].as_object().expect("dense payload");
+    let formulas = dense["formulas"].as_array().expect("dense sparse formulas");
     assert_eq!(formulas.len(), 3);
-    assert_eq!(formulas[0][0].as_str(), Some("B2*2"));
-    assert_eq!(formulas[1][0].as_str(), Some("B3*2"));
-    assert_eq!(formulas[2][0].as_str(), Some("B4*2"));
+    assert_eq!(formulas[0]["row"].as_u64(), Some(0));
+    assert_eq!(formulas[0]["col"].as_u64(), Some(0));
+    assert_eq!(formulas[0]["formula"].as_str(), Some("B2*2"));
+    assert_eq!(formulas[1]["formula"].as_str(), Some("B3*2"));
+    assert_eq!(formulas[2]["formula"].as_str(), Some("B4*2"));
 
     let default_output = run_cli(&["range-values", file, "Sheet1", "C2:C4"]);
     assert!(
@@ -3203,10 +3211,60 @@ fn cli_range_values_include_formulas_returns_formula_matrix() {
         .first()
         .cloned()
         .expect("range entry");
+    let default_dense = default_entry["dense"].as_object().expect("dense payload");
+    let default_formulas = default_dense
+        .get("formulas")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        default_entry.get("formulas").is_none(),
-        "default range-values output should not include formulas field"
+        default_formulas.is_empty(),
+        "default range-values output should not include formulas"
     );
+}
+
+#[test]
+fn cli_range_values_dense_encoding_rolls_up_repeated_values() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("range-values-dense-rollup.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    let sheet = workbook
+        .get_sheet_by_name_mut("Sheet1")
+        .expect("default sheet exists");
+    for row in 1..=3 {
+        for col in ["A", "B", "C", "D", "E", "F"] {
+            sheet
+                .get_cell_mut(format!("{}{}", col, row).as_str())
+                .set_value("#NAME?");
+        }
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let output = run_cli(&["range-values", file, "Sheet1", "A1:F3"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    let entry = payload["values"]
+        .as_array()
+        .expect("values array")
+        .first()
+        .cloned()
+        .expect("range entry");
+    let dense = entry["dense"].as_object().expect("dense payload");
+
+    let dictionary = dense["dictionary"].as_array().expect("dictionary array");
+    assert!(dictionary.len() <= 2, "expected null + one repeated token");
+
+    let row_runs = dense["row_runs"].as_array().expect("row runs");
+    assert_eq!(row_runs.len(), 3);
+    for row in row_runs {
+        let runs = row.as_array().expect("run array");
+        assert_eq!(runs.len(), 1, "single run expected for repeated row");
+        assert_eq!(runs[0]["len"].as_u64(), Some(6));
+        assert_ne!(runs[0]["value_idx"].as_u64(), Some(0));
+    }
 }
 
 #[test]
@@ -3243,9 +3301,12 @@ fn cli_range_values_shape_continuation_representable_canonical_and_compact() {
     let compact_payload = parse_stdout_json(&compact);
     assert!(compact_payload.get("workbook_id").is_some());
     assert!(compact_payload.get("workbook_short_id").is_none());
-    assert!(compact_payload.get("values").is_none());
-    assert_eq!(compact_payload["range"], "A1:XFD1");
-    assert_eq!(compact_payload["next_start_row"].as_u64(), Some(1));
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact values array");
+    assert_eq!(compact_values.len(), 1);
+    assert_eq!(compact_values[0]["range"], "A1:XFD1");
+    assert_eq!(compact_values[0]["next_start_row"].as_u64(), Some(1));
 }
 
 #[test]
@@ -3295,7 +3356,7 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         .expect("canonical multi-range values");
     assert_eq!(canonical_values.len(), 2);
     assert!(canonical_values.iter().all(|entry| {
-        entry.get("range").and_then(Value::as_str).is_some() && entry.get("rows").is_some()
+        entry.get("range").and_then(Value::as_str).is_some() && entry.get("dense").is_some()
     }));
 
     let compact = run_cli(&[
@@ -3316,11 +3377,9 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         .as_array()
         .expect("compact multi-range values");
     assert_eq!(compact_values.len(), 2);
-    assert!(
-        compact_values
-            .iter()
-            .all(|entry| entry.get("range").and_then(Value::as_str).is_some())
-    );
+    assert!(compact_values.iter().all(|entry| {
+        entry.get("range").and_then(Value::as_str).is_some() && entry.get("dense").is_some()
+    }));
 }
 
 #[test]
@@ -5842,6 +5901,182 @@ fn cli_copy_edit_diff_are_stateless_and_persisted() {
 }
 
 #[test]
+fn cli_diff_defaults_to_summary_only() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-summary-original.xlsx");
+    let modified = tmp.path().join("diff-summary-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+        "C2==B2*3",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+    ]);
+    assert!(diff.status.success(), "stderr: {:?}", diff.stderr);
+
+    let payload = parse_stdout_json(&diff);
+    assert!(payload.get("summary").is_some());
+    assert!(payload.get("changes").is_none());
+    assert_eq!(payload["summary"]["returned_changes"].as_u64(), Some(0));
+    assert_eq!(
+        payload["summary"]["total_changes"].as_u64(),
+        payload["change_count"].as_u64()
+    );
+    assert!(
+        payload["summary"]["counts_by_kind"]["cell"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+}
+
+#[test]
+fn cli_diff_details_supports_pagination() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-page-original.xlsx");
+    let modified = tmp.path().join("diff-page-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+        "C2==B2*3",
+        "B3=25",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let first = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "1",
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+    assert_eq!(
+        first_payload["summary"]["returned_changes"].as_u64(),
+        Some(1)
+    );
+    let first_changes = first_payload["changes"].as_array().expect("changes page");
+    assert_eq!(first_changes.len(), 1);
+    let next_offset = first_payload["summary"]["next_offset"]
+        .as_u64()
+        .expect("next offset");
+
+    let second = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "1",
+        "--offset",
+        &next_offset.to_string(),
+    ]);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    let second_payload = parse_stdout_json(&second);
+    let second_changes = second_payload["changes"].as_array().expect("changes page");
+    assert_eq!(second_changes.len(), 1);
+    assert_eq!(
+        second_payload["change_count"], first_payload["change_count"],
+        "paged requests must report stable total change_count"
+    );
+}
+
+#[test]
+fn cli_diff_sheet_and_range_filters_scope_results() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-filter-original.xlsx");
+    let modified = tmp.path().join("diff-filter-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let filtered = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "B2:B2",
+        "--details",
+        "--limit",
+        "50",
+    ]);
+    assert!(filtered.status.success(), "stderr: {:?}", filtered.stderr);
+    let payload = parse_stdout_json(&filtered);
+    assert_eq!(payload["change_count"].as_u64(), Some(1));
+
+    let changes = payload["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["address"].as_str(), Some("B2"));
+}
+
+#[test]
+fn cli_diff_rejects_invalid_range_filter() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-invalid-range-original.xlsx");
+    let modified = tmp.path().join("diff-invalid-range-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--range",
+        "NOT_A_RANGE",
+    ]);
+    assert!(!diff.status.success(), "diff should fail for invalid range");
+    let err = parse_stderr_json(&diff);
+    assert_eq!(err["code"], "INVALID_ARGUMENT", "unexpected error: {err}");
+}
+
+#[test]
+fn cli_diff_rejects_invalid_details_limit() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-invalid-limit-original.xlsx");
+    let modified = tmp.path().join("diff-invalid-limit-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "0",
+    ]);
+    assert!(!diff.status.success(), "diff should fail for limit=0");
+    let err = parse_stderr_json(&diff);
+    assert_eq!(err["code"], "INVALID_ARGUMENT", "unexpected error: {err}");
+}
+
+#[test]
 fn cli_edit_dry_run_reports_preview_and_preserves_source() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("edit-dry-run.xlsx");
@@ -7131,7 +7366,14 @@ fn cli_range_export_csv_and_range_import_from_csv_roundtrip() {
     ]);
     assert!(import.status.success(), "stderr: {:?}", import.stderr);
 
-    let read = run_cli(&["range-values", target, "Sheet1", "B2:C5"]);
+    let read = run_cli(&[
+        "range-values",
+        target,
+        "Sheet1",
+        "B2:C5",
+        "--format",
+        "json",
+    ]);
     assert!(read.status.success(), "stderr: {:?}", read.stderr);
     let payload = parse_stdout_json(&read);
     let rows = payload["values"][0]["rows"]
@@ -7167,7 +7409,14 @@ fn cli_range_export_csv_and_range_import_from_csv_roundtrip() {
         import_header.stderr
     );
 
-    let read_header = run_cli(&["range-values", target_header, "Sheet1", "A1:B3"]);
+    let read_header = run_cli(&[
+        "range-values",
+        target_header,
+        "Sheet1",
+        "A1:B3",
+        "--format",
+        "json",
+    ]);
     assert!(
         read_header.status.success(),
         "stderr: {:?}",
@@ -7293,7 +7542,14 @@ fn cli_range_import_from_csv_handles_quotes_crlf_and_blanks() {
     ]);
     assert!(import.status.success(), "stderr: {:?}", import.stderr);
 
-    let read = run_cli(&["range-values", target, "Sheet1", "A1:D3"]);
+    let read = run_cli(&[
+        "range-values",
+        target,
+        "Sheet1",
+        "A1:D3",
+        "--format",
+        "json",
+    ]);
     assert!(read.status.success(), "stderr: {:?}", read.stderr);
     let payload = parse_stdout_json(&read);
     let rows = payload["values"][0]["rows"]
@@ -8005,6 +8261,7 @@ fn cli_recalculate_parse_output_and_force_flags() {
             file,
             output,
             force,
+            ..
         } => {
             assert_eq!(file, PathBuf::from("workbook.xlsx"));
             assert_eq!(output, Some(PathBuf::from("out.xlsx")));
@@ -8022,6 +8279,7 @@ fn cli_recalculate_parse_output_and_force_flags() {
             file,
             output,
             force,
+            ..
         } => {
             assert_eq!(file, PathBuf::from("workbook.xlsx"));
             assert!(output.is_none());

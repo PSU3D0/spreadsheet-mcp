@@ -641,7 +641,9 @@ impl WorkbookSession {
                 rows: Some(rows),
                 formulas: None,
                 values: None,
+                dense: None,
                 csv: None,
+                rows_keyed: None,
                 next_start_row: None,
             });
         }

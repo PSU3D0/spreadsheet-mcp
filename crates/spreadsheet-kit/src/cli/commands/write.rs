@@ -1200,6 +1200,49 @@ pub async fn apply_formula_pattern(
     }
 }
 
+pub async fn check_ref_impact(
+    file: PathBuf,
+    ops_ref: String,
+    show_formula_delta: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+
+    // Load and parse the ops payload (same format as structure-batch).
+    let payload: OpsPayload<StructureOpInput> = parse_ops_payload(
+        &ops_ref,
+        STRUCTURE_PAYLOAD_SHAPE,
+        STRUCTURE_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
+    let (normalized, _warnings) = normalize_structure_batch(StructureBatchParamsInput {
+        fork_id: String::new(),
+        ops: payload.ops,
+        mode: None,
+        label: None,
+        formula_parse_policy: None,
+        impact_report: None,
+        show_formula_delta: None,
+    })
+    .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    // Call compute_structure_impact (read-only analysis, never mutates the file).
+    let (impact_report, formula_delta) =
+        crate::tools::structure_impact::compute_structure_impact(
+            &source,
+            &normalized.ops,
+            show_formula_delta,
+        )?;
+
+    // Build response JSON.
+    let mut response = serde_json::to_value(&impact_report)?;
+    if let Some(delta) = formula_delta {
+        response["formula_delta_preview"] = serde_json::to_value(&delta)?;
+    }
+    response["source_path"] = Value::String(source.display().to_string());
+
+    Ok(response)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn structure_batch(
     file: PathBuf,

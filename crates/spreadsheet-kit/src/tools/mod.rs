@@ -739,10 +739,10 @@ pub struct RangeValuesParams {
     /// Include detected header row (default: true)
     #[serde(default)]
     pub include_headers: Option<bool>,
-    /// Include formula text matrix aligned to JSON rows (default: false)
+    /// Include formula text payload (matrix for json, sparse list for dense) (default: false)
     #[serde(default)]
     pub include_formulas: Option<bool>,
-    /// Output format: "values" (default), "csv", or "json"
+    /// Output format: "dense" (default), "values", "csv", or "json"
     #[serde(default)]
     pub format: Option<TableOutputFormat>,
     /// Maximum rows per range before pagination
@@ -762,6 +762,10 @@ pub struct InspectCellsParams {
     /// Include empty cells in the response (default: false)
     #[serde(default)]
     pub include_empty: Option<bool>,
+    /// Override the per-request cell budget (default 25, max 200).
+    /// Values outside 1..=200 are rejected.
+    #[serde(default)]
+    pub budget: Option<u32>,
 }
 
 pub async fn sheet_page(
@@ -2012,8 +2016,10 @@ fn build_read_table_payload(
     };
 
     match format {
-        TableOutputFormat::Json => (headers_out, rows.to_vec(), None, types_out, None),
-        TableOutputFormat::Values => (
+        TableOutputFormat::Json | TableOutputFormat::Rows => {
+            (headers_out, rows.to_vec(), None, types_out, None)
+        }
+        TableOutputFormat::Values | TableOutputFormat::Dense => (
             headers_out,
             Vec::new(),
             Some(table_rows_to_values(headers, rows)),
@@ -2055,6 +2061,129 @@ fn cell_matrix_to_csv(rows: &[Vec<Option<CellValue>>]) -> String {
     csv
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum DensePrimitiveKey {
+    Text(String),
+    NumberBits(u64),
+    Bool(bool),
+}
+
+fn dense_key(value: &CellValuePrimitive) -> DensePrimitiveKey {
+    match value {
+        CellValuePrimitive::Text(text) => DensePrimitiveKey::Text(text.clone()),
+        CellValuePrimitive::Number(number) => DensePrimitiveKey::NumberBits(number.to_bits()),
+        CellValuePrimitive::Bool(flag) => DensePrimitiveKey::Bool(*flag),
+    }
+}
+
+fn row_to_dense_runs(indexes: &[u32]) -> Vec<RangeValuesDenseRun> {
+    if indexes.is_empty() {
+        return Vec::new();
+    }
+    let mut runs = Vec::new();
+    let mut current = indexes[0];
+    let mut len: u32 = 1;
+
+    for idx in indexes.iter().copied().skip(1) {
+        if idx == current {
+            len += 1;
+        } else {
+            runs.push(RangeValuesDenseRun {
+                value_idx: current,
+                len,
+            });
+            current = idx;
+            len = 1;
+        }
+    }
+
+    runs.push(RangeValuesDenseRun {
+        value_idx: current,
+        len,
+    });
+    runs
+}
+
+fn cell_matrix_to_dense(
+    rows: &[Vec<Option<CellValue>>],
+    formulas: Option<&[Vec<Option<String>>]>,
+) -> RangeValuesDensePayload {
+    let primitive_rows = cell_matrix_to_values(rows);
+    let mut dictionary: Vec<Option<CellValuePrimitive>> = vec![None];
+    let mut dict_index: HashMap<DensePrimitiveKey, u32> = HashMap::new();
+    let mut row_runs: Vec<Vec<RangeValuesDenseRun>> = Vec::with_capacity(primitive_rows.len());
+
+    for row in &primitive_rows {
+        let mut indexes = Vec::with_capacity(row.len());
+        for cell in row {
+            let idx = match cell {
+                None => 0,
+                Some(value) => {
+                    let key = dense_key(value);
+                    if let Some(existing) = dict_index.get(&key).copied() {
+                        existing
+                    } else {
+                        let next = dictionary.len() as u32;
+                        dictionary.push(Some(value.clone()));
+                        dict_index.insert(key, next);
+                        next
+                    }
+                }
+            };
+            indexes.push(idx);
+        }
+        row_runs.push(row_to_dense_runs(&indexes));
+    }
+
+    let dense_formulas = formulas
+        .map(|matrix| {
+            let mut out = Vec::new();
+            for (row_idx, row) in matrix.iter().enumerate() {
+                for (col_idx, formula) in row.iter().enumerate() {
+                    if let Some(formula) = formula {
+                        out.push(RangeValuesDenseFormula {
+                            row: row_idx as u32,
+                            col: col_idx as u32,
+                            formula: formula.clone(),
+                        });
+                    }
+                }
+            }
+            out
+        })
+        .unwrap_or_default();
+
+    let col_count = primitive_rows.first().map_or(0, |row| row.len() as u32);
+
+    RangeValuesDensePayload {
+        encoding: "dense_v1".to_string(),
+        col_count,
+        dictionary,
+        row_runs,
+        formulas: dense_formulas,
+    }
+}
+
+fn cell_matrix_to_rows_keyed(
+    range: &str,
+    rows: &[Vec<Option<CellValue>>],
+) -> Vec<RangeValuesRowEntry> {
+    let ((start_col, start_row), _) = parse_range(range).unwrap_or(((1, 1), (1, 1)));
+    let mut out = Vec::with_capacity(rows.len());
+    for (row_offset, row) in rows.iter().enumerate() {
+        let row_number = start_row + row_offset as u32;
+        let mut cells = std::collections::BTreeMap::new();
+        for (col_offset, cell) in row.iter().enumerate() {
+            if let Some(value) = cell {
+                let col_letter = column_number_to_name(start_col + col_offset as u32);
+                cells.insert(col_letter, cell_value_to_primitive(value));
+            }
+        }
+        out.push(RangeValuesRowEntry { row: row_number, cells });
+    }
+    out
+}
+
 fn build_range_values_entry(
     format: TableOutputFormat,
     range: &str,
@@ -2068,7 +2197,9 @@ fn build_range_values_entry(
             rows: Some(rows.to_vec()),
             formulas: formulas.map(|matrix| matrix.to_vec()),
             values: None,
+            dense: None,
             csv: None,
+            rows_keyed: None,
             next_start_row,
         },
         TableOutputFormat::Values => RangeValuesEntry {
@@ -2076,7 +2207,9 @@ fn build_range_values_entry(
             rows: None,
             formulas: None,
             values: Some(cell_matrix_to_values(rows)),
+            dense: None,
             csv: None,
+            rows_keyed: None,
             next_start_row,
         },
         TableOutputFormat::Csv => RangeValuesEntry {
@@ -2084,7 +2217,29 @@ fn build_range_values_entry(
             rows: None,
             formulas: None,
             values: None,
+            dense: None,
             csv: Some(cell_matrix_to_csv(rows)),
+            rows_keyed: None,
+            next_start_row,
+        },
+        TableOutputFormat::Dense => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            formulas: None,
+            values: None,
+            dense: Some(cell_matrix_to_dense(rows, formulas)),
+            csv: None,
+            rows_keyed: None,
+            next_start_row,
+        },
+        TableOutputFormat::Rows => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            formulas: None,
+            values: None,
+            dense: None,
+            csv: None,
+            rows_keyed: Some(cell_matrix_to_rows_keyed(range, rows)),
             next_start_row,
         },
     }
@@ -3979,7 +4134,7 @@ pub async fn range_values(
     let config = state.config();
     let output_profile = config.output_profile();
     let format = params.format.unwrap_or(match output_profile {
-        OutputProfile::TokenDense => TableOutputFormat::Values,
+        OutputProfile::TokenDense => TableOutputFormat::Dense,
         OutputProfile::Verbose => TableOutputFormat::Json,
     });
     let include_headers = params.include_headers.unwrap_or(false);
@@ -4013,8 +4168,8 @@ pub async fn range_values(
                         row_limit = row_limit.min(page_size as usize);
                     }
 
-                    let include_formula_matrix =
-                        include_formulas && matches!(format, TableOutputFormat::Json);
+                    let include_formula_matrix = include_formulas
+                        && matches!(format, TableOutputFormat::Json | TableOutputFormat::Dense);
                     let mut rows = Vec::new();
                     let mut formula_rows = include_formula_matrix.then(Vec::new);
                     for r in start_row..=end_row {
@@ -4103,8 +4258,8 @@ pub async fn range_values(
                         row_limit = row_limit.min(page_size as usize);
                     }
 
-                    let include_formula_matrix =
-                        include_formulas && matches!(format, TableOutputFormat::Json);
+                    let include_formula_matrix = include_formulas
+                        && matches!(format, TableOutputFormat::Json | TableOutputFormat::Dense);
                     let mut rows = Vec::new();
                     let mut formula_rows = include_formula_matrix.then(Vec::new);
                     for r in start_row..=end_row {
@@ -4207,6 +4362,7 @@ pub async fn inspect_cells(
     params: InspectCellsParams,
 ) -> Result<InspectCellsResponse> {
     const DETAIL_LIMIT: usize = 25;
+    const DETAIL_LIMIT_MAX: usize = 200;
 
     if params.targets.is_empty() {
         return Err(anyhow!(
@@ -4214,12 +4370,27 @@ pub async fn inspect_cells(
         ));
     }
 
+    if let Some(b) = params.budget {
+        if b < 1 || b as usize > DETAIL_LIMIT_MAX {
+            return Err(anyhow!(
+                "budget must be between 1 and {} (got {})",
+                DETAIL_LIMIT_MAX,
+                b
+            ));
+        }
+    }
+
+    let effective_cap = params
+        .budget
+        .map(|b| (b as usize).min(DETAIL_LIMIT_MAX))
+        .unwrap_or(DETAIL_LIMIT);
+
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let config = state.config();
     let detail_limit = config
         .max_cells()
-        .map(|limit| limit.min(DETAIL_LIMIT))
-        .unwrap_or(DETAIL_LIMIT)
+        .map(|limit| limit.min(effective_cap))
+        .unwrap_or(effective_cap)
         .max(1);
     let max_payload_bytes = config.max_payload_bytes();
     let include_empty = params.include_empty.unwrap_or(false);

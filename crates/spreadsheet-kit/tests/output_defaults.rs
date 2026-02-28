@@ -59,7 +59,7 @@ async fn read_table_defaults_to_csv() -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn range_values_defaults_to_values() -> Result<()> {
+async fn range_values_defaults_to_dense() -> Result<()> {
     let workspace = support::TestWorkspace::new();
     let _path = workspace.create_workbook("defaults.xlsx", build_simple_workbook);
     let state = workspace.app_state();
@@ -93,7 +93,13 @@ async fn range_values_defaults_to_values() -> Result<()> {
     .await?;
 
     let entry = &ranges.values[0];
-    assert!(entry.values.is_some());
+    let dense = entry
+        .dense
+        .as_ref()
+        .expect("dense output expected by default");
+    assert_eq!(dense.encoding, "dense_v1");
+    assert_eq!(dense.col_count, 3);
+    assert!(entry.values.is_none());
     assert!(entry.rows.is_none());
     assert!(entry.csv.is_none());
     assert!(entry.next_start_row.is_none());

@@ -169,6 +169,7 @@ async fn new_tools_cover_navigation_and_reads() -> Result<()> {
             sheet_name: "Inputs".into(),
             targets: vec!["B2:C3".into()],
             include_empty: Some(true),
+            budget: None,
         },
     )
     .await?;
