@@ -264,6 +264,7 @@ async fn inspect_cells_rejects_over_limit() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:E6".to_string()], // 5×6 = 30 cells
             include_empty: Some(false),
+            budget: None,
         },
     )
     .await;
@@ -303,6 +304,7 @@ async fn inspect_cells_returns_budget_metadata() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:C3".to_string()], // 3×3 = 9 cells, well under limit
             include_empty: Some(true),
+            budget: None,
         },
     )
     .await?;
@@ -343,6 +345,7 @@ async fn inspect_cells_respects_lower_config_limit() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:B5".to_string()], // 2×5 = 10
             include_empty: Some(true),
+            budget: None,
         },
     )
     .await?;
@@ -358,6 +361,7 @@ async fn inspect_cells_respects_lower_config_limit() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:B5".to_string(), "C1".to_string()], // 10 + 1 = 11
             include_empty: Some(false),
+            budget: None,
         },
     )
     .await;
@@ -386,6 +390,7 @@ async fn inspect_cells_payload_truncation_signals_budget() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:E5".to_string()], // 25 cells
             include_empty: Some(true),
+            budget: None,
         },
     )
     .await?;

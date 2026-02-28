@@ -308,6 +308,8 @@ pub enum TableOutputFormat {
     Json,
     Values,
     Csv,
+    Dense,
+    Rows,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
@@ -969,8 +971,7 @@ pub struct TableProfileResponse {
 /// `values` may be omitted when no valid entries remain (for example, fully invalid
 /// or unparseable range inputs).
 ///
-/// CLI `--shape compact` may project a single entry to top-level for token efficiency,
-/// but this struct remains the source-of-truth schema.
+/// CLI output keeps this stable top-level shape in both canonical and compact modes.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesResponse {
     pub workbook_id: WorkbookId,
@@ -982,10 +983,8 @@ pub struct RangeValuesResponse {
 
 /// Per-range payload for `range-values`.
 ///
-/// `range` is the mandatory correlation key in both canonical and compact shapes.
-/// `next_start_row` is an optional continuation cursor when output is truncated; it
-/// must stay representable both inside `values[]` (canonical) and after compact
-/// single-entry flattening.
+/// `range` is the mandatory correlation key in canonical and compact output.
+/// `next_start_row` is an optional continuation cursor when output is truncated.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesEntry {
     pub range: String,
@@ -999,10 +998,58 @@ pub struct RangeValuesEntry {
     pub formulas: Option<Vec<Vec<Option<String>>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    /// Dense JSON encoding optimized for agent consumption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense: Option<RangeValuesDensePayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<String>,
+    /// Row-keyed JSON array: each element maps column letters to values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_keyed: Option<Vec<RangeValuesRowEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_row: Option<u32>,
+}
+
+/// A single row in the `rows` output format for `range-values`.
+///
+/// Maps column letters to cell values, giving agents a direct row-by-row
+/// mapping without needing to decode dense encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesRowEntry {
+    /// 1-based row number in the sheet.
+    pub row: u32,
+    /// Column-letter-keyed cell values (only non-empty cells included).
+    pub cells: BTreeMap<String, CellValuePrimitive>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDensePayload {
+    /// Encoding contract version.
+    pub encoding: String,
+    /// Number of columns represented in each dense row.
+    pub col_count: u32,
+    /// Value dictionary. Index 0 is always null.
+    pub dictionary: Vec<Option<CellValuePrimitive>>,
+    /// Run-length encoded rows using dictionary indexes.
+    pub row_runs: Vec<Vec<RangeValuesDenseRun>>,
+    /// Sparse formulas by row/column, included only when requested.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub formulas: Vec<RangeValuesDenseFormula>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDenseRun {
+    pub value_idx: u32,
+    pub len: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDenseFormula {
+    /// Zero-based row index within returned rows.
+    pub row: u32,
+    /// Zero-based column index within returned rows.
+    pub col: u32,
+    pub formula: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

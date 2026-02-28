@@ -68,6 +68,8 @@ Boundary contract: `docs/architecture/surface-boundary-rules.md`
 | `recalculate` | `recalculate` | SHARED_PARTIAL | `core.recalc.recalculate` | later | Backend constraints in WASM | `crates/spreadsheet-kit/src/cli/commands/recalc.rs::recalculate` | `crates/spreadsheet-kit/tests/cli_integration.rs` |
 | `diff` | `get_changeset` (partial overlap) | SHARED_PARTIAL | `core.diff.diff_workbooks` | later | CLI is file-vs-file; MCP is fork-oriented | `crates/spreadsheet-kit/src/cli/commands/diff.rs::diff` | `crates/spreadsheet-kit/tests/diff_engine.rs` |
 | `run-manifest` (deprecated) | `execute_manifest` | SHARED_PARTIAL | `core.sheetport.execute_manifest` | later | Kept for backward compatibility | `crates/spreadsheet-kit/src/cli/commands/read.rs::run_manifest` | `crates/spreadsheet-kit/tests/cli_integration.rs` |
+| `check-ref-impact` | _(none today)_ | CLI_ONLY | `core.analysis.structure_impact` | n/a | Read-only structural impact preflight; uses same engine as `structure-batch --dry-run --impact-report` | `crates/spreadsheet-kit/src/cli/commands/write.rs::check_ref_impact` | `crates/spreadsheet-kit/tests/cli_integration.rs` |
+| `session` | _(none today)_ | CLI_ONLY | `core.session.*` | n/a | Event-sourced session management (start, log, branches, switch, checkout, undo, redo, fork, op, apply, materialize) | `crates/spreadsheet-kit/src/cli/commands/session.rs` | `crates/spreadsheet-kit/tests/cli_integration.rs` |
 
 ---
 

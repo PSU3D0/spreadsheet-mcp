@@ -64,6 +64,7 @@ async fn mcp_inspect_cells_returns_budget_metadata() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:B2".to_string()],
             include_empty: Some(true),
+            budget: None,
         }))
         .await?
         .0;
@@ -103,6 +104,7 @@ async fn mcp_inspect_cells_rejects_over_limit_with_mcp_error() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec!["A1:F5".to_string()], // 6×5 = 30
             include_empty: Some(false),
+            budget: None,
         }))
         .await;
 
@@ -189,6 +191,7 @@ async fn mcp_inspect_cells_empty_targets_returns_error() -> Result<()> {
             sheet_name: "Sheet1".to_string(),
             targets: vec![],
             include_empty: None,
+            budget: None,
         }))
         .await;
 
