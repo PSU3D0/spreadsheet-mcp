@@ -41,10 +41,8 @@ pub async fn diff(
 
     let sheet_filters: Vec<String> = if let Some(s) = sheet {
         vec![s]
-    } else if let Some(ss) = sheets {
-        ss
     } else {
-        Vec::new()
+        sheets.unwrap_or_default()
     };
 
     let range_bounds = if let Some(range) = range.as_ref() {

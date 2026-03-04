@@ -166,7 +166,11 @@ pub enum SessionCommands {
         base: PathBuf,
         #[arg(long, value_name = "LABEL", help = "Human-readable session label")]
         label: Option<String>,
-        #[arg(long, value_name = "PATH", help = "Workspace root directory (default: cwd)")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Workspace root directory (default: cwd)"
+        )]
         workspace: Option<PathBuf>,
     },
     #[command(about = "View the event timeline for a session")]
@@ -175,7 +179,11 @@ pub enum SessionCommands {
         session: String,
         #[arg(long, value_name = "OP_ID", help = "Show events since this op_id")]
         since: Option<String>,
-        #[arg(long, value_name = "KIND", help = "Filter by operation kind prefix (e.g. structure)")]
+        #[arg(
+            long,
+            value_name = "KIND",
+            help = "Filter by operation kind prefix (e.g. structure)"
+        )]
         kind: Option<String>,
         #[arg(long, value_name = "PATH", help = "Workspace root directory")]
         workspace: Option<PathBuf>,
@@ -223,7 +231,11 @@ pub enum SessionCommands {
     Fork {
         #[arg(long, value_name = "ID", help = "Session identifier")]
         session: String,
-        #[arg(long, value_name = "OP_ID", help = "Fork from this event (default: current HEAD)")]
+        #[arg(
+            long,
+            value_name = "OP_ID",
+            help = "Fork from this event (default: current HEAD)"
+        )]
         from: Option<String>,
         #[arg(long, value_name = "LABEL", help = "Human-readable branch label")]
         label: Option<String>,
@@ -236,7 +248,11 @@ pub enum SessionCommands {
     Op {
         #[arg(long, value_name = "ID", help = "Session identifier")]
         session: String,
-        #[arg(long, value_name = "OPS_REF", help = "Ops payload file reference (@path)")]
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
         ops: String,
         #[arg(long, value_name = "PATH", help = "Workspace root directory")]
         workspace: Option<PathBuf>,
@@ -309,6 +325,18 @@ pub enum Commands {
     ListSheets {
         #[arg(value_name = "FILE", help = "Path to the workbook (.xlsx/.xlsm)")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(about = "Inspect one sheet and detect structured regions")]
     SheetOverview {
@@ -319,6 +347,18 @@ pub enum Commands {
             help = "Exact sheet name (quote names with spaces)"
         )]
         sheet: String,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read raw values for one or more A1 ranges",
@@ -349,6 +389,18 @@ pub enum Commands {
             help = "Include formulas (sparse list in dense mode, matrix in json mode)"
         )]
         include_formulas: Option<bool>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Export a range to a specific format (e.g., csv, grid)",
@@ -373,6 +425,18 @@ pub enum Commands {
             help = "Include parsed formulas in formula cells alongside evaluated values (JSON only)"
         )]
         include_formulas: Option<bool>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Import range data from grid JSON or CSV",
@@ -434,6 +498,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Override the per-request cell budget (default 25, max 200)"
         )]
         budget: Option<u32>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
@@ -498,6 +574,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Page output format: full, compact, or values_only"
         )]
         format: SheetPageFormatArg,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read a table-like region as json, values, or csv",
@@ -548,6 +636,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Output format for this command"
         )]
         table_format: Option<TableReadFormat>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Find cells matching a text query by value or label",
@@ -574,6 +674,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "For --mode label, read the value from right, below, or any (default: any)"
         )]
         label_direction: Option<LabelDirectionArg>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "List workbook named ranges and table/formula named items",
@@ -590,6 +702,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Optional case-insensitive prefix filter for item names"
         )]
         name_prefix: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Define a new named range in a workbook",
@@ -808,11 +932,35 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Formula parse policy: fail, warn (default), or off"
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(about = "Describe workbook-level metadata and sheet counts")]
     Describe {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Profile table headers, types, and column distributions",
@@ -823,6 +971,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
         file: PathBuf,
         #[arg(long, value_name = "SHEET", help = "Optional sheet to profile")]
         sheet: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Render a range with layout: column widths, borders, bold/italic, alignment",
@@ -869,6 +1029,18 @@ For broader discovery, use sheet-page, range-values, or layout-page."
             help = "Output format: json (default), ascii, or both"
         )]
         render: Option<LayoutRenderArg>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Create a new workbook at a destination path",
@@ -1210,9 +1382,16 @@ Output includes:
     CheckRefImpact {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
-        #[arg(long, value_name = "OPS_REF", help = "Ops payload file reference (@path) \u{2014} same format as structure-batch")]
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path) \u{2014} same format as structure-batch"
+        )]
         ops: String,
-        #[arg(long = "show-formula-delta", help = "Include before/after formula delta preview samples")]
+        #[arg(
+            long = "show-formula-delta",
+            help = "Include before/after formula delta preview samples"
+        )]
         show_formula_delta: bool,
     },
     #[command(
@@ -1494,7 +1673,12 @@ Formula parse policy:
         modified: PathBuf,
         #[arg(long, help = "Limit diff to one sheet name")]
         sheet: Option<String>,
-        #[arg(long, value_name = "SHEETS", value_delimiter = ',', help = "Limit diff to multiple sheet names (comma-separated)")]
+        #[arg(
+            long,
+            value_name = "SHEETS",
+            value_delimiter = ',',
+            help = "Limit diff to multiple sheet names (comma-separated)"
+        )]
         sheets: Option<Vec<String>>,
         #[arg(
             long,
@@ -1542,9 +1726,24 @@ Formula parse policy:
 
 pub async fn run_command(command: Commands) -> Result<Value> {
     match command {
-        Commands::ListSheets { file } => commands::read::list_sheets(file).await,
-        Commands::SheetOverview { file, sheet } => {
-            commands::read::sheet_overview(file, sheet).await
+        Commands::ListSheets {
+            file,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::list_sheets(resolved).await
+        }
+        Commands::SheetOverview {
+            file,
+            sheet,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::sheet_overview(resolved, sheet).await
         }
         Commands::RangeValues {
             file,
@@ -1552,7 +1751,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             ranges,
             format,
             include_formulas,
-        } => commands::read::range_values(file, sheet, ranges, format, include_formulas).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::range_values(resolved, sheet, ranges, format, include_formulas).await
+        }
         Commands::RangeExport {
             file,
             sheet,
@@ -1560,8 +1765,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             format,
             output,
             include_formulas,
+            session,
+            session_workspace,
         } => {
-            commands::read::range_export(file, sheet, range, format, output, include_formulas).await
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::range_export(resolved, sheet, range, format, output, include_formulas)
+                .await
         }
         Commands::RangeImport {
             file,
@@ -1597,7 +1807,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             targets,
             include_empty,
             budget,
-        } => commands::read::inspect_cells(file, sheet, targets, include_empty, budget).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::inspect_cells(resolved, sheet, targets, include_empty, budget).await
+        }
         Commands::SheetPage {
             file,
             sheet,
@@ -1609,9 +1825,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             include_styles,
             include_header,
             format,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::sheet_page(
-                file,
+                resolved,
                 sheet,
                 start_row,
                 page_size,
@@ -1636,9 +1856,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             filters_json,
             filters_file,
             table_format,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::read_table(
-                file,
+                resolved,
                 sheet,
                 range,
                 table_name,
@@ -1658,12 +1882,24 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             mode,
             label_direction,
-        } => commands::read::find_value(file, query, sheet, mode, label_direction).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::find_value(resolved, query, sheet, mode, label_direction).await
+        }
         Commands::NamedRanges {
             file,
             sheet,
             name_prefix,
-        } => commands::read::named_ranges(file, sheet, name_prefix).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::named_ranges(resolved, sheet, name_prefix).await
+        }
         Commands::DefineName {
             file,
             name,
@@ -1768,9 +2004,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             cursor_depth,
             cursor_offset,
             formula_parse_policy,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::formula_trace(
-                file,
+                resolved,
                 sheet,
                 cell,
                 direction,
@@ -1782,8 +2022,25 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
-        Commands::Describe { file } => commands::read::describe(file).await,
-        Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
+        Commands::Describe {
+            file,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::describe(resolved).await
+        }
+        Commands::TableProfile {
+            file,
+            sheet,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::table_profile(resolved, sheet).await
+        }
         Commands::LayoutPage {
             file,
             sheet,
@@ -1793,9 +2050,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             fit_columns,
             skip_empty_columns_trim,
             render,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::layout_page(
-                file,
+                resolved,
                 sheet,
                 range,
                 mode,
@@ -2108,41 +2369,68 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             details,
             limit,
             offset,
-        } => commands::diff::diff(original, modified, sheet, sheets, range, details, limit, offset).await,
+        } => {
+            commands::diff::diff(
+                original, modified, sheet, sheets, range, details, limit, offset,
+            )
+            .await
+        }
         Commands::Session(command) => match *command {
-            SessionCommands::Start { base, label, workspace } => {
-                commands::session::session_start(base, label, workspace).await
-            }
-            SessionCommands::Log { session, since, kind, workspace } => {
-                commands::session::session_log(session, workspace, since, kind).await
-            }
+            SessionCommands::Start {
+                base,
+                label,
+                workspace,
+            } => commands::session::session_start(base, label, workspace).await,
+            SessionCommands::Log {
+                session,
+                since,
+                kind,
+                workspace,
+            } => commands::session::session_log(session, workspace, since, kind).await,
             SessionCommands::Branches { session, workspace } => {
                 commands::session::session_branches(session, workspace).await
             }
-            SessionCommands::Switch { session, branch, workspace } => {
-                commands::session::session_switch(session, branch, workspace).await
-            }
-            SessionCommands::Checkout { session, op_id, workspace } => {
-                commands::session::session_checkout(session, op_id, workspace).await
-            }
+            SessionCommands::Switch {
+                session,
+                branch,
+                workspace,
+            } => commands::session::session_switch(session, branch, workspace).await,
+            SessionCommands::Checkout {
+                session,
+                op_id,
+                workspace,
+            } => commands::session::session_checkout(session, op_id, workspace).await,
             SessionCommands::Undo { session, workspace } => {
                 commands::session::session_undo(session, workspace).await
             }
             SessionCommands::Redo { session, workspace } => {
                 commands::session::session_redo(session, workspace).await
             }
-            SessionCommands::Fork { session, from, label, branch_name, workspace } => {
+            SessionCommands::Fork {
+                session,
+                from,
+                label,
+                branch_name,
+                workspace,
+            } => {
                 commands::session::session_fork(session, from, label, branch_name, workspace).await
             }
-            SessionCommands::Op { session, ops, workspace } => {
-                commands::session::session_op_stage(session, ops, workspace).await
-            }
-            SessionCommands::Apply { session, staged_id, workspace } => {
-                commands::session::session_apply(session, staged_id, workspace).await
-            }
-            SessionCommands::Materialize { session, output, force, workspace } => {
-                commands::session::session_materialize(session, output, workspace, force).await
-            }
+            SessionCommands::Op {
+                session,
+                ops,
+                workspace,
+            } => commands::session::session_op_stage(session, ops, workspace).await,
+            SessionCommands::Apply {
+                session,
+                staged_id,
+                workspace,
+            } => commands::session::session_apply(session, staged_id, workspace).await,
+            SessionCommands::Materialize {
+                session,
+                output,
+                force,
+                workspace,
+            } => commands::session::session_materialize(session, output, workspace, force).await,
         },
         Commands::RunManifest {
             file,
@@ -2380,6 +2668,7 @@ mod tests {
                 filters_json,
                 filters_file,
                 table_format,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
@@ -2464,6 +2753,7 @@ mod tests {
                 ranges,
                 format,
                 include_formulas,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
@@ -2660,6 +2950,7 @@ mod tests {
                 targets,
                 include_empty,
                 budget,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
@@ -2706,6 +2997,7 @@ mod tests {
                 include_styles,
                 include_header,
                 format,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
@@ -3118,6 +3410,7 @@ mod tests {
                 file,
                 sheet,
                 name_prefix,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
@@ -3180,6 +3473,7 @@ mod tests {
                 sheet,
                 mode,
                 label_direction,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(query, "Amount");

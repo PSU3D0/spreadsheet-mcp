@@ -47,8 +47,13 @@ fn snapshot_cell_values(
     path: &Path,
     ignore: &[String],
 ) -> Result<BTreeMap<(String, String), String>> {
-    let book = umya_spreadsheet::reader::xlsx::read(path)
-        .map_err(|e| anyhow!("failed to read workbook '{}' for snapshot: {}", path.display(), e))?;
+    let book = umya_spreadsheet::reader::xlsx::read(path).map_err(|e| {
+        anyhow!(
+            "failed to read workbook '{}' for snapshot: {}",
+            path.display(),
+            e
+        )
+    })?;
     let mut cells = BTreeMap::new();
 
     for sheet in book.get_sheet_collection() {

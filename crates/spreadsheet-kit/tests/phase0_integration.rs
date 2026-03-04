@@ -46,7 +46,9 @@ fn assert_success(output: &std::process::Output) {
 fn write_fixture(path: &Path) {
     let mut workbook = umya_spreadsheet::new_file();
     {
-        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("default sheet");
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet");
         sheet.get_cell_mut("A1").set_value("Name");
         sheet.get_cell_mut("B1").set_value("Amount");
         sheet.get_cell_mut("C1").set_value("Total");
@@ -74,12 +76,14 @@ fn write_fixture(path: &Path) {
 fn write_modified_fixture(path: &Path) {
     let mut workbook = umya_spreadsheet::new_file();
     {
-        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("default sheet");
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet");
         sheet.get_cell_mut("A1").set_value("Name");
         sheet.get_cell_mut("B1").set_value("Amount");
         sheet.get_cell_mut("C1").set_value("Total");
-        sheet.get_cell_mut("A2").set_value("Eve");        // changed
-        sheet.get_cell_mut("B2").set_value_number(99.0);   // changed
+        sheet.get_cell_mut("A2").set_value("Eve"); // changed
+        sheet.get_cell_mut("B2").set_value_number(99.0); // changed
         sheet.get_cell_mut("C2").set_formula("B2*2");
         sheet.get_cell_mut("A3").set_value("Bob");
         sheet.get_cell_mut("B3").set_value_number(20.0);
@@ -92,7 +96,7 @@ fn write_modified_fixture(path: &Path) {
     {
         let s = workbook.get_sheet_by_name_mut("Summary").expect("summary");
         s.get_cell_mut("A1").set_value("Flag");
-        s.get_cell_mut("B1").set_value("Done");  // changed
+        s.get_cell_mut("B1").set_value("Done"); // changed
         s.get_cell_mut("A2").set_value_number(42.0);
     }
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write modified fixture");
@@ -102,7 +106,9 @@ fn write_modified_fixture(path: &Path) {
 fn write_formula_fixture(path: &Path) {
     let mut workbook = umya_spreadsheet::new_file();
     {
-        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("default sheet");
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet");
         sheet.get_cell_mut("A1").set_value("Item");
         sheet.get_cell_mut("B1").set_value("Value");
         for row in 2..=10u32 {
@@ -175,7 +181,14 @@ fn range_values_format_rows_omits_empty_cells() {
     }
     umya_spreadsheet::writer::xlsx::write(&workbook, &path).unwrap();
 
-    let out = run_cli(&["range-values", path.to_str().unwrap(), "Sheet1", "A1:C1", "--format", "rows"]);
+    let out = run_cli(&[
+        "range-values",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1:C1",
+        "--format",
+        "rows",
+    ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
 
@@ -195,7 +208,12 @@ fn range_values_format_rows_on_summary_sheet() {
     write_fixture(&path);
 
     let out = run_cli(&[
-        "range-values", path.to_str().unwrap(), "Summary", "A1:B2", "--format", "rows",
+        "range-values",
+        path.to_str().unwrap(),
+        "Summary",
+        "A1:B2",
+        "--format",
+        "rows",
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
@@ -221,16 +239,16 @@ fn inspect_cells_budget_raises_limit() {
         let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
         for row in 1..=10u32 {
             for col in 1..=5u32 {
-                sheet.get_cell_mut((col, row)).set_value(format!("R{}C{}", row, col));
+                sheet
+                    .get_cell_mut((col, row))
+                    .set_value(format!("R{}C{}", row, col));
             }
         }
     }
     umya_spreadsheet::writer::xlsx::write(&workbook, &path).unwrap();
 
     // Default budget (25) should reject A1:E10 (50 cells)
-    let default_out = run_cli(&[
-        "inspect-cells", path.to_str().unwrap(), "Sheet1", "A1:E10",
-    ]);
+    let default_out = run_cli(&["inspect-cells", path.to_str().unwrap(), "Sheet1", "A1:E10"]);
     assert!(
         !default_out.status.success(),
         "default budget should reject 50 cells"
@@ -238,8 +256,12 @@ fn inspect_cells_budget_raises_limit() {
 
     // With --budget 50 it should succeed
     let budget_out = run_cli(&[
-        "inspect-cells", path.to_str().unwrap(), "Sheet1", "A1:E10",
-        "--budget", "50",
+        "inspect-cells",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1:E10",
+        "--budget",
+        "50",
     ]);
     assert_success(&budget_out);
     let json = parse_stdout_json(&budget_out);
@@ -261,8 +283,12 @@ fn inspect_cells_budget_rejects_out_of_range() {
 
     // Budget 0 — rejected
     let out0 = run_cli(&[
-        "inspect-cells", path.to_str().unwrap(), "Sheet1", "A1",
-        "--budget", "0",
+        "inspect-cells",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1",
+        "--budget",
+        "0",
     ]);
     assert!(!out0.status.success(), "budget 0 should be rejected");
     let stderr0 = String::from_utf8_lossy(&out0.stderr);
@@ -270,12 +296,20 @@ fn inspect_cells_budget_rejects_out_of_range() {
 
     // Budget 201 — rejected
     let out201 = run_cli(&[
-        "inspect-cells", path.to_str().unwrap(), "Sheet1", "A1",
-        "--budget", "201",
+        "inspect-cells",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1",
+        "--budget",
+        "201",
     ]);
     assert!(!out201.status.success(), "budget 201 should be rejected");
     let stderr201 = String::from_utf8_lossy(&out201.stderr);
-    assert!(stderr201.contains("between 1 and 200"), "stderr: {}", stderr201);
+    assert!(
+        stderr201.contains("between 1 and 200"),
+        "stderr: {}",
+        stderr201
+    );
 }
 
 #[test]
@@ -289,15 +323,21 @@ fn inspect_cells_budget_200_accepts_large_range() {
         let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
         for row in 1..=20u32 {
             for col in 1..=10u32 {
-                sheet.get_cell_mut((col, row)).set_value(format!("R{}C{}", row, col));
+                sheet
+                    .get_cell_mut((col, row))
+                    .set_value(format!("R{}C{}", row, col));
             }
         }
     }
     umya_spreadsheet::writer::xlsx::write(&workbook, &path).unwrap();
 
     let out = run_cli(&[
-        "inspect-cells", path.to_str().unwrap(), "Sheet1", "A1:J20",
-        "--budget", "200",
+        "inspect-cells",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1:J20",
+        "--budget",
+        "200",
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
@@ -332,7 +372,8 @@ fn recalculate_changed_cells_shows_summary() {
     let out = run_cli(&[
         "recalculate",
         path.to_str().unwrap(),
-        "--output", output.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
         "--changed-cells",
     ]);
     assert_success(&out);
@@ -360,15 +401,15 @@ fn recalculate_without_changed_cells_flag_omits_summary() {
     let out = run_cli(&[
         "recalculate",
         path.to_str().unwrap(),
-        "--output", output.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
 
     // Without --changed-cells, summary should be absent
     assert!(
-        json.get("changed_cells_summary").is_none()
-            || json["changed_cells_summary"].is_null(),
+        json.get("changed_cells_summary").is_none() || json["changed_cells_summary"].is_null(),
         "changed_cells_summary should be absent without flag: {}",
         json
     );
@@ -398,9 +439,11 @@ fn recalculate_ignore_sheets_excludes_from_summary() {
     let out = run_cli(&[
         "recalculate",
         path.to_str().unwrap(),
-        "--output", output.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
         "--changed-cells",
-        "--ignore-sheets", "Ignored",
+        "--ignore-sheets",
+        "Ignored",
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
@@ -445,7 +488,8 @@ fn diff_sheets_filter_limits_to_specified_sheets() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheets", "Sheet1",
+        "--sheets",
+        "Sheet1",
         "--details",
     ]);
     assert_success(&out_s1);
@@ -454,7 +498,8 @@ fn diff_sheets_filter_limits_to_specified_sheets() {
     // All changes should be on Sheet1
     if let Some(changes) = json_s1["changes"].as_array() {
         for change in changes {
-            let sheet = change.get("sheet")
+            let sheet = change
+                .get("sheet")
                 .or_else(|| change.get("sheet_name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -471,7 +516,8 @@ fn diff_sheets_filter_limits_to_specified_sheets() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheets", "Summary",
+        "--sheets",
+        "Summary",
         "--details",
     ]);
     assert_success(&out_sum);
@@ -483,7 +529,8 @@ fn diff_sheets_filter_limits_to_specified_sheets() {
 
     if let Some(changes) = json_sum["changes"].as_array() {
         for change in changes {
-            let sheet = change.get("sheet")
+            let sheet = change
+                .get("sheet")
                 .or_else(|| change.get("sheet_name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -509,7 +556,8 @@ fn diff_sheets_multi_filter_includes_both() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheets", "Sheet1,Summary",
+        "--sheets",
+        "Sheet1,Summary",
         "--details",
     ]);
     assert_success(&out);
@@ -517,7 +565,11 @@ fn diff_sheets_multi_filter_includes_both() {
 
     // Should include changes from both sheets
     let total = json["change_count"].as_u64().unwrap_or(0);
-    assert!(total >= 2, "should have changes from both sheets, got: {}", total);
+    assert!(
+        total >= 2,
+        "should have changes from both sheets, got: {}",
+        total
+    );
 }
 
 #[test]
@@ -532,8 +584,10 @@ fn diff_sheet_and_sheets_mutually_exclusive() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheet", "Sheet1",
-        "--sheets", "Summary",
+        "--sheet",
+        "Sheet1",
+        "--sheets",
+        "Summary",
     ]);
     assert!(
         !out.status.success(),
@@ -560,7 +614,8 @@ fn diff_sheets_case_insensitive() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheets", "sheet1",
+        "--sheets",
+        "sheet1",
         "--details",
     ]);
     assert_success(&out);
@@ -599,7 +654,8 @@ fn check_ref_impact_runs_without_mutation() {
     let out = run_cli(&[
         "check-ref-impact",
         path.to_str().unwrap(),
-        "--ops", &format!("@{}", ops_path.display()),
+        "--ops",
+        &format!("@{}", ops_path.display()),
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
@@ -641,15 +697,16 @@ fn check_ref_impact_with_formula_delta() {
     let out = run_cli(&[
         "check-ref-impact",
         path.to_str().unwrap(),
-        "--ops", &format!("@{}", ops_path.display()),
+        "--ops",
+        &format!("@{}", ops_path.display()),
         "--show-formula-delta",
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
 
     // With --show-formula-delta, should include formula delta preview
-    let has_delta = json.get("formula_delta_preview").is_some()
-        || json.get("formula_delta").is_some();
+    let has_delta =
+        json.get("formula_delta_preview").is_some() || json.get("formula_delta").is_some();
     assert!(
         has_delta,
         "expected formula delta preview with --show-formula-delta: {}",
@@ -677,7 +734,8 @@ fn check_ref_impact_delete_rows_detects_affected_formulas() {
     let out = run_cli(&[
         "check-ref-impact",
         path.to_str().unwrap(),
-        "--ops", &format!("@{}", ops_path.display()),
+        "--ops",
+        &format!("@{}", ops_path.display()),
         "--show-formula-delta",
     ]);
     assert_success(&out);
@@ -713,7 +771,12 @@ fn range_values_format_rows_empty_sheet() {
     umya_spreadsheet::writer::xlsx::write(&workbook, &path).unwrap();
 
     let out = run_cli(&[
-        "range-values", path.to_str().unwrap(), "Sheet1", "A1:C3", "--format", "rows",
+        "range-values",
+        path.to_str().unwrap(),
+        "Sheet1",
+        "A1:C3",
+        "--format",
+        "rows",
     ]);
     assert_success(&out);
     let json = parse_stdout_json(&out);
@@ -745,7 +808,8 @@ fn diff_nonexistent_sheet_filter_returns_zero_changes() {
         "diff",
         original.to_str().unwrap(),
         modified.to_str().unwrap(),
-        "--sheets", "NonexistentSheet",
+        "--sheets",
+        "NonexistentSheet",
         "--details",
     ]);
     assert_success(&out);

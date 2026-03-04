@@ -23,16 +23,16 @@ impl BinlogWriter {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create binlog directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create binlog directory: {}", parent.display())
+            })?;
         }
         Ok(Self { path })
     }
 
     /// Append a single event to the binlog with fsync.
     pub fn append(&self, event: &OpEvent) -> Result<()> {
-        let line = serde_json::to_string(event)
-            .context("failed to serialize OpEvent to JSON")?;
+        let line = serde_json::to_string(event).context("failed to serialize OpEvent to JSON")?;
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -40,11 +40,9 @@ impl BinlogWriter {
             .open(&self.path)
             .with_context(|| format!("failed to open binlog: {}", self.path.display()))?;
 
-        writeln!(file, "{}", line)
-            .context("failed to write event to binlog")?;
+        writeln!(file, "{}", line).context("failed to write event to binlog")?;
 
-        file.sync_data()
-            .context("failed to fsync binlog")?;
+        file.sync_data().context("failed to fsync binlog")?;
 
         Ok(())
     }
@@ -91,10 +89,7 @@ impl BinlogReader {
             }
 
             let event: OpEvent = serde_json::from_str(trimmed).with_context(|| {
-                format!(
-                    "corrupted binlog at line {}: invalid JSON",
-                    line_number + 1
-                )
+                format!("corrupted binlog at line {}: invalid JSON", line_number + 1)
             })?;
 
             events.push(event);
@@ -174,13 +169,12 @@ impl BinlogReader {
 
             if let (Some(prev_hash), Some(expected_prev)) =
                 (&events[i - 1].event_hash, &event.prev_event_hash)
+                && prev_hash != expected_prev
             {
-                if prev_hash != expected_prev {
-                    warnings.push(format!(
-                        "hash chain broken at event '{}': prev_event_hash '{}' != previous event_hash '{}'",
-                        event.op_id, expected_prev, prev_hash
-                    ));
-                }
+                warnings.push(format!(
+                    "hash chain broken at event '{}': prev_event_hash '{}' != previous event_hash '{}'",
+                    event.op_id, expected_prev, prev_hash
+                ));
             }
         }
 
@@ -200,7 +194,7 @@ impl BinlogReader {
         let reader = BufReader::new(file);
         let count = reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .filter(|l| !l.trim().is_empty())
             .count();
         Ok(count)
@@ -251,8 +245,8 @@ impl SnapshotManifest {
 
     /// Save the manifest to disk.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content = serde_json::to_string_pretty(self)
-            .context("failed to serialize snapshot manifest")?;
+        let content =
+            serde_json::to_string_pretty(self).context("failed to serialize snapshot manifest")?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -268,7 +262,11 @@ impl SnapshotManifest {
     /// Find the nearest snapshot at or before the given op_id.
     /// Returns the entry whose op_id appears earliest in the event order
     /// but is closest to the target.
-    pub fn nearest_snapshot(&self, target_op_id: &str, event_order: &[String]) -> Option<&SnapshotEntry> {
+    pub fn nearest_snapshot(
+        &self,
+        target_op_id: &str,
+        event_order: &[String],
+    ) -> Option<&SnapshotEntry> {
         let target_pos = event_order.iter().position(|id| id == target_op_id)?;
         self.entries
             .iter()
@@ -458,9 +456,7 @@ mod tests {
             event_count: 5,
         });
 
-        let order: Vec<String> = (1..=10)
-            .map(|i| format!("op_{:03}", i))
-            .collect();
+        let order: Vec<String> = (1..=10).map(|i| format!("op_{:03}", i)).collect();
 
         // Target at op_007 → nearest snapshot is op_005
         let nearest = manifest.nearest_snapshot("op_007", &order);
@@ -492,6 +488,13 @@ mod tests {
         bf.save(&path).unwrap();
         let loaded = BranchesFile::load(&path).unwrap();
         assert_eq!(loaded.branches.len(), 2);
-        assert_eq!(loaded.get_branch("alt-scenario").unwrap().tip_op_id.as_deref(), Some("op_abc"));
+        assert_eq!(
+            loaded
+                .get_branch("alt-scenario")
+                .unwrap()
+                .tip_op_id
+                .as_deref(),
+            Some("op_abc")
+        );
     }
 }

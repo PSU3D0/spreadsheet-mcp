@@ -6,6 +6,9 @@ This skill describes the required discovery workflow for understanding workbook
 structure before making any edits. Thorough exploration prevents structural
 blowups and ensures agents understand the data model.
 
+All discovery commands support `--session <id> --session-workspace <dir>` to
+read from a session's current HEAD state without materializing to disk.
+
 ## Discovery Workflow
 
 ### Step 1: Workbook Overview
@@ -79,6 +82,39 @@ asp inspect-cells <workbook.xlsx> "<Sheet>" A1:C3,D4,F7:F10
 # Use --budget for larger inspections (up to 200 cells)
 asp inspect-cells <workbook.xlsx> "<Sheet>" A1:Z10 --budget 200
 ```
+
+## Session-Aware Discovery
+
+When working within a session, add `--session` and `--session-workspace` to any
+read command to inspect the session's current state (after prior operations)
+without materializing to a file:
+
+```bash
+# Read from session HEAD instead of the base file
+asp range-values <workbook.xlsx> "<Sheet>" A1:C10 --format rows \
+    --session <session_id> --session-workspace <dir>
+
+asp inspect-cells <workbook.xlsx> "<Sheet>" B2:B5 \
+    --session <session_id> --session-workspace <dir>
+
+asp named-ranges <workbook.xlsx> \
+    --session <session_id> --session-workspace <dir>
+
+asp formula-trace <workbook.xlsx> "<Sheet>" C2 precedents --depth 2 \
+    --session <session_id> --session-workspace <dir>
+
+asp describe <workbook.xlsx> \
+    --session <session_id> --session-workspace <dir>
+```
+
+This is useful for:
+- Verifying the effect of a just-applied operation
+- Inspecting state between multi-step edit sequences
+- Checking formula dependencies after structural changes
+- Confirming named ranges after define/update operations
+
+The `<workbook.xlsx>` positional arg is still required (it identifies the workbook)
+but when `--session` is provided, the session's materialized state is used for reading.
 
 ## Output Format Preferences
 

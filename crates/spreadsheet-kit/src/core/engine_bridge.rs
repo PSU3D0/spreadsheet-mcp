@@ -94,7 +94,11 @@ pub fn op_event_to_engine_op(event: &OpEvent) -> Option<EngineStructureOp> {
 /// `umya` token analysis. This enables stage/apply parity enforcement.
 pub fn predict_engine_impact(op: &EngineStructureOp) -> DryRunImpact {
     let shifted_span = match op {
-        EngineStructureOp::InsertRows { sheet_name, at_row, count } => ShiftedSpan {
+        EngineStructureOp::InsertRows {
+            sheet_name,
+            at_row,
+            count,
+        } => ShiftedSpan {
             op_index: 0,
             sheet_name: sheet_name.clone(),
             axis: "row".to_string(),
@@ -103,7 +107,11 @@ pub fn predict_engine_impact(op: &EngineStructureOp) -> DryRunImpact {
             direction: "insert".to_string(),
             description: format!("rows {}..inf shift +{}", at_row, count),
         },
-        EngineStructureOp::DeleteRows { sheet_name, start_row, count } => ShiftedSpan {
+        EngineStructureOp::DeleteRows {
+            sheet_name,
+            start_row,
+            count,
+        } => ShiftedSpan {
             op_index: 0,
             sheet_name: sheet_name.clone(),
             axis: "row".to_string(),
@@ -112,7 +120,11 @@ pub fn predict_engine_impact(op: &EngineStructureOp) -> DryRunImpact {
             direction: "delete".to_string(),
             description: format!("rows {}..inf shift -{}", start_row, count),
         },
-        EngineStructureOp::InsertCols { sheet_name, at_col, count } => ShiftedSpan {
+        EngineStructureOp::InsertCols {
+            sheet_name,
+            at_col,
+            count,
+        } => ShiftedSpan {
             op_index: 0,
             sheet_name: sheet_name.clone(),
             axis: "col".to_string(),
@@ -121,7 +133,11 @@ pub fn predict_engine_impact(op: &EngineStructureOp) -> DryRunImpact {
             direction: "insert".to_string(),
             description: format!("cols {}..inf shift +{}", at_col, count),
         },
-        EngineStructureOp::DeleteCols { sheet_name, start_col, count } => ShiftedSpan {
+        EngineStructureOp::DeleteCols {
+            sheet_name,
+            start_col,
+            count,
+        } => ShiftedSpan {
             op_index: 0,
             sheet_name: sheet_name.clone(),
             axis: "col".to_string(),
