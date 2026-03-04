@@ -6,6 +6,8 @@ pub mod param_enums;
 pub mod rules_batch;
 #[cfg(feature = "recalc")]
 pub mod sheet_layout;
+#[cfg(feature = "recalc")]
+pub mod structure_impact;
 pub mod vba;
 #[cfg(feature = "recalc")]
 pub mod write_normalize;
@@ -16,7 +18,7 @@ use crate::model::*;
 use crate::state::AppState;
 use crate::utils::column_number_to_name;
 use crate::workbook::{WorkbookContext, cell_to_value};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -737,10 +739,10 @@ pub struct RangeValuesParams {
     /// Include detected header row (default: true)
     #[serde(default)]
     pub include_headers: Option<bool>,
-    /// Include formula text matrix aligned to JSON rows (default: false)
+    /// Include formula text payload (matrix for json, sparse list for dense) (default: false)
     #[serde(default)]
     pub include_formulas: Option<bool>,
-    /// Output format: "values" (default), "csv", or "json"
+    /// Output format: "dense" (default), "values", "csv", or "json"
     #[serde(default)]
     pub format: Option<TableOutputFormat>,
     /// Maximum rows per range before pagination
@@ -755,8 +757,15 @@ pub struct InspectCellsParams {
     pub workbook_or_fork_id: WorkbookId,
     /// Sheet name
     pub sheet_name: String,
-    /// Single A1 range to inspect
-    pub range: String,
+    /// One or more A1 targets (cells or ranges) to inspect
+    pub targets: Vec<String>,
+    /// Include empty cells in the response (default: false)
+    #[serde(default)]
+    pub include_empty: Option<bool>,
+    /// Override the per-request cell budget (default 25, max 200).
+    /// Values outside 1..=200 are rejected.
+    #[serde(default)]
+    pub budget: Option<u32>,
 }
 
 pub async fn sheet_page(
@@ -810,6 +819,7 @@ pub async fn sheet_page(
     let max_cells = config.max_cells();
     let max_payload_bytes = config.max_payload_bytes();
     let cells_per_row = page.rows.first().map(|row| row.cells.len()).unwrap_or(0);
+    let original_row_count = page.rows.len();
     let mut row_limit = cap_rows_by_cells(page.rows.len(), cells_per_row, max_cells);
 
     if row_limit > 0 {
@@ -829,7 +839,8 @@ pub async fn sheet_page(
         });
     }
 
-    if row_limit < page.rows.len() {
+    let truncated = row_limit < original_row_count;
+    if truncated {
         page.rows.truncate(row_limit);
     }
 
@@ -844,7 +855,32 @@ pub async fn sheet_page(
         None
     };
 
-    Ok(build_sheet_page_response(
+    let rows_returned = page.rows.len();
+    let cells_returned = rows_returned * cells_per_row;
+    let total_rows_available = metrics.metrics.row_count;
+
+    // Build budget metadata when truncation occurred or limits are configured.
+    let budget = if truncated || max_cells.is_some() || max_payload_bytes.is_some() {
+        let continuation = next_start_row.map(|nsr| {
+            format!(
+                "use start_row={} to fetch the next page ({} rows remaining)",
+                nsr,
+                total_rows_available.saturating_sub(last_row_index)
+            )
+        });
+        Some(ReadBudget {
+            max_cells,
+            max_payload_bytes,
+            rows_returned,
+            cells_returned,
+            total_rows_available: Some(total_rows_available),
+            continuation,
+        })
+    } else {
+        None
+    };
+
+    let mut response = build_sheet_page_response(
         &workbook,
         &params.sheet_name,
         format,
@@ -852,7 +888,10 @@ pub async fn sheet_page(
         &page.header,
         &page.rows,
         next_start_row,
-    ))
+    );
+    response.truncated = truncated;
+    response.budget = budget;
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1204,6 +1243,421 @@ pub async fn named_ranges(
         items,
     };
     Ok(response)
+}
+
+// ── Named Range CRUD ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DefineNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Name to define (e.g. "SalesTotal").
+    pub name: String,
+    /// Formula or range the name refers to (e.g. "Sheet1!$A$1:$B$10").
+    pub refers_to: String,
+    /// Scope: "workbook" (default) or "sheet".
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Required when scope is "sheet". The sheet to scope the name to.
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Existing name to update.
+    pub name: String,
+    /// New refers_to value. If omitted, keeps existing.
+    pub refers_to: Option<String>,
+    /// Scope filter to disambiguate: "workbook" or "sheet".
+    pub scope: Option<String>,
+    /// Sheet name to disambiguate when scope is "sheet".
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteNameParams {
+    #[serde(alias = "workbook_id")]
+    pub fork_id: WorkbookId,
+    /// Name to delete.
+    pub name: String,
+    /// Scope filter: "workbook" or "sheet".
+    pub scope: Option<String>,
+    /// Sheet name to disambiguate when scope is "sheet".
+    pub scope_sheet_name: Option<String>,
+}
+
+pub fn parse_scope_kind(scope: Option<&str>) -> Result<NamedRangeScope> {
+    match scope {
+        Some("sheet") => Ok(NamedRangeScope::Sheet),
+        Some("workbook") | None => Ok(NamedRangeScope::Workbook),
+        Some(other) => Err(anyhow!(
+            "invalid scope '{}': expected 'workbook' or 'sheet'",
+            other
+        )),
+    }
+}
+
+pub fn parse_scope_kind_optional(scope: Option<&str>) -> Result<Option<NamedRangeScope>> {
+    match scope {
+        Some("sheet") => Ok(Some(NamedRangeScope::Sheet)),
+        Some("workbook") => Ok(Some(NamedRangeScope::Workbook)),
+        None => Ok(None),
+        Some(other) => Err(anyhow!(
+            "invalid scope '{}': expected 'workbook' or 'sheet'",
+            other
+        )),
+    }
+}
+
+fn resolve_sheet_index_on_book(
+    book: &umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+) -> Result<u32> {
+    for (idx, sheet) in book.get_sheet_collection().iter().enumerate() {
+        if sheet.get_name() == sheet_name {
+            return Ok(idx as u32);
+        }
+    }
+    Err(anyhow!("sheet '{}' not found", sheet_name))
+}
+
+/// Apply define_name to an on-disk workbook file.
+pub(crate) fn define_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    refers_to: &str,
+    scope_kind: NamedRangeScope,
+    scope_sheet_name: Option<&str>,
+) -> Result<()> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    match scope_kind {
+        NamedRangeScope::Sheet => {
+            let sn = scope_sheet_name
+                .ok_or_else(|| anyhow!("scope_sheet_name required for sheet scope"))?;
+            let sheet_index = resolve_sheet_index_on_book(&book, sn)?;
+            let sheet = book
+                .get_sheet_by_name_mut(sn)
+                .ok_or_else(|| anyhow!("sheet '{}' not found", sn))?;
+            sheet
+                .add_defined_name(name.to_string(), refers_to.to_string())
+                .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+            // Set local_sheet_id on the just-added entry.
+            let sheet = book
+                .get_sheet_by_name_mut(sn)
+                .ok_or_else(|| anyhow!("sheet '{}' disappeared", sn))?;
+            if let Some(last) = sheet.get_defined_names_mut().last_mut()
+                && last.get_name() == name
+            {
+                last.set_local_sheet_id(sheet_index);
+            }
+        }
+        NamedRangeScope::Workbook => {
+            // set_name is pub(crate) in umya, so we create through a sheet then move
+            // to workbook level.
+            let first_sheet: String = book
+                .get_sheet_collection()
+                .first()
+                .map(|s| s.get_name().to_string())
+                .ok_or_else(|| anyhow!("workbook has no sheets"))?;
+            let sheet = book
+                .get_sheet_by_name_mut(&first_sheet)
+                .ok_or_else(|| anyhow!("sheet '{}' not found", first_sheet))?;
+            sheet
+                .add_defined_name(name.to_string(), refers_to.to_string())
+                .map_err(|e| anyhow!("failed to add defined name: {e}"))?;
+            // Move the just-added entry from sheet-level to workbook-level.
+            let sheet = book
+                .get_sheet_by_name_mut(&first_sheet)
+                .ok_or_else(|| anyhow!("sheet disappeared"))?;
+            let entry = sheet.get_defined_names_mut().pop();
+            if let Some(entry) = entry {
+                book.add_defined_names(entry);
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok(())
+}
+
+/// Apply update_name to an on-disk workbook file.
+pub(crate) fn update_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    new_refers_to: Option<&str>,
+    scope_kind: Option<NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<(String, NamedRangeScope, Option<String>)> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    let mut found = false;
+    let mut previous_refers_to = String::new();
+    let mut effective_scope = NamedRangeScope::Workbook;
+    let mut effective_sheet: Option<String> = None;
+
+    // Try workbook-level defined names.
+    if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+        for defined in book.get_defined_names_mut().iter_mut() {
+            if defined.get_name() == name
+                && (scope_kind == Some(NamedRangeScope::Workbook) || !defined.has_local_sheet_id())
+            {
+                previous_refers_to = defined.get_address();
+                if let Some(new_addr) = new_refers_to {
+                    defined.set_address(new_addr.to_string());
+                }
+                effective_scope = NamedRangeScope::Workbook;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    // Try sheet-level.
+    if !found && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+        let sheet_names: Vec<String> = book
+            .get_sheet_collection()
+            .iter()
+            .map(|s: &umya_spreadsheet::Worksheet| s.get_name().to_string())
+            .collect();
+        for sn in &sheet_names {
+            if let Some(filter_sheet) = scope_sheet_name
+                && !sn.eq_ignore_ascii_case(filter_sheet)
+            {
+                continue;
+            }
+            if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                for defined in sheet.get_defined_names_mut().iter_mut() {
+                    if defined.get_name() == name {
+                        previous_refers_to = defined.get_address();
+                        if let Some(new_addr) = new_refers_to {
+                            defined.set_address(new_addr.to_string());
+                        }
+                        effective_scope = NamedRangeScope::Sheet;
+                        effective_sheet = Some(sn.clone());
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(anyhow!("named range '{}' not found", name));
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok((previous_refers_to, effective_scope, effective_sheet))
+}
+
+/// Apply delete_name to an on-disk workbook file.
+pub(crate) fn delete_name_in_file(
+    path: &std::path::Path,
+    name: &str,
+    scope_kind: Option<NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<bool> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+
+    let mut deleted = false;
+
+    // Try workbook-level.
+    if scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Workbook) {
+        let names = book.get_defined_names_mut();
+        let before_len = names.len();
+        names.retain(|d: &umya_spreadsheet::DefinedName| d.get_name() != name);
+        if names.len() < before_len {
+            deleted = true;
+        }
+    }
+
+    // Try sheet-level.
+    if !deleted && (scope_kind.is_none() || scope_kind == Some(NamedRangeScope::Sheet)) {
+        let sheet_names: Vec<String> = book
+            .get_sheet_collection()
+            .iter()
+            .map(|s: &umya_spreadsheet::Worksheet| s.get_name().to_string())
+            .collect();
+        for sn in &sheet_names {
+            if let Some(filter_sheet) = scope_sheet_name
+                && !sn.eq_ignore_ascii_case(filter_sheet)
+            {
+                continue;
+            }
+            if let Some(sheet) = book.get_sheet_by_name_mut(sn) {
+                let names = sheet.get_defined_names_mut();
+                let before_len = names.len();
+                names.retain(|d: &umya_spreadsheet::DefinedName| d.get_name() != name);
+                if names.len() < before_len {
+                    deleted = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !deleted {
+        return Err(anyhow!("named range '{}' not found", name));
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+    Ok(true)
+}
+
+#[cfg(feature = "recalc")]
+pub async fn define_name(
+    state: Arc<AppState>,
+    params: DefineNameParams,
+) -> Result<DefineNameResponse> {
+    let scope_kind = parse_scope_kind(params.scope.as_deref())?;
+    if scope_kind == NamedRangeScope::Sheet && params.scope_sheet_name.is_none() {
+        return Err(anyhow!(
+            "scope_sheet_name is required when scope is 'sheet'"
+        ));
+    }
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+    if params.refers_to.trim().is_empty() {
+        return Err(anyhow!("refers_to must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let refers_to = params.refers_to.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    tokio::task::spawn_blocking(move || {
+        define_name_in_file(
+            &work_path,
+            &name,
+            &refers_to,
+            scope_kind,
+            scope_sheet.as_deref(),
+        )
+    })
+    .await??;
+
+    // Mark fork as needing recalc and invalidate cache.
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(DefineNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        refers_to: params.refers_to,
+        scope_kind,
+        scope_sheet_name: params.scope_sheet_name,
+    })
+}
+
+#[cfg(feature = "recalc")]
+pub async fn update_name(
+    state: Arc<AppState>,
+    params: UpdateNameParams,
+) -> Result<UpdateNameResponse> {
+    let scope_kind = parse_scope_kind_optional(params.scope.as_deref())?;
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let new_refers_to = params.refers_to.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    let (previous_refers_to, effective_scope, effective_sheet) =
+        tokio::task::spawn_blocking(move || {
+            update_name_in_file(
+                &work_path,
+                &name,
+                new_refers_to.as_deref(),
+                scope_kind,
+                scope_sheet.as_deref(),
+            )
+        })
+        .await??;
+
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    let final_refers_to = params
+        .refers_to
+        .unwrap_or_else(|| previous_refers_to.clone());
+
+    Ok(UpdateNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        refers_to: final_refers_to,
+        scope_kind: effective_scope,
+        scope_sheet_name: effective_sheet.or(params.scope_sheet_name),
+        previous_refers_to: Some(previous_refers_to),
+    })
+}
+
+#[cfg(feature = "recalc")]
+pub async fn delete_name(
+    state: Arc<AppState>,
+    params: DeleteNameParams,
+) -> Result<DeleteNameResponse> {
+    let scope_kind = parse_scope_kind_optional(params.scope.as_deref())?;
+    if params.name.trim().is_empty() {
+        return Err(anyhow!("name must not be empty"));
+    }
+
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available (recalc feature required)"))?;
+    let fork_ctx = registry.get_fork(params.fork_id.as_str())?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let name = params.name.clone();
+    let scope_sheet = params.scope_sheet_name.clone();
+
+    tokio::task::spawn_blocking(move || {
+        delete_name_in_file(&work_path, &name, scope_kind, scope_sheet.as_deref())
+    })
+    .await??;
+
+    registry.with_fork_mut(params.fork_id.as_str(), |ctx| {
+        ctx.recalc_needed = true;
+        Ok(())
+    })?;
+    let fork_workbook_id = WorkbookId(params.fork_id.as_str().to_string());
+    let _ = state.close_workbook(&fork_workbook_id);
+
+    Ok(DeleteNameResponse {
+        workbook_id: params.fork_id,
+        name: params.name,
+        deleted: true,
+    })
 }
 
 struct PageBuildResult {
@@ -1562,8 +2016,10 @@ fn build_read_table_payload(
     };
 
     match format {
-        TableOutputFormat::Json => (headers_out, rows.to_vec(), None, types_out, None),
-        TableOutputFormat::Values => (
+        TableOutputFormat::Json | TableOutputFormat::Rows => {
+            (headers_out, rows.to_vec(), None, types_out, None)
+        }
+        TableOutputFormat::Values | TableOutputFormat::Dense => (
             headers_out,
             Vec::new(),
             Some(table_rows_to_values(headers, rows)),
@@ -1605,6 +2061,132 @@ fn cell_matrix_to_csv(rows: &[Vec<Option<CellValue>>]) -> String {
     csv
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum DensePrimitiveKey {
+    Text(String),
+    NumberBits(u64),
+    Bool(bool),
+}
+
+fn dense_key(value: &CellValuePrimitive) -> DensePrimitiveKey {
+    match value {
+        CellValuePrimitive::Text(text) => DensePrimitiveKey::Text(text.clone()),
+        CellValuePrimitive::Number(number) => DensePrimitiveKey::NumberBits(number.to_bits()),
+        CellValuePrimitive::Bool(flag) => DensePrimitiveKey::Bool(*flag),
+    }
+}
+
+fn row_to_dense_runs(indexes: &[u32]) -> Vec<RangeValuesDenseRun> {
+    if indexes.is_empty() {
+        return Vec::new();
+    }
+    let mut runs = Vec::new();
+    let mut current = indexes[0];
+    let mut len: u32 = 1;
+
+    for idx in indexes.iter().copied().skip(1) {
+        if idx == current {
+            len += 1;
+        } else {
+            runs.push(RangeValuesDenseRun {
+                value_idx: current,
+                len,
+            });
+            current = idx;
+            len = 1;
+        }
+    }
+
+    runs.push(RangeValuesDenseRun {
+        value_idx: current,
+        len,
+    });
+    runs
+}
+
+fn cell_matrix_to_dense(
+    rows: &[Vec<Option<CellValue>>],
+    formulas: Option<&[Vec<Option<String>>]>,
+) -> RangeValuesDensePayload {
+    let primitive_rows = cell_matrix_to_values(rows);
+    let mut dictionary: Vec<Option<CellValuePrimitive>> = vec![None];
+    let mut dict_index: HashMap<DensePrimitiveKey, u32> = HashMap::new();
+    let mut row_runs: Vec<Vec<RangeValuesDenseRun>> = Vec::with_capacity(primitive_rows.len());
+
+    for row in &primitive_rows {
+        let mut indexes = Vec::with_capacity(row.len());
+        for cell in row {
+            let idx = match cell {
+                None => 0,
+                Some(value) => {
+                    let key = dense_key(value);
+                    if let Some(existing) = dict_index.get(&key).copied() {
+                        existing
+                    } else {
+                        let next = dictionary.len() as u32;
+                        dictionary.push(Some(value.clone()));
+                        dict_index.insert(key, next);
+                        next
+                    }
+                }
+            };
+            indexes.push(idx);
+        }
+        row_runs.push(row_to_dense_runs(&indexes));
+    }
+
+    let dense_formulas = formulas
+        .map(|matrix| {
+            let mut out = Vec::new();
+            for (row_idx, row) in matrix.iter().enumerate() {
+                for (col_idx, formula) in row.iter().enumerate() {
+                    if let Some(formula) = formula {
+                        out.push(RangeValuesDenseFormula {
+                            row: row_idx as u32,
+                            col: col_idx as u32,
+                            formula: formula.clone(),
+                        });
+                    }
+                }
+            }
+            out
+        })
+        .unwrap_or_default();
+
+    let col_count = primitive_rows.first().map_or(0, |row| row.len() as u32);
+
+    RangeValuesDensePayload {
+        encoding: "dense_v1".to_string(),
+        col_count,
+        dictionary,
+        row_runs,
+        formulas: dense_formulas,
+    }
+}
+
+fn cell_matrix_to_rows_keyed(
+    range: &str,
+    rows: &[Vec<Option<CellValue>>],
+) -> Vec<RangeValuesRowEntry> {
+    let ((start_col, start_row), _) = parse_range(range).unwrap_or(((1, 1), (1, 1)));
+    let mut out = Vec::with_capacity(rows.len());
+    for (row_offset, row) in rows.iter().enumerate() {
+        let row_number = start_row + row_offset as u32;
+        let mut cells = std::collections::BTreeMap::new();
+        for (col_offset, cell) in row.iter().enumerate() {
+            if let Some(value) = cell {
+                let col_letter = column_number_to_name(start_col + col_offset as u32);
+                cells.insert(col_letter, cell_value_to_primitive(value));
+            }
+        }
+        out.push(RangeValuesRowEntry {
+            row: row_number,
+            cells,
+        });
+    }
+    out
+}
+
 fn build_range_values_entry(
     format: TableOutputFormat,
     range: &str,
@@ -1618,7 +2200,9 @@ fn build_range_values_entry(
             rows: Some(rows.to_vec()),
             formulas: formulas.map(|matrix| matrix.to_vec()),
             values: None,
+            dense: None,
             csv: None,
+            rows_keyed: None,
             next_start_row,
         },
         TableOutputFormat::Values => RangeValuesEntry {
@@ -1626,7 +2210,9 @@ fn build_range_values_entry(
             rows: None,
             formulas: None,
             values: Some(cell_matrix_to_values(rows)),
+            dense: None,
             csv: None,
+            rows_keyed: None,
             next_start_row,
         },
         TableOutputFormat::Csv => RangeValuesEntry {
@@ -1634,7 +2220,29 @@ fn build_range_values_entry(
             rows: None,
             formulas: None,
             values: None,
+            dense: None,
             csv: Some(cell_matrix_to_csv(rows)),
+            rows_keyed: None,
+            next_start_row,
+        },
+        TableOutputFormat::Dense => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            formulas: None,
+            values: None,
+            dense: Some(cell_matrix_to_dense(rows, formulas)),
+            csv: None,
+            rows_keyed: None,
+            next_start_row,
+        },
+        TableOutputFormat::Rows => RangeValuesEntry {
+            range: range.to_string(),
+            rows: None,
+            formulas: None,
+            values: None,
+            dense: None,
+            csv: None,
+            rows_keyed: Some(cell_matrix_to_rows_keyed(range, rows)),
             next_start_row,
         },
     }
@@ -1767,6 +2375,8 @@ fn build_sheet_page_response(
         compact: compact_payload,
         values_only: values_only_payload,
         format,
+        truncated: false,
+        budget: None,
     }
 }
 
@@ -3527,7 +4137,7 @@ pub async fn range_values(
     let config = state.config();
     let output_profile = config.output_profile();
     let format = params.format.unwrap_or(match output_profile {
-        OutputProfile::TokenDense => TableOutputFormat::Values,
+        OutputProfile::TokenDense => TableOutputFormat::Dense,
         OutputProfile::Verbose => TableOutputFormat::Json,
     });
     let include_headers = params.include_headers.unwrap_or(false);
@@ -3561,8 +4171,8 @@ pub async fn range_values(
                         row_limit = row_limit.min(page_size as usize);
                     }
 
-                    let include_formula_matrix =
-                        include_formulas && matches!(format, TableOutputFormat::Json);
+                    let include_formula_matrix = include_formulas
+                        && matches!(format, TableOutputFormat::Json | TableOutputFormat::Dense);
                     let mut rows = Vec::new();
                     let mut formula_rows = include_formula_matrix.then(Vec::new);
                     for r in start_row..=end_row {
@@ -3651,8 +4261,8 @@ pub async fn range_values(
                         row_limit = row_limit.min(page_size as usize);
                     }
 
-                    let include_formula_matrix =
-                        include_formulas && matches!(format, TableOutputFormat::Json);
+                    let include_formula_matrix = include_formulas
+                        && matches!(format, TableOutputFormat::Json | TableOutputFormat::Dense);
                     let mut rows = Vec::new();
                     let mut formula_rows = include_formula_matrix.then(Vec::new);
                     for r in start_row..=end_row {
@@ -3754,55 +4364,111 @@ pub async fn inspect_cells(
     state: Arc<AppState>,
     params: InspectCellsParams,
 ) -> Result<InspectCellsResponse> {
+    const DETAIL_LIMIT: usize = 25;
+    const DETAIL_LIMIT_MAX: usize = 200;
+
+    if params.targets.is_empty() {
+        return Err(anyhow!(
+            "inspect-cells requires at least one A1 target (cell or range)"
+        ));
+    }
+
+    if let Some(b) = params.budget
+        && (b < 1 || b as usize > DETAIL_LIMIT_MAX)
+    {
+        return Err(anyhow!(
+            "budget must be between 1 and {} (got {})",
+            DETAIL_LIMIT_MAX,
+            b
+        ));
+    }
+
+    let effective_cap = params
+        .budget
+        .map(|b| (b as usize).min(DETAIL_LIMIT_MAX))
+        .unwrap_or(DETAIL_LIMIT);
+
     let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
     let config = state.config();
-    let max_cells = config.max_cells().unwrap_or(10_000);
+    let detail_limit = config
+        .max_cells()
+        .map(|limit| limit.min(effective_cap))
+        .unwrap_or(effective_cap)
+        .max(1);
     let max_payload_bytes = config.max_payload_bytes();
+    let include_empty = params.include_empty.unwrap_or(false);
 
-    let ((start_col, start_row), (end_col, end_row)) =
-        parse_range(&params.range).ok_or_else(|| {
-            anyhow!(
-                "invalid range '{}'; expected A1 notation like A1:C10",
-                params.range
-            )
-        })?;
+    let mut coords = Vec::new();
+    let mut seen = HashSet::new();
+    for target in &params.targets {
+        let ((start_col, start_row), (end_col, end_row)) =
+            parse_range(target).ok_or_else(|| {
+                anyhow!(
+                    "invalid target '{}'; expected A1 cell or range like A1:C10",
+                    target
+                )
+            })?;
 
-    let total_cells = ((end_col - start_col + 1) as usize) * ((end_row - start_row + 1) as usize);
-
-    let mut cells = workbook.with_sheet(&params.sheet_name, |sheet| {
-        let mut cells = Vec::new();
-        'rows: for row in start_row..=end_row {
+        for row in start_row..=end_row {
             for col in start_col..=end_col {
-                if cells.len() >= max_cells {
-                    break 'rows;
-                }
-                if let Some(cell) = sheet.get_cell((col, row)) {
-                    cells.push(build_cell_snapshot(cell, true, true));
-                } else {
-                    cells.push(CellSnapshot {
-                        address: format!("{}{}", column_number_to_name(col), row),
-                        value: None,
-                        formula: None,
-                        cached_value: None,
-                        number_format: None,
-                        style_tags: Vec::new(),
-                        notes: Vec::new(),
-                    });
+                if seen.insert((col, row)) {
+                    coords.push((col, row));
                 }
             }
         }
-        Ok::<_, anyhow::Error>(cells)
+    }
+
+    if coords.len() > detail_limit {
+        return Err(anyhow!(
+            "inspect-cells is a detail view and accepts up to {} cells per request (got {}). Narrow your selection or use sheet-page, range-values, or layout-page for broader discovery.",
+            detail_limit,
+            coords.len()
+        ));
+    }
+
+    let mut cells = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let mut out = Vec::new();
+        for (col, row) in &coords {
+            if let Some(cell) = sheet.get_cell((*col, *row)) {
+                out.push(build_cell_snapshot(cell, true, true));
+            } else if include_empty {
+                out.push(CellSnapshot {
+                    address: format!("{}{}", column_number_to_name(*col), row),
+                    value: None,
+                    formula: None,
+                    cached_value: None,
+                    number_format: None,
+                    style_tags: Vec::new(),
+                    notes: Vec::new(),
+                });
+            }
+        }
+        Ok::<_, anyhow::Error>(out)
     })??;
 
-    let mut truncated = cells.len() < total_cells;
-
+    let total_requested_rows = coords
+        .iter()
+        .map(|(_, row)| *row)
+        .collect::<HashSet<u32>>()
+        .len();
+    let mut cell_rows: Vec<u32> = cells
+        .iter()
+        .filter_map(|cell| parse_address(&cell.address).map(|(_, row)| row))
+        .collect();
+    let mut truncated = false;
     let cell_limit = cap_rows_by_payload_bytes(cells.len(), max_payload_bytes, |count| {
         let response = InspectCellsResponse {
             workbook_id: workbook.id.clone(),
             sheet_name: params.sheet_name.clone(),
-            range: params.range.clone(),
+            range: params.targets.join(","),
+            targets: if params.targets.len() > 1 {
+                params.targets.clone()
+            } else {
+                Vec::new()
+            },
             cells: cells[..count].to_vec(),
             truncated: false,
+            budget: None,
         };
         serde_json::to_vec(&response)
             .map(|payload| payload.len())
@@ -3810,15 +4476,40 @@ pub async fn inspect_cells(
     });
     if cell_limit < cells.len() {
         cells.truncate(cell_limit);
+        cell_rows.truncate(cell_limit);
         truncated = true;
     }
+
+    let cells_returned = cells.len();
+    let rows_returned = cell_rows.into_iter().collect::<HashSet<u32>>().len();
+    let budget = Some(ReadBudget {
+        max_cells: Some(detail_limit),
+        max_payload_bytes,
+        rows_returned,
+        cells_returned,
+        total_rows_available: Some(total_requested_rows as u32),
+        continuation: if truncated {
+            Some(
+                "inspect-cells is a strict detail-view tool; narrow your targets or use sheet-page / range-values for bulk reads"
+                    .to_string(),
+            )
+        } else {
+            None
+        },
+    });
 
     Ok(InspectCellsResponse {
         workbook_id: workbook.id.clone(),
         sheet_name: params.sheet_name,
-        range: params.range,
+        range: params.targets.join(","),
+        targets: if params.targets.len() > 1 {
+            params.targets
+        } else {
+            Vec::new()
+        },
         cells,
         truncated,
+        budget,
     })
 }
 
@@ -4183,6 +4874,7 @@ pub struct ManifestStubParams {
     pub sheet_filter: Option<String>,
 }
 
+#[cfg(feature = "recalc-formualizer")]
 pub async fn get_manifest_stub(
     state: Arc<AppState>,
     params: ManifestStubParams,
@@ -4193,6 +4885,176 @@ pub async fn get_manifest_stub(
     if let Some(filter) = &params.sheet_filter {
         summaries.retain(|summary| summary.name.eq_ignore_ascii_case(filter));
     }
+
+    let mut ports = Vec::new();
+    let sanitize_id_re = regex::Regex::new(r"[^a-z0-9_-]").expect("valid id regex");
+    let sanitize_header_re = regex::Regex::new(r"[^a-zA-Z0-9_]").expect("valid header regex");
+
+    for summary in &summaries {
+        let sheet_name = &summary.name;
+        if let Ok(overview) = workbook.sheet_overview(sheet_name) {
+            for (idx, region) in overview.detected_regions.iter().enumerate() {
+                let classification_str = format!("{:?}", region.classification).to_lowercase();
+                let id = format!(
+                    "{}_{}_{}",
+                    sheet_name.replace(" ", "_"),
+                    classification_str,
+                    idx
+                )
+                .to_lowercase()
+                .replace(char::is_whitespace, "_");
+                let id = sanitize_id_re.replace_all(&id, "").to_string();
+
+                let (dir, shape, schema, location) = match region.classification {
+                    crate::model::RegionKind::Parameters => {
+                        let shape = formualizer::sheetport_spec::Shape::Range;
+                        let schema = formualizer::sheetport_spec::Schema::Range(
+                            formualizer::sheetport_spec::RangeSchema {
+                                kind: formualizer::sheetport_spec::RangeKind::Range,
+                                cell_type: formualizer::sheetport_spec::ValueType::Number,
+                                format: None,
+                            },
+                        );
+                        let a1 = region.bounds.clone();
+                        let location = formualizer::sheetport_spec::Selector::A1(
+                            formualizer::sheetport_spec::SelectorA1 {
+                                a1: format!("'{}'!{}", sheet_name, a1),
+                            },
+                        );
+                        (
+                            formualizer::sheetport_spec::Direction::In,
+                            shape,
+                            schema,
+                            location,
+                        )
+                    }
+                    crate::model::RegionKind::Data => {
+                        let shape = formualizer::sheetport_spec::Shape::Table;
+                        let anchor_col = region
+                            .bounds
+                            .chars()
+                            .take_while(|c| c.is_alphabetic())
+                            .collect::<String>();
+                        let anchor_col = if anchor_col.is_empty() {
+                            "A".to_string()
+                        } else {
+                            anchor_col
+                        };
+                        let layout = formualizer::sheetport_spec::LayoutDescriptor {
+                            kind: formualizer::sheetport_spec::LayoutKind::HeaderContiguousV1,
+                            sheet: sheet_name.clone(),
+                            header_row: region.header_row.unwrap_or(1),
+                            anchor_col,
+                            terminate:
+                                formualizer::sheetport_spec::LayoutTermination::FirstBlankRow,
+                            marker_text: None,
+                        };
+                        let mut columns = Vec::new();
+                        for (c_idx, header) in region.headers.iter().enumerate() {
+                            let clean_name = sanitize_header_re
+                                .replace_all(header, "_")
+                                .to_string()
+                                .to_lowercase();
+                            let clean_name = if clean_name.is_empty() {
+                                format!("col_{}", c_idx)
+                            } else {
+                                clean_name
+                            };
+                            columns.push(formualizer::sheetport_spec::TableColumn {
+                                name: clean_name,
+                                value_type: formualizer::sheetport_spec::ValueType::String,
+                                col: None,
+                                format: None,
+                                units: None,
+                            });
+                        }
+                        let schema = formualizer::sheetport_spec::Schema::Table(
+                            formualizer::sheetport_spec::TableSchema {
+                                kind: formualizer::sheetport_spec::TableKind::Table,
+                                columns,
+                                keys: None,
+                            },
+                        );
+                        (
+                            formualizer::sheetport_spec::Direction::In,
+                            shape,
+                            schema,
+                            formualizer::sheetport_spec::Selector::Layout(
+                                formualizer::sheetport_spec::SelectorLayout { layout },
+                            ),
+                        )
+                    }
+                    crate::model::RegionKind::Calculator | crate::model::RegionKind::Outputs => {
+                        let shape = formualizer::sheetport_spec::Shape::Range;
+                        let schema = formualizer::sheetport_spec::Schema::Range(
+                            formualizer::sheetport_spec::RangeSchema {
+                                kind: formualizer::sheetport_spec::RangeKind::Range,
+                                cell_type: formualizer::sheetport_spec::ValueType::Number,
+                                format: None,
+                            },
+                        );
+                        let a1 = region.bounds.clone();
+                        let location = formualizer::sheetport_spec::Selector::A1(
+                            formualizer::sheetport_spec::SelectorA1 {
+                                a1: format!("'{}'!{}", sheet_name, a1),
+                            },
+                        );
+                        (
+                            formualizer::sheetport_spec::Direction::Out,
+                            shape,
+                            schema,
+                            location,
+                        )
+                    }
+                    _ => continue,
+                };
+
+                ports.push(formualizer::sheetport_spec::Port {
+                    id,
+                    dir,
+                    shape,
+                    description: None,
+                    required: true,
+                    location,
+                    schema,
+                    constraints: None,
+                    units: None,
+                    default: None,
+                    partition_key: None,
+                });
+            }
+        }
+    }
+
+    let manifest_obj = formualizer::sheetport_spec::Manifest {
+        spec: "fio".to_string(),
+        spec_version: formualizer::sheetport_spec::SpecVersion("0.3.0".parse().unwrap()),
+        capabilities: Some(formualizer::sheetport_spec::Capabilities {
+            profile: formualizer::sheetport_spec::Profile::CoreV0,
+            features: None,
+        }),
+        manifest: formualizer::sheetport_spec::ManifestMeta {
+            id: workbook
+                .slug
+                .clone()
+                .to_lowercase()
+                .replace(char::is_whitespace, "-")
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', ""),
+            name: workbook.slug.clone(),
+            description: Some("Auto-generated manifest stub".to_string()),
+            tags: None,
+            workbook: Some(formualizer::sheetport_spec::WorkbookMeta {
+                uri: Some(format!("file://{}", workbook.slug)),
+                locale: None,
+                date_system: None,
+                timezone: None,
+            }),
+            metadata: None,
+        },
+        ports,
+    };
+
+    let manifest_yaml = manifest_obj.to_yaml().unwrap_or_else(|_| "".to_string());
 
     let sheets = summaries
         .into_iter()
@@ -4210,9 +5072,20 @@ pub async fn get_manifest_stub(
     let response = ManifestStubResponse {
         workbook_id: workbook.id.clone(),
         slug: workbook.slug.clone(),
+        manifest_yaml,
         sheets,
     };
     Ok(response)
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub async fn get_manifest_stub(
+    _state: Arc<AppState>,
+    _params: ManifestStubParams,
+) -> Result<ManifestStubResponse> {
+    Err(anyhow!(
+        "sheetport operations require the 'recalc-formualizer' feature"
+    ))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -4934,4 +5807,1036 @@ fn clean_sheet_name(sheet: &str) -> String {
     after_bracket
         .trim_matches(|c| c == '\'' || c == '"')
         .to_string()
+}
+
+#[cfg(feature = "recalc-formualizer")]
+fn json_to_literal(value: &serde_json::Value) -> formualizer::workbook::LiteralValue {
+    match value {
+        serde_json::Value::Null => formualizer::workbook::LiteralValue::Empty,
+        serde_json::Value::Bool(b) => formualizer::workbook::LiteralValue::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                formualizer::workbook::LiteralValue::Number(f)
+            } else {
+                formualizer::workbook::LiteralValue::Empty
+            }
+        }
+        serde_json::Value::String(s) => formualizer::workbook::LiteralValue::Text(s.clone()),
+        _ => formualizer::workbook::LiteralValue::Empty,
+    }
+}
+
+#[cfg(feature = "recalc-formualizer")]
+fn json_to_port_value(value: &serde_json::Value) -> formualizer::sheetport::PortValue {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut record = std::collections::BTreeMap::new();
+            for (k, v) in map {
+                record.insert(k.clone(), json_to_literal(v));
+            }
+            formualizer::sheetport::PortValue::Record(record)
+        }
+        serde_json::Value::Array(arr) => {
+            // Check if array of objects (table) or array of arrays (range)
+            if let Some(serde_json::Value::Object(_)) = arr.first() {
+                let mut rows = Vec::new();
+                for row_val in arr {
+                    if let serde_json::Value::Object(map) = row_val {
+                        let mut values = std::collections::BTreeMap::new();
+                        for (k, v) in map {
+                            values.insert(k.clone(), json_to_literal(v));
+                        }
+                        rows.push(formualizer::sheetport::TableRow::new(values));
+                    }
+                }
+                formualizer::sheetport::PortValue::Table(formualizer::sheetport::TableValue::new(
+                    rows,
+                ))
+            } else if let Some(serde_json::Value::Array(_)) = arr.first() {
+                let mut rows = Vec::new();
+                for row_val in arr {
+                    if let serde_json::Value::Array(inner) = row_val {
+                        rows.push(inner.iter().map(json_to_literal).collect());
+                    }
+                }
+                formualizer::sheetport::PortValue::Range(rows)
+            } else {
+                formualizer::sheetport::PortValue::Scalar(
+                    formualizer::workbook::LiteralValue::Empty,
+                )
+            }
+        }
+        _ => formualizer::sheetport::PortValue::Scalar(json_to_literal(value)),
+    }
+}
+
+#[cfg(feature = "recalc-formualizer")]
+fn port_value_to_json(value: &formualizer::sheetport::PortValue) -> serde_json::Value {
+    match value {
+        formualizer::sheetport::PortValue::Scalar(lit) => literal_to_json(lit),
+        formualizer::sheetport::PortValue::Record(map) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in map {
+                obj.insert(k.clone(), literal_to_json(v));
+            }
+            serde_json::Value::Object(obj)
+        }
+        formualizer::sheetport::PortValue::Range(rows) => {
+            let arr: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|row| serde_json::Value::Array(row.iter().map(literal_to_json).collect()))
+                .collect();
+            serde_json::Value::Array(arr)
+        }
+        formualizer::sheetport::PortValue::Table(table) => {
+            let arr: Vec<serde_json::Value> = table
+                .rows
+                .iter()
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    for (k, v) in &row.values {
+                        obj.insert(k.clone(), literal_to_json(v));
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .collect();
+            serde_json::Value::Array(arr)
+        }
+    }
+}
+
+#[cfg(feature = "recalc-formualizer")]
+fn literal_to_json(lit: &formualizer::workbook::LiteralValue) -> serde_json::Value {
+    match lit {
+        formualizer::workbook::LiteralValue::Empty => serde_json::Value::Null,
+        formualizer::workbook::LiteralValue::Boolean(b) => serde_json::Value::Bool(*b),
+        formualizer::workbook::LiteralValue::Number(n) => serde_json::json!(n),
+        formualizer::workbook::LiteralValue::Int(i) => serde_json::json!(i),
+        formualizer::workbook::LiteralValue::Text(t) => serde_json::Value::String(t.clone()),
+        formualizer::workbook::LiteralValue::Error(e) => {
+            serde_json::Value::String(format!("#ERROR: {:?}", e))
+        }
+        formualizer::workbook::LiteralValue::Date(d) => serde_json::Value::String(d.to_string()),
+        formualizer::workbook::LiteralValue::DateTime(dt) => {
+            serde_json::Value::String(dt.to_string())
+        }
+        formualizer::workbook::LiteralValue::Time(t) => serde_json::Value::String(t.to_string()),
+        formualizer::workbook::LiteralValue::Duration(d) => {
+            serde_json::Value::String(d.to_string())
+        }
+        formualizer::workbook::LiteralValue::Array(arr) => {
+            let json_rows: Vec<serde_json::Value> = arr
+                .iter()
+                .map(|row| serde_json::Value::Array(row.iter().map(literal_to_json).collect()))
+                .collect();
+            serde_json::Value::Array(json_rows)
+        }
+        formualizer::workbook::LiteralValue::Pending => serde_json::Value::Null,
+    }
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ExecuteManifestParams {
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
+    pub manifest_yaml: String,
+    #[serde(default)]
+    pub inputs: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub rng_seed: Option<u64>,
+    #[serde(default)]
+    pub freeze_volatile: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ExecuteManifestResponse {
+    pub workbook_id: WorkbookId,
+    pub outputs: serde_json::Value,
+}
+
+#[cfg(feature = "recalc-formualizer")]
+pub async fn execute_manifest(
+    state: Arc<AppState>,
+    params: ExecuteManifestParams,
+) -> Result<ExecuteManifestResponse> {
+    use formualizer::workbook::SpreadsheetReader;
+    let workbook_ctx = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let path = &workbook_ctx.path;
+
+    let workbook_bytes = std::fs::read(path)?;
+    let adapter = formualizer::workbook::UmyaAdapter::open_bytes(workbook_bytes)
+        .or_else(|_| formualizer::workbook::UmyaAdapter::open_path(path))
+        .map_err(|e| anyhow!("Failed to open adapter: {}", e))?;
+
+    let workbook = formualizer::workbook::Workbook::from_reader(
+        adapter,
+        formualizer::workbook::LoadStrategy::EagerAll,
+        formualizer::workbook::WorkbookConfig::ephemeral(),
+    )
+    .map_err(|e| anyhow!("Failed to load workbook: {}", e))?;
+
+    let manifest = formualizer::sheetport_spec::Manifest::from_yaml_str(&params.manifest_yaml)
+        .map_err(|e| anyhow!("Failed to parse manifest YAML: {}", e))?;
+
+    let mut session = formualizer::sheetport::SheetPortSession::new(workbook, manifest)
+        .map_err(|e| anyhow!("Failed to create SheetPort session: {}", e))?;
+
+    let mut input_update = formualizer::sheetport::InputUpdate::new();
+    for (key, val) in params.inputs {
+        input_update.insert(key, json_to_port_value(&val));
+    }
+
+    if !input_update.is_empty() {
+        session
+            .write_inputs(input_update)
+            .map_err(|e| anyhow!("Failed to write inputs: {}", e))?;
+    }
+
+    let options = formualizer::sheetport::EvalOptions {
+        rng_seed: params.rng_seed,
+        freeze_volatile: params.freeze_volatile,
+        ..Default::default()
+    };
+
+    let outputs = session
+        .evaluate_once(options)
+        .map_err(|e| anyhow!("Failed to evaluate: {}", e))?;
+
+    let mut out_map = serde_json::Map::new();
+    for (k, v) in outputs.into_inner() {
+        out_map.insert(k, port_value_to_json(&v));
+    }
+
+    Ok(ExecuteManifestResponse {
+        workbook_id: params.workbook_or_fork_id.clone(),
+        outputs: serde_json::Value::Object(out_map),
+    })
+}
+
+#[cfg(not(feature = "recalc-formualizer"))]
+pub async fn execute_manifest(
+    _state: Arc<AppState>,
+    _params: ExecuteManifestParams,
+) -> Result<ExecuteManifestResponse> {
+    Err(anyhow!(
+        "sheetport operations require the 'recalc-formualizer' feature"
+    ))
+}
+
+// ── layout_page ───────────────────────────────────────────────────────────────
+
+// ── grid_export ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridExportParams {
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
+    pub sheet_name: String,
+    pub range: String,
+}
+
+pub async fn grid_export(
+    state: Arc<AppState>,
+    params: GridExportParams,
+) -> Result<crate::model::GridPayload> {
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+    let ((min_col, min_row), (max_col, max_row)) =
+        parse_range(&params.range).ok_or_else(|| anyhow!("invalid range: {}", params.range))?;
+
+    let payload = workbook.with_sheet(&params.sheet_name, |sheet| {
+        let mut columns = Vec::new();
+        for col_idx in min_col..=max_col {
+            if let Some(dim) = sheet.get_column_dimension_by_number(&col_idx) {
+                let w = *dim.get_width();
+                if w > 0.0 {
+                    columns.push(crate::model::GridColumnHint {
+                        offset: col_idx - min_col,
+                        width_chars: w,
+                    });
+                }
+            }
+        }
+
+        let mut merges = Vec::new();
+        for mc in sheet.get_merge_cells() {
+            let m_range = mc.get_range();
+            if let Some(((c1, r1), (c2, r2))) = parse_range(&m_range)
+                && c1 <= max_col
+                && c2 >= min_col
+                && r1 <= max_row
+                && r2 >= min_row
+            {
+                merges.push(m_range.to_string());
+            }
+        }
+
+        let mut rows = Vec::new();
+        for row in min_row..=max_row {
+            let mut cells = Vec::new();
+            for col in min_col..=max_col {
+                if let Some(cell) = sheet.get_cell((&col, &row)) {
+                    let mut v = None;
+                    let mut f = None;
+
+                    if cell.is_formula() {
+                        f = Some(format!("={}", cell.get_formula()));
+                    } else {
+                        let value = crate::workbook::cell_to_value(cell);
+                        if let Some(cv) = value {
+                            match cv {
+                                crate::model::CellValue::Text(s) => {
+                                    v = Some(serde_json::Value::String(s))
+                                }
+                                crate::model::CellValue::Number(n) => {
+                                    v = Some(serde_json::json!(n))
+                                }
+                                crate::model::CellValue::Bool(b) => {
+                                    v = Some(serde_json::Value::Bool(b))
+                                }
+                                crate::model::CellValue::Error(e) => {
+                                    v = Some(serde_json::Value::String(e))
+                                }
+                                crate::model::CellValue::Date(d) => {
+                                    v = Some(serde_json::Value::String(d))
+                                }
+                            }
+                        }
+                    }
+
+                    let style = cell.get_style();
+                    let desc = crate::styles::descriptor_from_style(style);
+
+                    let fmt = desc.number_format.clone();
+
+                    let mut style_patch = None;
+                    if desc.font.is_some()
+                        || desc.fill.is_some()
+                        || desc.borders.is_some()
+                        || desc.alignment.is_some()
+                    {
+                        style_patch = Some(crate::model::StylePatch {
+                            font: desc.font.map(|f| {
+                                Some(crate::model::FontPatch {
+                                    name: f.name.map(Some),
+                                    size: f.size.map(Some),
+                                    bold: f.bold.map(Some),
+                                    italic: f.italic.map(Some),
+                                    underline: f.underline.map(Some),
+                                    strikethrough: f.strikethrough.map(Some),
+                                    color: f.color.map(Some),
+                                })
+                            }),
+                            fill: desc.fill.map(|f| {
+                                Some(match f {
+                                    crate::model::FillDescriptor::Pattern(p) => {
+                                        crate::model::FillPatch::Pattern(
+                                            crate::model::PatternFillPatch {
+                                                pattern_type: p.pattern_type.map(Some),
+                                                foreground_color: p.foreground_color.map(Some),
+                                                background_color: p.background_color.map(Some),
+                                            },
+                                        )
+                                    }
+                                    crate::model::FillDescriptor::Gradient(g) => {
+                                        crate::model::FillPatch::Gradient(
+                                            crate::model::GradientFillPatch {
+                                                degree: g.degree.map(Some),
+                                                stops: Some(
+                                                    g.stops
+                                                        .into_iter()
+                                                        .map(|s| crate::model::GradientStopPatch {
+                                                            position: s.position,
+                                                            color: s.color,
+                                                        })
+                                                        .collect(),
+                                                ),
+                                            },
+                                        )
+                                    }
+                                })
+                            }),
+                            borders: desc.borders.map(|b| {
+                                Some(crate::model::BordersPatch {
+                                    left: b.left.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    right: b.right.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    top: b.top.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    bottom: b.bottom.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    diagonal: b.diagonal.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    vertical: b.vertical.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    horizontal: b.horizontal.map(|s| {
+                                        Some(crate::model::BorderSidePatch {
+                                            style: s.style.map(Some),
+                                            color: s.color.map(Some),
+                                        })
+                                    }),
+                                    diagonal_up: b.diagonal_up.map(Some),
+                                    diagonal_down: b.diagonal_down.map(Some),
+                                })
+                            }),
+                            alignment: desc.alignment.map(|a| {
+                                Some(crate::model::AlignmentPatch {
+                                    horizontal: a.horizontal.map(Some),
+                                    vertical: a.vertical.map(Some),
+                                    wrap_text: a.wrap_text.map(Some),
+                                    text_rotation: a.text_rotation.map(Some),
+                                })
+                            }),
+                            number_format: None,
+                        });
+                    }
+
+                    if v.is_some() || f.is_some() || fmt.is_some() || style_patch.is_some() {
+                        cells.push(crate::model::GridCell {
+                            offset: [row - min_row, col - min_col],
+                            v,
+                            f,
+                            fmt,
+                            style: style_patch,
+                        });
+                    }
+                }
+            }
+            if !cells.is_empty() {
+                rows.push(crate::model::GridRow { cells });
+            }
+        }
+
+        let anchor = format!(
+            "{}{}",
+            crate::utils::column_number_to_name(min_col),
+            min_row
+        );
+
+        Ok::<_, anyhow::Error>(crate::model::GridPayload {
+            sheet: params.sheet_name.clone(),
+            anchor,
+            columns,
+            merges,
+            rows,
+        })
+    })??;
+
+    Ok(payload)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LayoutPageParams {
+    /// Workbook ID or fork ID
+    #[serde(alias = "workbook_id")]
+    pub workbook_or_fork_id: WorkbookId,
+    /// Sheet name
+    pub sheet_name: String,
+    /// A1 range to render (e.g., "A1:F40"). Defaults to "A1:T50". Capped at 80 rows × 25 cols.
+    #[serde(default)]
+    pub range: Option<String>,
+    /// Cell content mode: "values" (default) or "formulas"
+    #[serde(default)]
+    pub mode: Option<LayoutMode>,
+    /// Maximum column width in character units before truncating content (default: 20)
+    #[serde(default)]
+    pub max_col_width: Option<u32>,
+    /// Set column widths to the longest rendered value in each column (default: false)
+    #[serde(default)]
+    pub fit_columns: Option<bool>,
+    /// Trim empty edge columns from the rendered range (default: true)
+    #[serde(default)]
+    pub trim_empty_columns: Option<bool>,
+    /// Output format: "json" (default), "ascii", or "both"
+    #[serde(default)]
+    pub render: Option<LayoutRender>,
+}
+
+const LAYOUT_MAX_ROWS: u32 = 80;
+const LAYOUT_MAX_COLS: u32 = 25;
+const LAYOUT_DEFAULT_COL_WIDTH: f64 = 8.43;
+const LAYOUT_DEFAULT_MAX_COL_WIDTH: u32 = 20;
+
+pub async fn layout_page(
+    state: Arc<AppState>,
+    params: LayoutPageParams,
+) -> Result<LayoutPageResponse> {
+    let workbook = state.open_workbook(&params.workbook_or_fork_id).await?;
+
+    let range_str = params.range.as_deref().unwrap_or("A1:T50");
+    let ((min_col, min_row), (raw_max_col, raw_max_row)) =
+        parse_range(range_str).ok_or_else(|| anyhow!("invalid range: {}", range_str))?;
+
+    let requested_max_col_width = params
+        .max_col_width
+        .unwrap_or(LAYOUT_DEFAULT_MAX_COL_WIDTH)
+        .max(3) as f64;
+    let fit_columns = params.fit_columns.unwrap_or(false);
+    let trim_empty_columns = params.trim_empty_columns.unwrap_or(true);
+    let mode = params.mode.unwrap_or_default();
+    let render = params.render.unwrap_or_default();
+
+    // Cap to hard limits
+    let max_col = raw_max_col.min(min_col + LAYOUT_MAX_COLS - 1);
+    let max_row = raw_max_row.min(min_row + LAYOUT_MAX_ROWS - 1);
+    let truncated = max_col < raw_max_col || max_row < raw_max_row;
+
+    let (mut columns, mut merged_cells, mut rows) =
+        workbook.with_sheet(&params.sheet_name, |sheet| {
+            // ── column widths ────────────────────────────────────────────────
+            let columns: Vec<LayoutPageColumnInfo> = (min_col..=max_col)
+                .map(|col_idx| {
+                    let col_name = column_number_to_name(col_idx);
+                    let (raw_width, is_default) =
+                        match sheet.get_column_dimension_by_number(&col_idx) {
+                            Some(dim) => {
+                                let w = *dim.get_width();
+                                if w > 0.0 {
+                                    (w, false)
+                                } else {
+                                    (LAYOUT_DEFAULT_COL_WIDTH, true)
+                                }
+                            }
+                            None => (LAYOUT_DEFAULT_COL_WIDTH, true),
+                        };
+                    LayoutPageColumnInfo {
+                        col: col_name,
+                        index: col_idx,
+                        width_chars: raw_width,
+                        is_default_width: is_default,
+                    }
+                })
+                .collect();
+
+            // ── merged cells ─────────────────────────────────────────────────
+            let merged_strings: Vec<String> = sheet
+                .get_merge_cells()
+                .iter()
+                .map(|m| m.get_range())
+                .collect();
+
+            // Build set of (col, row) that are top-left of a merge span
+            let merge_starts: std::collections::HashSet<(u32, u32)> = merged_strings
+                .iter()
+                .filter_map(|r| parse_range(r).map(|((c, ro), _)| (c, ro)))
+                .collect();
+
+            // ── cells ────────────────────────────────────────────────────────
+            let mut cell_map: HashMap<(u32, u32), LayoutCellInfo> = HashMap::new();
+
+            for cell in sheet.get_cell_collection() {
+                let address = cell.get_coordinate().get_coordinate().to_string();
+                let Some((col, row)) = parse_address(&address) else {
+                    continue;
+                };
+                if col < min_col || col > max_col || row < min_row || row > max_row {
+                    continue;
+                }
+
+                let text: String = match mode {
+                    LayoutMode::Formulas => {
+                        let formula = cell.get_formula();
+                        if !formula.is_empty() {
+                            format!("={formula}")
+                        } else {
+                            cell_display_string(cell)
+                        }
+                    }
+                    LayoutMode::Values => cell_display_string(cell),
+                };
+
+                let desc = crate::styles::descriptor_from_style(cell.get_style());
+                let bold = desc.font.as_ref().and_then(|f| f.bold);
+                let italic = desc.font.as_ref().and_then(|f| f.italic);
+                let align_h = desc.alignment.as_ref().and_then(|a| a.horizontal.clone());
+                let borders = desc.borders.as_ref().map(|b| LayoutCellBorders {
+                    top: b.top.as_ref().and_then(|s| s.style.clone()),
+                    bottom: b.bottom.as_ref().and_then(|s| s.style.clone()),
+                    left: b.left.as_ref().and_then(|s| s.style.clone()),
+                    right: b.right.as_ref().and_then(|s| s.style.clone()),
+                });
+                let borders = borders.and_then(|b| if b.is_empty() { None } else { Some(b) });
+
+                cell_map.insert(
+                    (col, row),
+                    LayoutCellInfo {
+                        address,
+                        value: if text.is_empty() { None } else { Some(text) },
+                        bold,
+                        italic,
+                        align_h,
+                        borders,
+                        merge_start: if merge_starts.contains(&(col, row)) {
+                            Some(true)
+                        } else {
+                            None
+                        },
+                    },
+                );
+            }
+
+            // ── build row structs ────────────────────────────────────────────
+            let rows: Vec<LayoutRowInfo> = (min_row..=max_row)
+                .map(|row| {
+                    let cells = (min_col..=max_col)
+                        .map(|col| {
+                            cell_map
+                                .remove(&(col, row))
+                                .unwrap_or_else(|| LayoutCellInfo {
+                                    address: format!("{}{}", column_number_to_name(col), row),
+                                    value: None,
+                                    bold: None,
+                                    italic: None,
+                                    align_h: None,
+                                    borders: None,
+                                    merge_start: None,
+                                })
+                        })
+                        .collect();
+                    LayoutRowInfo { row, cells }
+                })
+                .collect();
+
+            Ok::<_, anyhow::Error>((columns, merged_strings, rows))
+        })??;
+
+    let mut notes = Vec::new();
+    let mut render_min_col = min_col;
+    let mut render_max_col = max_col;
+
+    if trim_empty_columns && !columns.is_empty() {
+        let has_visible_content = |col_idx: usize| -> bool {
+            rows.iter().any(|row| {
+                let cell = &row.cells[col_idx];
+                cell.value
+                    .as_deref()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                    || cell.bold.unwrap_or(false)
+                    || cell.italic.unwrap_or(false)
+                    || cell.merge_start.unwrap_or(false)
+                    || cell.borders.is_some()
+            })
+        };
+
+        let mut start = 0usize;
+        while start < columns.len() && !has_visible_content(start) {
+            start += 1;
+        }
+
+        let mut end = columns.len();
+        while end > start && !has_visible_content(end - 1) {
+            end -= 1;
+        }
+
+        if start > 0 || end < columns.len() {
+            if start < end {
+                let trimmed_left = start;
+                let trimmed_right = columns.len() - end;
+                render_min_col = columns[start].index;
+                render_max_col = columns[end - 1].index;
+                columns = columns[start..end].to_vec();
+                for row in &mut rows {
+                    row.cells = row.cells[start..end].to_vec();
+                }
+                notes.push(format!(
+                    "Trimmed empty edge columns (left: {trimmed_left}, right: {trimmed_right})"
+                ));
+            } else {
+                // All requested columns are empty; keep one column to avoid empty-grid output.
+                render_min_col = columns[0].index;
+                render_max_col = columns[0].index;
+                columns = vec![columns[0].clone()];
+                for row in &mut rows {
+                    row.cells = vec![row.cells[0].clone()];
+                }
+                notes.push(
+                    "All requested columns were empty; kept one placeholder column".to_string(),
+                );
+            }
+        }
+    }
+
+    // Filter merged cells to only those overlapping the rendered range
+    merged_cells.retain(|mc| {
+        parse_range(mc).is_some_and(|((c1, r1), (c2, r2))| {
+            c1 <= render_max_col && c2 >= render_min_col && r1 <= max_row && r2 >= min_row
+        })
+    });
+
+    if fit_columns {
+        for (ci, col) in columns.iter_mut().enumerate() {
+            // Fit-to-content should be able to shrink overly wide workbook columns,
+            // so start from a small floor instead of the sheet's stored width.
+            let mut max_len = 3usize;
+            for row in &rows {
+                if let Some(cell) = row.cells.get(ci) {
+                    let content_len = cell
+                        .value
+                        .as_deref()
+                        .map(|s| s.chars().count())
+                        .unwrap_or(0);
+                    let marker_len = usize::from(cell.bold.unwrap_or(false)) * 2
+                        + usize::from(cell.italic.unwrap_or(false)) * 2;
+                    max_len = max_len.max(content_len + marker_len);
+                }
+            }
+            col.width_chars = max_len as f64;
+        }
+    } else {
+        for col in &mut columns {
+            col.width_chars = col.width_chars.min(requested_max_col_width);
+        }
+    }
+
+    let effective_range = format!(
+        "{}{}:{}{}",
+        column_number_to_name(render_min_col),
+        min_row,
+        column_number_to_name(render_max_col),
+        max_row,
+    );
+
+    let ascii_render = match render {
+        LayoutRender::Ascii | LayoutRender::Both => Some(render_layout_ascii(
+            &columns,
+            &rows,
+            if fit_columns {
+                None
+            } else {
+                Some(requested_max_col_width as usize)
+            },
+        )),
+        LayoutRender::Json => None,
+    };
+
+    if truncated {
+        notes.push(format!(
+            "Range capped to {LAYOUT_MAX_ROWS} rows × {LAYOUT_MAX_COLS} columns"
+        ));
+    }
+
+    Ok(LayoutPageResponse {
+        workbook_id: workbook.id.clone(),
+        sheet_name: params.sheet_name,
+        range: effective_range,
+        columns,
+        merged_cells,
+        rows,
+        ascii_render,
+        truncated,
+        notes,
+    })
+}
+
+/// Format a cell's value as a display string for the layout render.
+fn cell_display_string(cell: &umya_spreadsheet::Cell) -> String {
+    use crate::workbook::cell_to_value;
+    match cell_to_value(cell) {
+        Some(CellValue::Text(s)) => s,
+        Some(CellValue::Number(n)) => {
+            if n.fract() == 0.0 && n.abs() < 1e15 {
+                format!("{}", n as i64)
+            } else {
+                format!("{n}")
+            }
+        }
+        Some(CellValue::Bool(b)) => if b { "TRUE" } else { "FALSE" }.to_string(),
+        Some(CellValue::Error(e)) => e,
+        Some(CellValue::Date(d)) => d,
+        None => String::new(),
+    }
+}
+
+/// Map an Excel border style string to a render weight (0–3).
+fn border_weight(style: Option<&str>) -> u8 {
+    match style {
+        None => 0,
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "none" => 0,
+            "hair" | "dotted" | "dashed" | "dashDot" | "dashDotDot" => 1,
+            "thin" | "slantDashDot" | "mediumDashDot" | "mediumDashDotDot" => 1,
+            "medium" | "mediumDashed" => 2,
+            "thick" => 2,
+            "double" => 3,
+            _ => 1,
+        },
+    }
+}
+
+/// Render a compact ASCII grid from layout data.
+#[allow(
+    clippy::unnecessary_map_or,
+    clippy::if_same_then_else,
+    clippy::needless_range_loop
+)]
+fn render_layout_ascii(
+    columns: &[LayoutPageColumnInfo],
+    rows: &[LayoutRowInfo],
+    max_col_width: Option<usize>,
+) -> String {
+    use std::fmt::Write;
+
+    if rows.is_empty() || columns.is_empty() {
+        return String::new();
+    }
+
+    // Column display widths (capped, minimum 3 for truncation marker)
+    let col_widths: Vec<usize> = columns
+        .iter()
+        .map(|c| {
+            let raw = c.width_chars.ceil() as usize;
+            let capped = max_col_width.map_or(raw, |cap| raw.min(cap));
+            capped.max(3)
+        })
+        .collect();
+
+    let n_cols = columns.len();
+    let n_rows = rows.len();
+
+    // Per-cell border weights indexed by (row_idx, col_idx)
+    // We also need the border of the top edge of row 0 and left edge of col 0.
+    let cell_borders = |ri: usize, ci: usize| -> (u8, u8, u8, u8) {
+        // (top, bottom, left, right)
+        if ri >= n_rows || ci >= n_cols {
+            return (0, 0, 0, 0);
+        }
+        let cell = &rows[ri].cells[ci];
+        let b = cell.borders.as_ref();
+        (
+            border_weight(b.and_then(|b| b.top.as_deref())),
+            border_weight(b.and_then(|b| b.bottom.as_deref())),
+            border_weight(b.and_then(|b| b.left.as_deref())),
+            border_weight(b.and_then(|b| b.right.as_deref())),
+        )
+    };
+
+    // Horizontal separator weight between row `above` (row_idx) and the next row.
+    // above = usize::MAX means the top frame edge (above row 0).
+    // above = n_rows means the bottom frame edge.
+    let h_sep_weight = |above: usize, ci: usize| -> u8 {
+        let bottom_of_above = if above < n_rows {
+            cell_borders(above, ci).1
+        } else {
+            0
+        };
+        let top_of_below = if above.checked_add(1).map_or(false, |r| r < n_rows) {
+            cell_borders(above + 1, ci).0
+        } else {
+            0
+        };
+        bottom_of_above.max(top_of_below)
+    };
+
+    // Vertical separator weight between col `left` and the next col.
+    let v_sep_weight = |ri: usize, left: usize| -> u8 {
+        let right_of_left = if left < n_cols {
+            cell_borders(ri, left).3
+        } else {
+            0
+        };
+        let left_of_right = if left + 1 < n_cols {
+            cell_borders(ri, left + 1).2
+        } else {
+            0
+        };
+        right_of_left.max(left_of_right)
+    };
+
+    // Characters by weight
+    let h_char = |w: u8| match w {
+        0 => ' ',
+        1 => '─',
+        2 => '━',
+        _ => '═',
+    };
+    let v_char = |w: u8| match w {
+        0 => ' ',
+        1 => '│',
+        2 => '┃',
+        _ => '║',
+    };
+
+    // Junction character at intersection of horizontal line (weight hw) and vertical line (weight vw)
+    let junction = |hw: u8, vw: u8| -> char {
+        match (hw, vw) {
+            (0, 0) => ' ',
+            (0, _) => v_char(vw),
+            (_, 0) => h_char(hw),
+            (1, 1) => '┼',
+            (1, 2) | (1, 3) => '╂',
+            (2, 1) | (3, 1) => '┿',
+            _ => '╋',
+        }
+    };
+
+    let mut out = String::new();
+
+    // Legend
+    let _ = writeln!(
+        out,
+        "[*=bold  /=italic  border weight: ─thin ━medium ═double]"
+    );
+
+    // Draw a horizontal separator line (top/bottom/between-row)
+    // `above` is the row index above this separator (usize::MAX = before row 0, n_rows = after last row)
+    let draw_h_line = |out: &mut String, above: usize, is_top: bool, is_bottom: bool| {
+        // Left junction
+        let left_v = if is_top || is_bottom { 0u8 } else { 0u8 }; // outer frame has no vertical sep
+        let _ = write!(
+            out,
+            "{}",
+            junction(
+                h_sep_weight(above, 0).max(1)
+                    * (is_top || is_bottom || h_sep_weight(above, 0) > 0) as u8,
+                left_v
+            )
+        );
+        for ci in 0..n_cols {
+            let hw = h_sep_weight(above, ci).max(if is_top || is_bottom { 1 } else { 0 });
+            for _ in 0..col_widths[ci] + 2 {
+                let _ = write!(out, "{}", h_char(hw));
+            }
+            // Right junction or edge
+            if ci + 1 < n_cols {
+                let vw = v_sep_weight(if above < n_rows { above } else { n_rows - 1 }, ci);
+                let _ = write!(out, "{}", junction(hw, vw));
+            } else {
+                let _ = write!(out, "{}", junction(hw, 0));
+            }
+        }
+        let _ = writeln!(out);
+    };
+
+    // Top border line
+    draw_h_line(&mut out, usize::MAX, true, false);
+
+    for ri in 0..n_rows {
+        // Content row
+        // Left outer edge
+        let _ = write!(out, "{}", v_char(1));
+        for ci in 0..n_cols {
+            let cell = &rows[ri].cells[ci];
+            let w = col_widths[ci];
+
+            let content = cell.value.as_deref().unwrap_or("");
+            // Truncate to fit (leaving room for bold/italic markers)
+            let bold = cell.bold.unwrap_or(false);
+            let italic = cell.italic.unwrap_or(false);
+            let marker_chars = if bold && italic {
+                4
+            } else if bold || italic {
+                2
+            } else {
+                0
+            };
+            let content_width = w.saturating_sub(marker_chars);
+            let truncated_content: String = if content.chars().count() > content_width {
+                let mut s: String = content
+                    .chars()
+                    .take(content_width.saturating_sub(1))
+                    .collect();
+                s.push('…');
+                s
+            } else {
+                content.to_string()
+            };
+
+            // Determine alignment: right-align if align_h is "right", or if it looks numeric and align_h is not explicitly left
+            let is_numeric = content
+                .trim_start_matches(['-', '$', '('])
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
+            let right_align = cell.align_h.as_deref() == Some("right")
+                || (is_numeric && cell.align_h.as_deref().map(|a| a != "left").unwrap_or(true));
+
+            // Build decorated content
+            let decorated = {
+                let mut s = String::new();
+                if bold {
+                    s.push('*');
+                }
+                if italic {
+                    s.push('/');
+                }
+                s.push_str(&truncated_content);
+                if italic {
+                    s.push('/');
+                }
+                if bold {
+                    s.push('*');
+                }
+                s
+            };
+
+            // Pad to column width
+            let decorated_len = decorated.chars().count();
+            let padded = if right_align {
+                format!(
+                    " {:>width$} ",
+                    decorated,
+                    width = w.saturating_sub(decorated_len) + decorated_len
+                )
+            } else {
+                format!(
+                    " {:<width$} ",
+                    decorated,
+                    width = w.saturating_sub(decorated_len) + decorated_len
+                )
+            };
+            let _ = write!(out, "{}", padded);
+
+            // Right separator
+            if ci + 1 < n_cols {
+                let vw = v_sep_weight(ri, ci).max(1); // always at least thin inside the frame
+                let _ = write!(out, "{}", v_char(vw));
+            } else {
+                let _ = write!(out, "{}", v_char(1));
+            }
+        }
+        let _ = writeln!(out);
+
+        // Separator after this row
+        if ri + 1 < n_rows {
+            // Only draw if any column has a border between these rows
+            let max_w: u8 = (0..n_cols)
+                .map(|ci| h_sep_weight(ri, ci))
+                .max()
+                .unwrap_or(0);
+            if max_w > 0 {
+                draw_h_line(&mut out, ri, false, false);
+            }
+        }
+    }
+
+    // Bottom border
+    draw_h_line(&mut out, n_rows - 1, false, true);
+
+    out
 }

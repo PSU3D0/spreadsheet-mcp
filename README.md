@@ -195,10 +195,9 @@ Errors are grouped by structural pattern — formulas that differ only in cell r
 
 Shape policy:
 - **Canonical (default/omitted):** preserve the full response schema.
-- **range-values canonical:** return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).
-- **range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows` (formula cells have formula text; literal cells are `null`).
-- **Compact (single range):** flatten that entry to top-level fields (`range`, payload, and optional `next_start_row`).
-- **Compact (multiple ranges):** keep `values: [...]` with per-entry `range` for correlation.
+- **range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.
+- **range-values default encoding:** dense JSON (`dense.encoding = "dense_v1"`) with `dictionary` + run-length `row_runs`.
+- **range-values `--include-formulas`:** includes sparse formula coordinates in dense mode (`dense.formulas`), or a matrix in explicit `json` format.
 - **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
 - **formula-trace compact:** omits per-layer `highlights` while preserving `layers` and `next_cursor`.
 
@@ -215,7 +214,7 @@ Machine continuation example:
 2. If `next_start_row` is present, call `sheet-page` again with `--start-row <next_start_row>`.
 3. Stop when `next_start_row` is omitted.
 
-Use `--compact` to minimize whitespace and `--quiet` to suppress warnings.
+JSON output is compact by default; use `--quiet` to suppress warnings.
 Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.
 
 ### CLI command reference
@@ -227,8 +226,8 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `describe <file>` | Workbook metadata |
 | `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
-| `range-values <file> <sheet> <range> [range...] [--include-formulas]` | Raw cell values, optionally with aligned formula text matrix |
-| `inspect-cells <file> <sheet> <range>` | Unified per-cell formula/value/cached/style snapshot for triage |
+| `range-values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]` | Raw cell values in dense JSON encoding by default, optionally with sparse formula metadata |
+| `inspect-cells <file> <sheet> <target> [target...] [--include-empty]` | Detail-view per-cell formula/value/cached/style snapshots (max 25 cells per request) |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
@@ -247,8 +246,8 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
 | `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
 | `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
-| `recalculate <file>` | Recalculate formulas via backend |
-| `diff <original> <modified>` | Diff two workbook versions |
+| `recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
+| `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10]` | Summary-first workbook diff with optional paged details and filters |
 
 #### Formula write-path provenance (`write_path_provenance`)
 Formula-writing commands emit optional provenance metadata for troubleshooting:

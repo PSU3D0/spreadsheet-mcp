@@ -1,5 +1,10 @@
+pub mod binlog;
 pub mod diff;
+pub mod engine_bridge;
+pub mod events;
 pub mod read;
 pub mod recalc;
+pub mod session;
+pub mod session_store;
 pub mod types;
 pub mod write;

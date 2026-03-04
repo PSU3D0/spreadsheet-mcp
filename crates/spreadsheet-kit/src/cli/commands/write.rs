@@ -1,16 +1,20 @@
+use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::core::types::CellEdit;
 use crate::model::{
     CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
-    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, Warning, validate_formula,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, GridPayload, Warning, validate_formula,
 };
 use crate::runtime::stateless::StatelessRuntime;
+use crate::state::AppState;
+use crate::tools::filters::WorkbookFilter;
 use crate::tools::fork::{
-    ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, StructureBatchParamsInput,
-    StructureOp, StructureOpInput, StyleBatchParamsInput, StyleOp, StyleOpInput, TransformOp,
-    TransformTarget, apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file,
-    apply_structure_ops_to_file, apply_style_ops_to_file, apply_transform_ops_to_file,
+    ApplyFormulaPatternOpInput, ColumnSizeOp, ColumnSizeOpInput, CreateForkParams,
+    GridImportParams, MatrixCell, SaveForkParams, StructureBatchParamsInput, StructureOp,
+    StructureOpInput, StyleBatchParamsInput, StyleOp, StyleOpInput, TransformOp, TransformTarget,
+    apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file, apply_structure_ops_to_file,
+    apply_style_ops_to_file, apply_transform_ops_to_file, create_fork, grid_import,
     normalize_column_size_payload, normalize_structure_batch, normalize_style_batch,
-    resolve_style_ops_for_workbook, resolve_transform_ops_for_workbook,
+    resolve_style_ops_for_workbook, resolve_transform_ops_for_workbook, save_fork,
 };
 use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
 use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
@@ -22,6 +26,8 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 use tempfile::{Builder, TempPath};
 
 #[derive(Debug, Serialize)]
@@ -249,6 +255,12 @@ struct BatchApplyResponse {
     formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     write_path_provenance: Option<WritePathProvenance>,
+}
+
+#[derive(Debug)]
+struct GridImportFileApplyResult {
+    summary: crate::fork::ChangeSummary,
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
 }
 
 pub async fn copy(source: PathBuf, dest: PathBuf) -> Result<Value> {
@@ -543,6 +555,61 @@ pub async fn transform_batch(
                         builder.record_error(sheet_name, "FillRange", value, &err_msg);
                     }
                 },
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+                    let (anchor_col, anchor_row) = parse_cell_ref_for_cli(anchor)?;
+
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = anchor_row + r_idx as u32;
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = anchor_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}WriteMatrix formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None);
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
                 _ => valid_ops.push(op),
             }
         }
@@ -622,6 +689,298 @@ pub async fn transform_batch(
                 source.display().to_string(),
                 formula_parse_diagnostics,
                 write_path_provenance.clone(),
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn replace_in_formulas(
+    file: PathBuf,
+    sheet: String,
+    find: String,
+    replace: String,
+    range: Option<String>,
+    regex: bool,
+    case_sensitive: bool,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+    formula_parse_policy: Option<FormulaParsePolicy>,
+) -> Result<Value> {
+    use crate::tools::fork::{ReplaceInFormulasOp, apply_replace_in_formulas_to_file};
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: sheet.clone(),
+        find,
+        replace,
+        range,
+        regex,
+        case_sensitive,
+    };
+
+    let policy = formula_parse_policy.unwrap_or(FormulaParsePolicy::default_for_command_class(
+        CommandClass::BatchWrite,
+    ));
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".replace-in-formulas-", |path| {
+                    apply_replace_in_formulas_to_file(path, &op, policy)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
+            let would_change = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasDryRunResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                would_change,
+                recalc_needed: would_change,
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
+            })?)
+        }
+        BatchMutationMode::InPlace => {
+            let result = apply_in_place_with_temp(&source, ".replace-in-formulas-", |path| {
+                apply_replace_in_formulas_to_file(path, &op, policy).map_err(classify_apply_error)
+            })?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
+            let changed = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                changed,
+                recalc_needed: changed,
+                source_path: source.display().to_string(),
+                target_path: source.display().to_string(),
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
+            })?)
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let result = apply_to_output_with_temp(
+                &source,
+                &target,
+                force,
+                ".replace-in-formulas-",
+                |path| {
+                    apply_replace_in_formulas_to_file(path, &op, policy)
+                        .map_err(classify_apply_error)
+                },
+            )?;
+
+            let warnings = warning_strings_to_cli_warnings(result.warnings.clone());
+            let changed = result.formulas_changed > 0;
+
+            Ok(serde_json::to_value(ReplaceInFormulasApplyResponse {
+                formulas_checked: result.formulas_checked,
+                formulas_changed: result.formulas_changed,
+                changed,
+                recalc_needed: changed,
+                source_path: source.display().to_string(),
+                target_path: target.display().to_string(),
+                samples: result
+                    .samples
+                    .into_iter()
+                    .map(|s| ReplaceInFormulasSampleRow {
+                        address: s.address,
+                        before: s.before,
+                        after: s.after,
+                    })
+                    .collect(),
+                warnings,
+                formula_parse_diagnostics: result.formula_parse_diagnostics,
+            })?)
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasSampleRow {
+    address: String,
+    before: String,
+    after: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasDryRunResponse {
+    formulas_checked: u64,
+    formulas_changed: u64,
+    would_change: bool,
+    recalc_needed: bool,
+    samples: Vec<ReplaceInFormulasSampleRow>,
+    warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplaceInFormulasApplyResponse {
+    formulas_checked: u64,
+    formulas_changed: u64,
+    changed: bool,
+    recalc_needed: bool,
+    source_path: String,
+    target_path: String,
+    samples: Vec<ReplaceInFormulasSampleRow>,
+    warnings: Vec<Warning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn range_import(
+    file: PathBuf,
+    sheet: String,
+    anchor: String,
+    from_grid: Option<String>,
+    from_csv: Option<String>,
+    header: bool,
+    clear_target: bool,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_batch_mode(dry_run, in_place, output, force)?;
+
+    let grid: GridPayload = match (from_grid, from_csv) {
+        (Some(grid_path), None) => {
+            let grid_raw = fs::read_to_string(&grid_path).map_err(|e| {
+                invalid_argument(format!("unable to read --from-grid '{}': {}", grid_path, e))
+            })?;
+            serde_json::from_str(&grid_raw).map_err(|e| {
+                invalid_argument(format!("invalid grid payload in '{}': {}", grid_path, e))
+            })?
+        }
+        (None, Some(csv_path)) => grid_payload_from_csv_file(&sheet, &anchor, &csv_path, header)?,
+        (Some(_), Some(_)) => {
+            return Err(invalid_argument(
+                "--from-grid and --from-csv are mutually exclusive",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid_argument(
+                "range-import requires exactly one of --from-grid or --from-csv",
+            ));
+        }
+    };
+
+    let op_count = 1usize;
+    let mut operation_counts = BTreeMap::new();
+    operation_counts.insert("grid_import".to_string(), 1);
+
+    let formula_targets = if grid
+        .rows
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .any(|cell| cell.f.is_some())
+    {
+        vec![format!("{}!{}", sheet, anchor)]
+    } else {
+        Vec::new()
+    };
+    let write_path_provenance = formula_write_provenance("range_import", formula_targets);
+
+    match mode {
+        BatchMutationMode::DryRun => {
+            let (apply_result, _temp_path) =
+                apply_to_temp_copy(&source, source.parent(), ".range-import-", |path| {
+                    apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let would_change = grid_import_summary_indicates_change(&result_counts);
+
+            dry_run_response(
+                op_count,
+                operation_counts,
+                result_counts,
+                warnings,
+                would_change,
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
+            )
+        }
+        BatchMutationMode::InPlace => {
+            let apply_result = apply_in_place_with_temp(&source, ".range-import-", |path| {
+                apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                    .map_err(classify_apply_error)
+            })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = grid_import_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                1,
+                warnings,
+                changed,
+                source.display().to_string(),
+                source.display().to_string(),
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
+            )
+        }
+        BatchMutationMode::Output { target, force } => {
+            let target = runtime.normalize_destination_path(&target)?;
+            ensure_output_path_is_distinct(&source, &target)?;
+
+            let apply_result =
+                apply_to_output_with_temp(&source, &target, force, ".range-import-", |path| {
+                    apply_grid_import_to_path(path, &sheet, &anchor, &grid, clear_target)
+                        .map_err(classify_apply_error)
+                })?;
+
+            let result_counts = apply_result.summary.counts;
+            let warnings = warning_strings_to_cli_warnings(apply_result.summary.warnings);
+            let changed = grid_import_summary_indicates_change(&result_counts);
+
+            apply_response(
+                op_count,
+                1,
+                warnings,
+                changed,
+                target.display().to_string(),
+                source.display().to_string(),
+                apply_result.formula_parse_diagnostics,
+                write_path_provenance,
             )
         }
     }
@@ -841,6 +1200,49 @@ pub async fn apply_formula_pattern(
     }
 }
 
+pub async fn check_ref_impact(
+    file: PathBuf,
+    ops_ref: String,
+    show_formula_delta: bool,
+) -> Result<Value> {
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+
+    // Load and parse the ops payload (same format as structure-batch).
+    let payload: OpsPayload<StructureOpInput> = parse_ops_payload(
+        &ops_ref,
+        STRUCTURE_PAYLOAD_SHAPE,
+        STRUCTURE_PAYLOAD_MINIMAL_EXAMPLE,
+    )?;
+    let (normalized, _warnings) = normalize_structure_batch(StructureBatchParamsInput {
+        fork_id: String::new(),
+        ops: payload.ops,
+        mode: None,
+        label: None,
+        formula_parse_policy: None,
+        impact_report: None,
+        show_formula_delta: None,
+    })
+    .map_err(|error| invalid_ops_payload(error.to_string()))?;
+
+    // Call compute_structure_impact (read-only analysis, never mutates the file).
+    let (impact_report, formula_delta) = crate::tools::structure_impact::compute_structure_impact(
+        &source,
+        &normalized.ops,
+        show_formula_delta,
+    )?;
+
+    // Build response JSON.
+    let mut response = serde_json::to_value(&impact_report)?;
+    if let Some(delta) = formula_delta {
+        response["formula_delta_preview"] = serde_json::to_value(&delta)?;
+    }
+    response["source_path"] = Value::String(source.display().to_string());
+
+    Ok(response)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn structure_batch(
     file: PathBuf,
     ops: String,
@@ -849,7 +1251,17 @@ pub async fn structure_batch(
     output: Option<PathBuf>,
     force: bool,
     formula_parse_policy: Option<FormulaParsePolicy>,
+    impact_report: bool,
+    show_formula_delta: bool,
 ) -> Result<Value> {
+    // --impact-report and --show-formula-delta require --dry-run.
+    if (impact_report || show_formula_delta) && !dry_run {
+        bail!(
+            "invalid argument: --impact-report and --show-formula-delta require --dry-run. \
+             Add --dry-run to preview structural impact without mutating the file."
+        );
+    }
+
     let runtime = StatelessRuntime;
     let source = runtime.normalize_existing_file(&file)?;
     let mode = validate_batch_mode(dry_run, in_place, output, force)?;
@@ -865,6 +1277,8 @@ pub async fn structure_batch(
         mode: None,
         label: None,
         formula_parse_policy,
+        impact_report: None,
+        show_formula_delta: None,
     })
     .map_err(|error| invalid_ops_payload(error.to_string()))?;
 
@@ -894,7 +1308,7 @@ pub async fn structure_batch(
             );
             let would_change = structure_summary_indicates_change(&result_counts);
 
-            dry_run_response(
+            let mut response = dry_run_response(
                 op_count,
                 operation_counts,
                 result_counts,
@@ -902,7 +1316,24 @@ pub async fn structure_batch(
                 would_change,
                 formula_parse_diagnostics,
                 None,
-            )
+            )?;
+
+            // Attach optional impact report and formula delta preview.
+            if impact_report || show_formula_delta {
+                let (report, delta) = crate::tools::structure_impact::compute_structure_impact(
+                    &source,
+                    &normalized.ops,
+                    show_formula_delta,
+                )?;
+                if impact_report {
+                    response["impact_report"] = serde_json::to_value(&report)?;
+                }
+                if let Some(delta) = delta {
+                    response["formula_delta_preview"] = serde_json::to_value(&delta)?;
+                }
+            }
+
+            Ok(response)
         }
         BatchMutationMode::InPlace => {
             let apply_result = apply_in_place_with_temp(&source, ".structure-batch-", |path| {
@@ -1479,6 +1910,7 @@ fn summarize_transform_operation_counts(ops: &[TransformOp]) -> BTreeMap<String,
             TransformOp::ClearRange { .. } => "clear_range",
             TransformOp::FillRange { .. } => "fill_range",
             TransformOp::ReplaceInRange { .. } => "replace_in_range",
+            TransformOp::WriteMatrix { .. } => "write_matrix",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }
@@ -1512,6 +1944,9 @@ fn summarize_structure_operation_counts(ops: &[StructureOp]) -> BTreeMap<String,
             StructureOp::DeleteSheet { .. } => "delete_sheet",
             StructureOp::CopyRange { .. } => "copy_range",
             StructureOp::MoveRange { .. } => "move_range",
+            StructureOp::MergeCells { .. } => "merge_cells",
+            StructureOp::UnmergeCells { .. } => "unmerge_cells",
+            StructureOp::CloneRow { .. } => "clone_row",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }
@@ -1634,6 +2069,12 @@ fn rules_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
     )
 }
 
+fn grid_import_summary_indicates_change(counts: &BTreeMap<String, u64>) -> bool {
+    counts
+        .iter()
+        .any(|(key, value)| key != "ops" && *value > 0 && !key.starts_with("warnings_"))
+}
+
 fn any_count_non_zero(counts: &BTreeMap<String, u64>, keys: &[&str]) -> bool {
     keys.iter()
         .any(|key| counts.get(*key).copied().unwrap_or(0) > 0)
@@ -1687,6 +2128,17 @@ fn formula_write_provenance(
     }
 }
 
+fn parse_cell_ref_for_cli(cell: &str) -> Result<(u32, u32)> {
+    let (col, row, _, _) = umya_spreadsheet::helper::coordinate::index_from_coordinate(cell);
+    match (col, row) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Ok((c, r)),
+        _ => Err(invalid_ops_payload(format!(
+            "invalid cell reference '{}' (expected A1-style reference)",
+            cell
+        ))),
+    }
+}
+
 fn transform_formula_targets(ops: &[TransformOp]) -> Vec<String> {
     ops.iter()
         .filter_map(|op| match op {
@@ -1703,6 +2155,18 @@ fn transform_formula_targets(ops: &[TransformOp]) -> Vec<String> {
                 ..
             } if *include_formulas => {
                 Some(format!("{}!{}", sheet_name, transform_target_label(target)))
+            }
+            TransformOp::WriteMatrix {
+                sheet_name,
+                anchor,
+                rows,
+                ..
+            } if rows.iter().any(|r| {
+                r.iter()
+                    .any(|c| matches!(c, Some(crate::tools::fork::MatrixCell::Formula(_))))
+            }) =>
+            {
+                Some(format!("{}!{}", sheet_name, anchor))
             }
             _ => None,
         })
@@ -1998,6 +2462,231 @@ fn atomic_overwrite_supported() -> bool {
     false
 }
 
+fn grid_payload_from_csv_file(
+    sheet_name: &str,
+    anchor: &str,
+    csv_path: &str,
+    skip_header: bool,
+) -> Result<GridPayload> {
+    let csv_raw = fs::read_to_string(csv_path).map_err(|e| {
+        invalid_argument(format!("unable to read --from-csv '{}': {}", csv_path, e))
+    })?;
+    let mut records = parse_csv_records(&csv_raw)
+        .map_err(|e| invalid_argument(format!("invalid CSV in '{}': {}", csv_path, e)))?;
+
+    if skip_header && !records.is_empty() {
+        records.remove(0);
+    }
+
+    let rows = records
+        .into_iter()
+        .enumerate()
+        .map(|(row_idx, row)| {
+            let cells = row
+                .into_iter()
+                .enumerate()
+                .map(|(col_idx, field)| crate::model::GridCell {
+                    offset: [row_idx as u32, col_idx as u32],
+                    v: Some(csv_field_to_json(&field)),
+                    f: None,
+                    fmt: None,
+                    style: None,
+                })
+                .collect();
+            crate::model::GridRow { cells }
+        })
+        .collect();
+
+    Ok(GridPayload {
+        sheet: sheet_name.to_string(),
+        anchor: anchor.to_string(),
+        columns: Vec::new(),
+        merges: Vec::new(),
+        rows,
+    })
+}
+
+fn csv_field_to_json(field: &str) -> serde_json::Value {
+    let trimmed = field.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::Null;
+    }
+    if trimmed.eq_ignore_ascii_case("true") {
+        return serde_json::Value::Bool(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return serde_json::Value::Bool(false);
+    }
+    if let Ok(int_val) = trimmed.parse::<i64>() {
+        return serde_json::json!(int_val);
+    }
+    if let Ok(float_val) = trimmed.parse::<f64>() {
+        return serde_json::json!(float_val);
+    }
+    serde_json::Value::String(field.to_string())
+}
+
+fn parse_csv_records(raw: &str) -> Result<Vec<Vec<String>>> {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if matches!(chars.peek(), Some('"')) {
+                    let _ = chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_quotes = true,
+            ',' => {
+                row.push(std::mem::take(&mut field));
+            }
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut row));
+            }
+            '\r' => {
+                if matches!(chars.peek(), Some('\n')) {
+                    let _ = chars.next();
+                }
+                row.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut row));
+            }
+            _ => field.push(ch),
+        }
+    }
+
+    if in_quotes {
+        return Err(anyhow!("unterminated quoted field"));
+    }
+
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        records.push(row);
+    }
+
+    Ok(records)
+}
+
+fn apply_grid_import_to_path(
+    path: &Path,
+    sheet_name: &str,
+    anchor: &str,
+    grid: &GridPayload,
+    clear_target: bool,
+) -> Result<GridImportFileApplyResult> {
+    let workspace_root = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let config = Arc::new(ServerConfig {
+        workspace_root,
+        screenshot_dir: PathBuf::from("screenshots"),
+        path_mappings: Vec::new(),
+        cache_capacity: 2,
+        supported_extensions: vec!["xlsx".into(), "xlsm".into(), "xls".into(), "xlsb".into()],
+        single_workbook: Some(path.to_path_buf()),
+        enabled_tools: None,
+        transport: TransportKind::Stdio,
+        http_bind_address: "127.0.0.1:8079"
+            .parse()
+            .expect("hardcoded bind address is valid"),
+        recalc_enabled: true,
+        recalc_backend: RecalcBackendKind::Auto,
+        vba_enabled: false,
+        max_concurrent_recalcs: 1,
+        tool_timeout_ms: Some(30_000),
+        max_response_bytes: Some(1_000_000),
+        output_profile: OutputProfile::Verbose,
+        max_payload_bytes: Some(65_536),
+        max_cells: Some(10_000),
+        max_items: Some(500),
+        allow_overwrite: true,
+    });
+
+    let sheet_name = sheet_name.to_string();
+    let anchor = anchor.to_string();
+    let grid = grid.clone();
+    let path_buf = path.to_path_buf();
+
+    let handle = thread::spawn(move || -> Result<GridImportFileApplyResult> {
+        let state = Arc::new(AppState::new(config));
+        let workbook_list = state.list_workbooks(WorkbookFilter::default())?;
+        let workbook_id = workbook_list
+            .workbooks
+            .first()
+            .map(|entry| entry.workbook_id.clone())
+            .ok_or_else(|| anyhow!("no workbook found at '{}'", path_buf.display()))?;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| write_failed(format!("failed to create tokio runtime: {}", e)))?;
+
+        let (summary, formula_parse_diagnostics) = runtime.block_on(async {
+            let fork = create_fork(
+                state.clone(),
+                CreateForkParams {
+                    workbook_or_fork_id: workbook_id,
+                },
+            )
+            .await?;
+
+            let import_response = grid_import(
+                state.clone(),
+                GridImportParams {
+                    fork_id: fork.fork_id.clone(),
+                    sheet_name,
+                    anchor,
+                    grid,
+                    clear_target,
+                    mode: None,
+                    label: None,
+                    formula_parse_policy: None,
+                },
+            )
+            .await?;
+
+            let _ = save_fork(
+                state.clone(),
+                SaveForkParams {
+                    fork_id: fork.fork_id,
+                    target_path: None,
+                    drop_fork: true,
+                },
+            )
+            .await?;
+
+            Ok::<_, anyhow::Error>((
+                import_response.summary,
+                import_response.formula_parse_diagnostics,
+            ))
+        })?;
+
+        Ok(GridImportFileApplyResult {
+            summary,
+            formula_parse_diagnostics,
+        })
+    });
+
+    handle
+        .join()
+        .map_err(|_| write_failed("grid import worker thread panicked"))?
+}
+
 fn classify_apply_error(error: anyhow::Error) -> anyhow::Error {
     let message = error.to_string();
     if message.starts_with(FORMULA_PARSE_FAILED_PREFIX) {
@@ -2028,6 +2717,357 @@ fn output_exists(message: impl AsRef<str>) -> anyhow::Error {
 
 fn write_failed(message: impl AsRef<str>) -> anyhow::Error {
     anyhow!("write failed: {}", message.as_ref())
+}
+
+// ── Named Range CRUD CLI ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct DefineNameCliResponse {
+    file: String,
+    name: String,
+    refers_to: String,
+    scope_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateNameCliResponse {
+    file: String,
+    name: String,
+    refers_to: String,
+    scope_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_refers_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteNameCliResponse {
+    file: String,
+    name: String,
+    deleted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    dry_run: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn define_name(
+    file: PathBuf,
+    name: String,
+    refers_to: String,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{define_name_in_file, parse_scope_kind};
+
+    let scope_kind = parse_scope_kind(scope.as_deref())?;
+    if scope_kind == crate::model::NamedRangeScope::Sheet && scope_sheet_name.is_none() {
+        bail!("--scope-sheet-name is required when --scope is 'sheet'");
+    }
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+    if refers_to.trim().is_empty() {
+        bail!("refers_to must not be empty");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    let scope_str = match scope_kind {
+        crate::model::NamedRangeScope::Workbook => "workbook",
+        crate::model::NamedRangeScope::Sheet => "sheet",
+    };
+
+    match mode {
+        EditMutationMode::DryRun => {
+            // Validate only.
+            let _ = apply_to_temp_copy(&source, source.parent(), ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            apply_in_place_with_temp(&source, ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            apply_to_output_with_temp(&source, &target, f, ".defname-", |path| {
+                define_name_in_file(
+                    path,
+                    &name,
+                    &refers_to,
+                    scope_kind,
+                    scope_sheet_name.as_deref(),
+                )
+            })?;
+            Ok(serde_json::to_value(DefineNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_name(
+    file: PathBuf,
+    name: String,
+    refers_to: Option<String>,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{parse_scope_kind_optional, update_name_in_file};
+
+    let scope_kind = parse_scope_kind_optional(scope.as_deref())?;
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+    if let Some(refers_to) = refers_to.as_ref()
+        && refers_to.trim().is_empty()
+    {
+        bail!("refers_to must not be empty when provided");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    match mode {
+        EditMutationMode::DryRun => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_to_temp_copy(&source, source.parent(), ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        refers_to.as_deref(),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?
+                .0;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to: final_refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_in_place_with_temp(&source, ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        refers_to.as_deref(),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to: final_refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            let (previous_refers_to, eff_scope, eff_sheet) =
+                apply_to_output_with_temp(&source, &target, f, ".updname-", |path| {
+                    update_name_in_file(
+                        path,
+                        &name,
+                        refers_to.as_deref(),
+                        scope_kind,
+                        scope_sheet_name.as_deref(),
+                    )
+                })?;
+            let scope_str = match eff_scope {
+                crate::model::NamedRangeScope::Workbook => "workbook",
+                crate::model::NamedRangeScope::Sheet => "sheet",
+            };
+            let final_refers_to = refers_to
+                .clone()
+                .unwrap_or_else(|| previous_refers_to.clone());
+            Ok(serde_json::to_value(UpdateNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                refers_to: final_refers_to,
+                scope_kind: scope_str.to_string(),
+                scope_sheet_name: eff_sheet.or(scope_sheet_name),
+                previous_refers_to: Some(previous_refers_to),
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn delete_name(
+    file: PathBuf,
+    name: String,
+    scope: Option<String>,
+    scope_sheet_name: Option<String>,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    use crate::tools::{delete_name_in_file, parse_scope_kind_optional};
+
+    let scope_kind = parse_scope_kind_optional(scope.as_deref())?;
+    if name.trim().is_empty() {
+        bail!("name must not be empty");
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let mode = validate_edit_mode(dry_run, in_place, output, force)?;
+
+    match mode {
+        EditMutationMode::DryRun => {
+            let _ = apply_to_temp_copy(&source, source.parent(), ".delname-", |path| {
+                delete_name_in_file(path, &name, scope_kind, scope_sheet_name.as_deref())
+            })?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: None,
+                target_path: None,
+                dry_run: true,
+            })?)
+        }
+        EditMutationMode::InPlace => {
+            delete_name_in_file_via_helper(
+                &source,
+                &name,
+                scope_kind,
+                scope_sheet_name.as_deref(),
+            )?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(source.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+        EditMutationMode::Output { target, force: f } => {
+            apply_to_output_with_temp(&source, &target, f, ".delname-", |path| {
+                delete_name_in_file(path, &name, scope_kind, scope_sheet_name.as_deref())
+            })?;
+            Ok(serde_json::to_value(DeleteNameCliResponse {
+                file: source.display().to_string(),
+                name,
+                deleted: true,
+                source_path: Some(source.display().to_string()),
+                target_path: Some(target.display().to_string()),
+                dry_run: false,
+            })?)
+        }
+    }
+}
+
+fn delete_name_in_file_via_helper(
+    source: &Path,
+    name: &str,
+    scope_kind: Option<crate::model::NamedRangeScope>,
+    scope_sheet_name: Option<&str>,
+) -> Result<bool> {
+    use crate::tools::delete_name_in_file;
+    apply_in_place_with_temp(source, ".delname-", |path| {
+        delete_name_in_file(path, name, scope_kind, scope_sheet_name)
+    })
 }
 
 pub fn parse_shorthand_for_tests(entries: Vec<String>) -> Result<(Vec<CellEdit>, Vec<Warning>)> {

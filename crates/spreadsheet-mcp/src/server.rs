@@ -1,11 +1,12 @@
 use crate::config::ServerConfig;
 use crate::errors::InvalidParamsError;
 use crate::model::{
-    CloseWorkbookResponse, FindFormulaResponse, FindValueResponse, FormulaTraceResponse,
+    CloseWorkbookResponse, DefineNameResponse, DeleteNameResponse, FindFormulaResponse,
+    FindValueResponse, FormulaTraceResponse, InspectCellsResponse, LayoutPageResponse,
     ManifestStubResponse, NamedRangesResponse, RangeValuesResponse, ReadTableResponse,
     SheetFormulaMapResponse, SheetListResponse, SheetOverviewResponse, SheetPageResponse,
-    SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, VolatileScanResponse,
-    WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
+    SheetStatisticsResponse, SheetStylesResponse, TableProfileResponse, UpdateNameResponse,
+    VolatileScanResponse, WorkbookDescription, WorkbookListResponse, WorkbookStyleSummaryResponse,
     WorkbookSummaryResponse,
 };
 use crate::response_prune::Pruned;
@@ -51,7 +52,11 @@ Use range param to scope to specific region.
 - formula_trace: Trace ONE cell's precedents/dependents. Use AFTER formula_map \
 to dive deep on specific outputs (e.g., trace the total cell to understand calc flow).
 - sheet_page: Raw cell dump. Use ONLY when region detection fails or for \
-unstructured sheets. Prefer read_table for tabular data.
+unstructured sheets. Prefer read_table for tabular data. \
+Responses include a budget object with cell/byte limits and continuation hints when truncated.
+- inspect_cells: Strict detail-view for up to 25 cells. Returns full metadata (value, formula, \
+style, number format) per cell. Use for spot-checking specific cells AFTER discovering them \
+via sheet_overview or find_value. NOT for bulk reads — use sheet-page or range-values instead.
 - find_value with mode='label': For key-value layouts (label in col A, value in col B). \
 Use direction='right' or 'below' hints.
 - find_formula: Search formulas. Default returns no context and only first 50 matches. \
@@ -64,6 +69,7 @@ OUTPUT DEFAULTS (token-dense profile):
 - table_profile defaults to summary_only=true (no samples). Set summary_only=false to include sample rows.
 - sheet_statistics defaults to summary_only=true (no samples). Set summary_only=false to include samples.
 - sheet_styles defaults to summary_only=true (no descriptors/ranges/examples). Use include_descriptor/include_ranges/include_example_cells.
+- layout_page defaults to render=json (no ascii_render field). Use render=ascii or render=both to include the ASCII grid. Capped at 80 rows × 25 columns.
 - workbook_style_summary defaults to summary_only=true (no theme/conditional formats/descriptors). Use include_theme/include_conditional_formats/include_descriptor/include_example_cells.
 - sheet_formula_map defaults to summary_only=true (addresses hidden). Set include_addresses=true to show cell addresses.
 - find_value defaults to context=none (no neighbors/row_context). Use context=neighbors, context=row, or context=both.
@@ -72,6 +78,8 @@ OUTPUT DEFAULTS (token-dense profile):
 - list_sheets defaults to include_bounds=false (no row/column counts). Set include_bounds=true to show them.
 - workbook_summary defaults to summary_only=true (no entry points/named ranges). Set summary_only=false or include_entry_points/include_named_ranges.
 - Pagination fields (next_offset/next_start_row) only appear when more data exists.
+- Read surfaces (sheet_page, inspect_cells) include a budget object when truncation occurs \
+or limits are configured. Check budget.continuation for agent-safe next-step guidance.
 
 RANGES: Use A1 notation (e.g., A1:C10). Prefer region_id when available.
 
@@ -106,7 +114,7 @@ Fork-based editing allows 'what-if' analysis without modifying original files.
 WORKFLOW:
 1) create_fork: Create editable copy of a workbook. Returns fork_id.
 2) Optional: checkpoint_fork before large edits.
-3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch: Apply edits to the fork.
+3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch/replace_in_formulas: Apply edits to the fork.
 4) recalculate: Trigger the configured recalc backend to recompute all formulas.
 5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
@@ -453,6 +461,25 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "inspect_cells",
+        description = "Detail-view: inspect up to 25 individual cells with full metadata (value, formula, style, number format). Use sheet-page or range-values for bulk reads."
+    )]
+    pub async fn inspect_cells(
+        &self,
+        Parameters(params): Parameters<tools::InspectCellsParams>,
+    ) -> Result<Json<InspectCellsResponse>, McpError> {
+        self.ensure_tool_enabled("inspect_cells")
+            .map_err(|e| to_mcp_error_for_tool("inspect_cells", e))?;
+        self.run_tool_with_timeout(
+            "inspect_cells",
+            tools::inspect_cells(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("inspect_cells", e))
+    }
+
+    #[tool(
         name = "sheet_statistics",
         description = "Get aggregated sheet statistics"
     )]
@@ -580,6 +607,44 @@ impl SpreadsheetServer {
     }
 
     #[tool(
+        name = "layout_page",
+        description = "Render a sheet range with layout semantics: column widths, borders, bold/italic, alignment, and merged cells. Returns a JSON layout plane (per-column widths, per-cell style metadata) and optionally an ASCII grid render. Use render=ascii or render=both to include the ASCII view. Capped at 80 rows × 25 columns."
+    )]
+    pub async fn layout_page(
+        &self,
+        Parameters(params): Parameters<tools::LayoutPageParams>,
+    ) -> Result<Json<LayoutPageResponse>, McpError> {
+        self.ensure_tool_enabled("layout_page")
+            .map_err(|e| to_mcp_error_for_tool("layout_page", e))?;
+        self.run_tool_with_timeout(
+            "layout_page",
+            tools::layout_page(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("layout_page", e))
+    }
+
+    #[tool(
+        name = "grid_export",
+        description = "Export a range into a rich grid payload containing per-cell values, formulas, number formats, styles, column sizes, and merges. Returns inline JSON."
+    )]
+    pub async fn grid_export(
+        &self,
+        Parameters(params): Parameters<tools::GridExportParams>,
+    ) -> Result<Json<spreadsheet_kit::model::GridPayload>, McpError> {
+        self.ensure_tool_enabled("grid_export")
+            .map_err(|e| to_mcp_error_for_tool("grid_export", e))?;
+        self.run_tool_with_timeout(
+            "grid_export",
+            tools::grid_export(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("grid_export", e))
+    }
+
+    #[tool(
         name = "workbook_style_summary",
         description = "Summarise style usage, theme colors, and conditional formats across a workbook"
     )]
@@ -615,6 +680,25 @@ impl SpreadsheetServer {
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("get_manifest_stub", e))
+    }
+
+    #[tool(
+        name = "execute_manifest",
+        description = "Execute a SheetPort manifest with JSON inputs"
+    )]
+    pub async fn execute_manifest(
+        &self,
+        Parameters(params): Parameters<tools::ExecuteManifestParams>,
+    ) -> Result<Json<tools::ExecuteManifestResponse>, McpError> {
+        self.ensure_tool_enabled("execute_manifest")
+            .map_err(|e| to_mcp_error_for_tool("execute_manifest", e))?;
+        self.run_tool_with_timeout(
+            "execute_manifest",
+            tools::execute_manifest(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("execute_manifest", e))
     }
 
     #[tool(name = "close_workbook", description = "Evict a workbook from cache")]
@@ -757,6 +841,25 @@ Mode: preview or apply (default apply). Op mode: merge (default), set, or clear.
     }
 
     #[tool(
+        name = "grid_import",
+        description = "Import a rich grid payload containing values, formulas, styles, formats, column sizes, and merges."
+    )]
+    pub async fn grid_import(
+        &self,
+        Parameters(params): Parameters<tools::fork::GridImportParams>,
+    ) -> Result<Json<tools::fork::GridImportResponse>, McpError> {
+        self.ensure_recalc_enabled("grid_import")
+            .map_err(|e| to_mcp_error_for_tool("grid_import", e))?;
+        self.run_tool_with_timeout(
+            "grid_import",
+            tools::fork::grid_import(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("grid_import", e))
+    }
+
+    #[tool(
         name = "column_size_batch",
         description = "Set column widths or compute auto-widths in a fork. Targets column ranges like 'A:A' or 'A:C'. \
 Mode: preview or apply (default apply). Auto computes and sets widths immediately (persisted). \
@@ -840,6 +943,66 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
     }
 
     #[tool(
+        name = "define_name",
+        description = "Define a new named range in a fork. Scope: 'workbook' (default) or 'sheet'. \
+Requires scope_sheet_name when scope is 'sheet'."
+    )]
+    pub async fn define_name(
+        &self,
+        Parameters(params): Parameters<tools::DefineNameParams>,
+    ) -> Result<Json<DefineNameResponse>, McpError> {
+        self.ensure_recalc_enabled("define_name")
+            .map_err(|e| to_mcp_error_for_tool("define_name", e))?;
+        self.run_tool_with_timeout(
+            "define_name",
+            tools::define_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("define_name", e))
+    }
+
+    #[tool(
+        name = "update_name",
+        description = "Update an existing named range's refers_to in a fork. \
+Scope filter: 'workbook' or 'sheet' to disambiguate."
+    )]
+    pub async fn update_name(
+        &self,
+        Parameters(params): Parameters<tools::UpdateNameParams>,
+    ) -> Result<Json<UpdateNameResponse>, McpError> {
+        self.ensure_recalc_enabled("update_name")
+            .map_err(|e| to_mcp_error_for_tool("update_name", e))?;
+        self.run_tool_with_timeout(
+            "update_name",
+            tools::update_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("update_name", e))
+    }
+
+    #[tool(
+        name = "delete_name",
+        description = "Delete a named range from a fork. \
+Scope filter: 'workbook' or 'sheet' to disambiguate."
+    )]
+    pub async fn delete_name(
+        &self,
+        Parameters(params): Parameters<tools::DeleteNameParams>,
+    ) -> Result<Json<DeleteNameResponse>, McpError> {
+        self.ensure_recalc_enabled("delete_name")
+            .map_err(|e| to_mcp_error_for_tool("delete_name", e))?;
+        self.run_tool_with_timeout(
+            "delete_name",
+            tools::delete_name(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("delete_name", e))
+    }
+
+    #[tool(
         name = "rules_batch",
         description = "Apply rule operations to a fork (DV v1: set_data_validation; CF v1: add/set/clear conditional formats). Mode: preview or apply (default apply)."
     )]
@@ -856,6 +1019,29 @@ Note: structural edits may not fully rewrite formulas/named ranges like Excel; r
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("rules_batch", e))
+    }
+
+    #[tool(
+        name = "replace_in_formulas",
+        description = "Find and replace text in formula bodies only (not cell values). \
+Supports plain text and regex modes with optional case sensitivity. \
+Scope to a range or default to the used range. \
+Mode: preview or apply (default apply). \
+Returns count of changed formulas and sample diffs."
+    )]
+    pub async fn replace_in_formulas(
+        &self,
+        Parameters(params): Parameters<tools::fork::ReplaceInFormulasParams>,
+    ) -> Result<Json<tools::fork::ReplaceInFormulasResponse>, McpError> {
+        self.ensure_recalc_enabled("replace_in_formulas")
+            .map_err(|e| to_mcp_error_for_tool("replace_in_formulas", e))?;
+        self.run_tool_with_timeout(
+            "replace_in_formulas",
+            tools::fork::replace_in_formulas(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("replace_in_formulas", e))
     }
 
     #[tool(name = "get_edits", description = "List all edits applied to a fork")]

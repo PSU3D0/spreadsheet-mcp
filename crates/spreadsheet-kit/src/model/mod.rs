@@ -221,6 +221,40 @@ pub struct SheetPageResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values_only: Option<SheetPageValues>,
     pub format: SheetPageFormat,
+    /// True when the response was truncated by cell/payload budget limits.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    /// Machine-consumable budget/continuation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ReadBudget>,
+}
+
+/// Machine-consumable output-budget metadata attached to read-surface responses.
+///
+/// Allows agents to detect truncation deterministically and build continuation
+/// requests without guessing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadBudget {
+    /// Maximum cells allowed in a single response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cells: Option<usize>,
+    /// Maximum payload bytes allowed in a single response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_payload_bytes: Option<usize>,
+    /// Number of rows actually returned.
+    pub rows_returned: usize,
+    /// Number of cells actually returned.
+    pub cells_returned: usize,
+    /// Total rows available in the queried range (if known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows_available: Option<u32>,
+    /// Human/agent-readable continuation hint (e.g. "use start_row=51 to continue").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<String>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -274,6 +308,8 @@ pub enum TableOutputFormat {
     Json,
     Values,
     Csv,
+    Dense,
+    Rows,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
@@ -445,10 +481,23 @@ pub enum TraceDirection {
     Dependents,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NamedRangeScope {
+    Workbook,
+    Sheet,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct NamedRangeDescriptor {
     pub name: String,
     pub scope: Option<String>,
+    /// Explicit scope kind: "workbook" or "sheet".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_kind: Option<NamedRangeScope>,
+    /// Sheet name when scope_kind is "sheet".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
     pub refers_to: String,
     pub kind: NamedItemKind,
     pub sheet_name: Option<String>,
@@ -468,6 +517,35 @@ pub enum NamedItemKind {
 pub struct NamedRangesResponse {
     pub workbook_id: WorkbookId,
     pub items: Vec<NamedRangeDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DefineNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub refers_to: String,
+    pub scope_kind: NamedRangeScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub refers_to: String,
+    pub scope_kind: NamedRangeScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_sheet_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_refers_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteNameResponse {
+    pub workbook_id: WorkbookId,
+    pub name: String,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -770,6 +848,7 @@ pub struct ConditionalFormatSummary {
 pub struct ManifestStubResponse {
     pub workbook_id: WorkbookId,
     pub slug: String,
+    pub manifest_yaml: String,
     pub sheets: Vec<ManifestSheetStub>,
 }
 
@@ -892,8 +971,7 @@ pub struct TableProfileResponse {
 /// `values` may be omitted when no valid entries remain (for example, fully invalid
 /// or unparseable range inputs).
 ///
-/// CLI `--shape compact` may project a single entry to top-level for token efficiency,
-/// but this struct remains the source-of-truth schema.
+/// CLI output keeps this stable top-level shape in both canonical and compact modes.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesResponse {
     pub workbook_id: WorkbookId,
@@ -905,10 +983,8 @@ pub struct RangeValuesResponse {
 
 /// Per-range payload for `range-values`.
 ///
-/// `range` is the mandatory correlation key in both canonical and compact shapes.
-/// `next_start_row` is an optional continuation cursor when output is truncated; it
-/// must stay representable both inside `values[]` (canonical) and after compact
-/// single-entry flattening.
+/// `range` is the mandatory correlation key in canonical and compact output.
+/// `next_start_row` is an optional continuation cursor when output is truncated.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RangeValuesEntry {
     pub range: String,
@@ -922,19 +998,74 @@ pub struct RangeValuesEntry {
     pub formulas: Option<Vec<Vec<Option<String>>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Vec<Option<CellValuePrimitive>>>>,
+    /// Dense JSON encoding optimized for agent consumption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense: Option<RangeValuesDensePayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<String>,
+    /// Row-keyed JSON array: each element maps column letters to values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_keyed: Option<Vec<RangeValuesRowEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_row: Option<u32>,
+}
+
+/// A single row in the `rows` output format for `range-values`.
+///
+/// Maps column letters to cell values, giving agents a direct row-by-row
+/// mapping without needing to decode dense encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesRowEntry {
+    /// 1-based row number in the sheet.
+    pub row: u32,
+    /// Column-letter-keyed cell values (only non-empty cells included).
+    pub cells: BTreeMap<String, CellValuePrimitive>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDensePayload {
+    /// Encoding contract version.
+    pub encoding: String,
+    /// Number of columns represented in each dense row.
+    pub col_count: u32,
+    /// Value dictionary. Index 0 is always null.
+    pub dictionary: Vec<Option<CellValuePrimitive>>,
+    /// Run-length encoded rows using dictionary indexes.
+    pub row_runs: Vec<Vec<RangeValuesDenseRun>>,
+    /// Sparse formulas by row/column, included only when requested.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub formulas: Vec<RangeValuesDenseFormula>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDenseRun {
+    pub value_idx: u32,
+    pub len: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RangeValuesDenseFormula {
+    /// Zero-based row index within returned rows.
+    pub row: u32,
+    /// Zero-based column index within returned rows.
+    pub col: u32,
+    pub formula: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectCellsResponse {
     pub workbook_id: WorkbookId,
     pub sheet_name: String,
+    /// Legacy single-range echo. For multi-target requests this is a comma-joined list.
     pub range: String,
+    /// Requested A1 targets when more than one was supplied.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
     pub cells: Vec<CellSnapshot>,
     pub truncated: bool,
+    /// Machine-consumable budget/continuation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ReadBudget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -983,4 +1114,137 @@ pub struct VbaModuleSourceResponse {
     pub total_lines: u32,
     pub truncated: bool,
     pub source: String,
+}
+
+// ── layout-page ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutMode {
+    #[default]
+    Values,
+    Formulas,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutRender {
+    #[default]
+    Json,
+    Ascii,
+    Both,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutPageColumnInfo {
+    /// Column letter (e.g., "A")
+    pub col: String,
+    /// 1-based column index
+    pub index: u32,
+    /// Column width in Excel character units (capped at max_col_width)
+    pub width_chars: f64,
+    /// True when no explicit width was set (using the Excel default of 8.43)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_default_width: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutCellBorders {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<String>,
+}
+
+impl LayoutCellBorders {
+    pub fn is_empty(&self) -> bool {
+        self.top.is_none() && self.bottom.is_none() && self.left.is_none() && self.right.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutCellInfo {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    /// Explicit horizontal alignment: "left", "center", "right"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align_h: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borders: Option<LayoutCellBorders>,
+    /// True when this cell is the top-left of a merged range
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_start: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutRowInfo {
+    pub row: u32,
+    pub cells: Vec<LayoutCellInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LayoutPageResponse {
+    pub workbook_id: WorkbookId,
+    pub sheet_name: String,
+    /// The effective range that was rendered
+    pub range: String,
+    pub columns: Vec<LayoutPageColumnInfo>,
+    /// Merged cell ranges that overlap the rendered region (e.g., ["B1:C1"])
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_cells: Vec<String>,
+    pub rows: Vec<LayoutRowInfo>,
+    /// ASCII art render (present when render=ascii or render=both)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ascii_render: Option<String>,
+    /// True when the requested range was capped to the row/column limits
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridPayload {
+    pub sheet: String,
+    pub anchor: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<GridColumnHint>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<String>,
+    pub rows: Vec<GridRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridColumnHint {
+    pub offset: u32,
+    pub width_chars: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridRow {
+    pub cells: Vec<GridCell>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridCell {
+    pub offset: [u32; 2], // [row_offset, col_offset]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::model::StylePatch>,
 }

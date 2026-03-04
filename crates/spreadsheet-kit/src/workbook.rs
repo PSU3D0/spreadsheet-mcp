@@ -7,8 +7,8 @@ use crate::caps::BackendCaps;
 use crate::config::ServerConfig;
 use crate::model::{
     FormulaParseDiagnostics, FormulaParseDiagnosticsBuilder, FormulaParsePolicy, NamedItemKind,
-    NamedRangeDescriptor, SheetClassification, SheetOverviewResponse, SheetSummary,
-    WorkbookDescription, WorkbookId, WorkbookListResponse,
+    NamedRangeDescriptor, NamedRangeScope, SheetClassification, SheetOverviewResponse,
+    SheetSummary, WorkbookDescription, WorkbookId, WorkbookListResponse,
 };
 use crate::tools::filters::WorkbookFilter;
 use crate::utils::{
@@ -404,9 +404,18 @@ impl WorkbookContext {
                 NamedItemKind::NamedRange
             };
 
+            let (scope_kind, scope_sheet_name) = if defined.has_local_sheet_id() {
+                let idx = *defined.get_local_sheet_id() as usize;
+                (Some(NamedRangeScope::Sheet), sheet_names.get(idx).cloned())
+            } else {
+                (Some(NamedRangeScope::Workbook), None)
+            };
+
             items.push(NamedRangeDescriptor {
                 name: defined.get_name().to_string(),
                 scope: scope.clone(),
+                scope_kind,
+                scope_sheet_name: scope_sheet_name.clone(),
                 refers_to: refers_to.clone(),
                 kind,
                 sheet_name: scope,
@@ -414,13 +423,45 @@ impl WorkbookContext {
             });
         }
 
+        // Also collect sheet-level defined names
         for sheet in book.get_sheet_collection() {
+            for defined in sheet.get_defined_names() {
+                let refers_to = defined.get_address();
+                let kind = if refers_to.starts_with('=') {
+                    NamedItemKind::Formula
+                } else {
+                    NamedItemKind::NamedRange
+                };
+                let sheet_name_str = sheet.get_name().to_string();
+                // Avoid duplicates: skip if already present from workbook-level
+                let already_present = items.iter().any(|item| {
+                    item.name == defined.get_name()
+                        && item.scope_kind == Some(NamedRangeScope::Sheet)
+                        && item.scope_sheet_name.as_deref() == Some(sheet_name_str.as_str())
+                });
+                if already_present {
+                    continue;
+                }
+                items.push(NamedRangeDescriptor {
+                    name: defined.get_name().to_string(),
+                    scope: Some(sheet_name_str.clone()),
+                    scope_kind: Some(NamedRangeScope::Sheet),
+                    scope_sheet_name: Some(sheet_name_str.clone()),
+                    refers_to,
+                    kind,
+                    sheet_name: Some(sheet_name_str),
+                    comment: None,
+                });
+            }
+
             for table in sheet.get_tables() {
                 let start = table.get_area().0.get_coordinate();
                 let end = table.get_area().1.get_coordinate();
                 items.push(NamedRangeDescriptor {
                     name: table.get_name().to_string(),
                     scope: Some(sheet.get_name().to_string()),
+                    scope_kind: Some(NamedRangeScope::Sheet),
+                    scope_sheet_name: Some(sheet.get_name().to_string()),
                     refers_to: format!("{}:{}", start, end),
                     kind: NamedItemKind::Table,
                     sheet_name: Some(sheet.get_name().to_string()),
@@ -1661,17 +1702,26 @@ fn gather_named_ranges(
     defined_names
         .iter()
         .filter(|name| name.get_address().contains(name_str))
-        .map(|name| NamedRangeDescriptor {
-            name: name.get_name().to_string(),
-            scope: if name.has_local_sheet_id() {
-                Some(name_str.to_string())
+        .map(|name| {
+            let (scope_kind, scope_sheet_name) = if name.has_local_sheet_id() {
+                (Some(NamedRangeScope::Sheet), Some(name_str.to_string()))
             } else {
-                None
-            },
-            refers_to: name.get_address(),
-            kind: NamedItemKind::NamedRange,
-            sheet_name: Some(name_str.to_string()),
-            comment: None,
+                (Some(NamedRangeScope::Workbook), None)
+            };
+            NamedRangeDescriptor {
+                name: name.get_name().to_string(),
+                scope: if name.has_local_sheet_id() {
+                    Some(name_str.to_string())
+                } else {
+                    None
+                },
+                scope_kind,
+                scope_sheet_name,
+                refers_to: name.get_address(),
+                kind: NamedItemKind::NamedRange,
+                sheet_name: Some(name_str.to_string()),
+                comment: None,
+            }
         })
         .collect()
 }

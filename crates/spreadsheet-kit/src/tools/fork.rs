@@ -8,6 +8,7 @@ use crate::model::{
     StylePatch, Warning, WorkbookId, validate_formula,
 };
 use crate::recalc::RecalcBackend;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::security::sanitize_filename_component;
 use crate::state::AppState;
 use crate::tools::write_normalize::{EditBatchParamsInput, normalize_edit_batch};
@@ -15,10 +16,12 @@ use crate::utils::make_short_random_id;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use formualizer_parse::tokenizer::Tokenizer;
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -201,6 +204,10 @@ pub async fn edit_batch(
     })
 }
 
+fn default_clone_count() -> u32 {
+    1
+}
+
 fn default_clear_values() -> bool {
     true
 }
@@ -222,6 +229,14 @@ pub struct TransformBatchParams {
     pub label: Option<String>,
     #[serde(default)]
     pub formula_parse_policy: Option<FormulaParsePolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum MatrixCell {
+    #[serde(rename = "v")]
+    Value(serde_json::Value),
+    #[serde(rename = "f")]
+    Formula(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -256,6 +271,13 @@ pub enum TransformOp {
         #[serde(default)]
         include_formulas: bool,
     },
+    WriteMatrix {
+        sheet_name: String,
+        anchor: String,
+        rows: Vec<Vec<Option<MatrixCell>>>,
+        #[serde(default = "default_overwrite_formulas")]
+        overwrite_formulas: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -289,7 +311,10 @@ pub(crate) fn resolve_transform_ops_for_workbook(
     let mut resolved_ops = Vec::with_capacity(ops.len());
 
     for op in ops {
-        let (sheet_name, target) = match op {
+        match op {
+            TransformOp::WriteMatrix { .. } => {
+                resolved_ops.push(op.clone());
+            }
             TransformOp::ClearRange {
                 sheet_name, target, ..
             }
@@ -298,74 +323,76 @@ pub(crate) fn resolve_transform_ops_for_workbook(
             }
             | TransformOp::ReplaceInRange {
                 sheet_name, target, ..
-            } => (sheet_name, target),
-        };
+            } => {
+                let resolved_target = match target {
+                    TransformTarget::Region { region_id } => {
+                        let metrics = workbook.get_sheet_metrics(sheet_name)?;
+                        let regions = metrics.detected_regions();
+                        let region =
+                            regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
+                                anyhow!(
+                                    "region_id {} not found on sheet '{}'",
+                                    region_id,
+                                    sheet_name
+                                )
+                            })?;
+                        TransformTarget::Range {
+                            range: region.bounds.clone(),
+                        }
+                    }
+                    other => other.clone(),
+                };
 
-        let resolved_target = match target {
-            TransformTarget::Region { region_id } => {
-                let metrics = workbook.get_sheet_metrics(sheet_name)?;
-                let regions = metrics.detected_regions();
-                let region = regions.iter().find(|r| r.id == *region_id).ok_or_else(|| {
-                    anyhow!(
-                        "region_id {} not found on sheet '{}'",
-                        region_id,
-                        sheet_name
-                    )
-                })?;
-                TransformTarget::Range {
-                    range: region.bounds.clone(),
+                match op {
+                    TransformOp::ClearRange {
+                        sheet_name,
+                        clear_values,
+                        clear_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::ClearRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            clear_values: *clear_values,
+                            clear_formulas: *clear_formulas,
+                        });
+                    }
+                    TransformOp::FillRange {
+                        sheet_name,
+                        value,
+                        is_formula,
+                        overwrite_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::FillRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            value: value.clone(),
+                            is_formula: *is_formula,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    }
+                    TransformOp::ReplaceInRange {
+                        sheet_name,
+                        find,
+                        replace,
+                        match_mode,
+                        case_sensitive,
+                        include_formulas,
+                        ..
+                    } => {
+                        resolved_ops.push(TransformOp::ReplaceInRange {
+                            sheet_name: sheet_name.clone(),
+                            target: resolved_target,
+                            find: find.clone(),
+                            replace: replace.clone(),
+                            match_mode: *match_mode,
+                            case_sensitive: *case_sensitive,
+                            include_formulas: *include_formulas,
+                        });
+                    }
+                    TransformOp::WriteMatrix { .. } => unreachable!(),
                 }
-            }
-            other => other.clone(),
-        };
-
-        match op {
-            TransformOp::ClearRange {
-                sheet_name,
-                clear_values,
-                clear_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::ClearRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    clear_values: *clear_values,
-                    clear_formulas: *clear_formulas,
-                });
-            }
-            TransformOp::FillRange {
-                sheet_name,
-                value,
-                is_formula,
-                overwrite_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::FillRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    value: value.clone(),
-                    is_formula: *is_formula,
-                    overwrite_formulas: *overwrite_formulas,
-                });
-            }
-            TransformOp::ReplaceInRange {
-                sheet_name,
-                find,
-                replace,
-                match_mode,
-                case_sensitive,
-                include_formulas,
-                ..
-            } => {
-                resolved_ops.push(TransformOp::ReplaceInRange {
-                    sheet_name: sheet_name.clone(),
-                    target: resolved_target,
-                    find: find.clone(),
-                    replace: replace.clone(),
-                    match_mode: *match_mode,
-                    case_sensitive: *case_sensitive,
-                    include_formulas: *include_formulas,
-                });
             }
         }
     }
@@ -421,6 +448,63 @@ pub async fn transform_batch(
                         builder.record_error(sheet_name, "FillRange", value, &err_msg);
                     }
                 },
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+
+                    let (anchor_col, anchor_row) = parse_cell_ref(anchor)?;
+
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = anchor_row + r_idx as u32;
+
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = anchor_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}WriteMatrix formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None); // drop the invalid formula cell if warn
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
                 _ => valid_ops.push(op),
             }
         }
@@ -1556,6 +1640,10 @@ pub struct StructureBatchParams {
     pub label: Option<String>,
     #[serde(default)]
     pub formula_parse_policy: Option<FormulaParsePolicy>,
+    #[serde(default)]
+    pub impact_report: Option<bool>,
+    #[serde(default)]
+    pub show_formula_delta: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1567,6 +1655,14 @@ pub struct StructureBatchParamsInput {
     pub label: Option<String>,
     #[serde(default)]
     pub formula_parse_policy: Option<FormulaParsePolicy>,
+    /// Request a structural impact report (shifted spans, absolute-ref warnings).
+    /// Only honoured in preview mode.
+    #[serde(default)]
+    pub impact_report: Option<bool>,
+    /// Request before/after formula delta samples.
+    /// Only honoured in preview mode.
+    #[serde(default)]
+    pub show_formula_delta: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1658,6 +1754,8 @@ pub fn normalize_structure_batch(
             mode: input.mode,
             label: input.label,
             formula_parse_policy: input.formula_parse_policy,
+            impact_report: input.impact_report,
+            show_formula_delta: input.show_formula_delta,
         },
         warnings,
     ))
@@ -1666,10 +1764,37 @@ pub fn normalize_structure_batch(
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StructureOp {
+    MergeCells {
+        sheet_name: String,
+        target_range: String,
+    },
+    UnmergeCells {
+        sheet_name: String,
+        target_range: String,
+    },
     InsertRows {
         sheet_name: String,
         at_row: u32,
         count: u32,
+        /// When true, simple SUM(Ax:Ay) formulas in the row directly adjacent
+        /// (below) to the insertion band are expanded to include the new rows.
+        /// Only unambiguous single-range SUM patterns are expanded; complex or
+        /// ambiguous formulas produce a warning and are left untouched.
+        #[serde(default)]
+        expand_adjacent_sums: bool,
+    },
+    CloneRow {
+        sheet_name: String,
+        /// 1-based row to use as the template.
+        source_row: u32,
+        /// 1-based row position at which to insert new rows.
+        insert_at: u32,
+        /// Number of copies to insert (default 1).
+        #[serde(default = "default_clone_count")]
+        count: u32,
+        /// When true, expand adjacent SUM formulas below the insertion band.
+        #[serde(default)]
+        expand_adjacent_sums: bool,
     },
     DeleteRows {
         sheet_name: String,
@@ -1727,6 +1852,7 @@ fn structure_ops_require_recalc(ops: &[StructureOp]) -> bool {
                 | StructureOp::InsertCols { .. }
                 | StructureOp::DeleteCols { .. }
                 | StructureOp::RenameSheet { .. }
+                | StructureOp::CloneRow { .. }
                 | StructureOp::CopyRange {
                     include_formulas: true,
                     ..
@@ -1748,6 +1874,12 @@ pub struct StructureBatchResponse {
     pub summary: ChangeSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+    /// Structural impact report (only present when explicitly requested in preview mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub impact_report: Option<crate::tools::structure_impact::StructureImpactReport>,
+    /// Formula delta preview (only present when explicitly requested in preview mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_delta_preview: Option<Vec<crate::tools::structure_impact::FormulaDeltaItem>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1761,6 +1893,8 @@ pub async fn structure_batch(
     state: Arc<AppState>,
     params: StructureBatchParamsInput,
 ) -> Result<StructureBatchResponse> {
+    let want_impact = params.impact_report.unwrap_or(false);
+    let want_delta = params.show_formula_delta.unwrap_or(false);
     let (params, warnings) = normalize_structure_batch(params)?;
     let policy =
         params
@@ -1842,6 +1976,23 @@ pub async fn structure_batch(
 
         registry.add_staged_change(&params.fork_id, staged)?;
 
+        // Compute impact report / formula delta preview if requested in preview mode.
+        let (ir, fdp) = if want_impact || want_delta {
+            let ops_for_impact = params.ops.clone();
+            let base_path = work_path.clone();
+            let (report, delta) = tokio::task::spawn_blocking(move || {
+                crate::tools::structure_impact::compute_structure_impact(
+                    &base_path,
+                    &ops_for_impact,
+                    want_delta,
+                )
+            })
+            .await??;
+            (if want_impact { Some(report) } else { None }, delta)
+        } else {
+            (None, None)
+        };
+
         Ok(StructureBatchResponse {
             fork_id: params.fork_id,
             mode: mode.as_str().to_string(),
@@ -1849,6 +2000,8 @@ pub async fn structure_batch(
             ops_applied: apply_result.ops_applied,
             summary,
             formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
+            impact_report: ir,
+            formula_delta_preview: fdp,
         })
     } else {
         let ops_for_apply = params.ops.clone();
@@ -1879,6 +2032,8 @@ pub async fn structure_batch(
             ops_applied: apply_result.ops_applied,
             summary,
             formula_parse_diagnostics: apply_result.formula_parse_diagnostics,
+            impact_report: None,
+            formula_delta_preview: None,
         })
     }
 }
@@ -1906,10 +2061,50 @@ pub(crate) fn apply_structure_ops_to_file(
 
     for op in ops {
         match op {
+            StructureOp::MergeCells {
+                sheet_name,
+                target_range,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheet.add_merge_cells(target_range.clone());
+                affected_sheets.insert(sheet_name.clone());
+                *counts.entry("cells_merged".to_string()).or_insert(0) += 1;
+            }
+            StructureOp::UnmergeCells {
+                sheet_name,
+                target_range,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+                let original_len = sheet.get_merge_cells().len();
+                if let Ok(target_bounds) = parse_range_bounds(target_range) {
+                    let merges = sheet.get_merge_cells_mut();
+                    merges.retain(|m| {
+                        let m_range = m.get_range();
+                        if let Ok(m_bounds) = parse_range_bounds(&m_range) {
+                            !(m_bounds.min_col <= target_bounds.max_col
+                                && m_bounds.max_col >= target_bounds.min_col
+                                && m_bounds.min_row <= target_bounds.max_row
+                                && m_bounds.max_row >= target_bounds.min_row)
+                        } else {
+                            true
+                        }
+                    });
+                }
+                *counts.entry("cells_unmerged".to_string()).or_insert(0) +=
+                    (original_len - sheet.get_merge_cells().len()) as u64;
+
+                affected_sheets.insert(sheet_name.clone());
+            }
             StructureOp::InsertRows {
                 sheet_name,
                 at_row,
                 count,
+                expand_adjacent_sums,
             } => {
                 if *at_row == 0 || *count == 0 {
                     bail!("insert_rows requires at_row>=1 and count>=1");
@@ -1936,9 +2131,106 @@ pub(crate) fn apply_structure_ops_to_file(
                     policy,
                     &mut formula_parse_diagnostics_builder,
                 )?;
+                if *expand_adjacent_sums {
+                    let (expansion_warnings, expanded_count) =
+                        expand_adjacent_sum_formulas(&mut book, sheet_name, *at_row, *count)?;
+                    warnings.extend(expansion_warnings);
+                    if expanded_count > 0 {
+                        counts
+                            .entry("sums_expanded".to_string())
+                            .and_modify(|v| *v += expanded_count)
+                            .or_insert(expanded_count);
+                    }
+                }
                 affected_sheets.insert(sheet_name.clone());
                 counts
                     .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+            }
+            StructureOp::CloneRow {
+                sheet_name,
+                source_row,
+                insert_at,
+                count,
+                expand_adjacent_sums,
+            } => {
+                if *source_row == 0 || *insert_at == 0 || *count == 0 {
+                    bail!("clone_row requires source_row>=1, insert_at>=1, and count>=1");
+                }
+                // Step 1: Capture template row cells before insertion (pre-shift).
+                let template_cells = {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    capture_row_template(sheet, *source_row)?
+                };
+                if template_cells.is_empty() {
+                    warnings.push(format!(
+                        "WARN_CLONE_TEMPLATE_EMPTY: {} row {} has no template cells to clone.",
+                        sheet_name, source_row
+                    ));
+                }
+
+                // Step 2: Insert blank rows.
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    sheet.insert_new_row(insert_at, count);
+                }
+                rewrite_formulas_for_sheet_row_insert(
+                    &mut book,
+                    sheet_name,
+                    *insert_at,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
+                rewrite_defined_name_formulas_for_sheet_row_insert(
+                    &mut book,
+                    sheet_name,
+                    *insert_at,
+                    *count,
+                    policy,
+                    &mut formula_parse_diagnostics_builder,
+                )?;
+
+                // Step 3: Fill inserted rows from the template.
+                {
+                    let sheet = book
+                        .get_sheet_by_name_mut(sheet_name)
+                        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                    let clone_warnings = stamp_template_rows(
+                        sheet,
+                        &template_cells,
+                        *source_row,
+                        *insert_at,
+                        *count,
+                    )?;
+                    warnings.extend(clone_warnings);
+                }
+
+                // Step 4: Optionally expand adjacent SUMs.
+                if *expand_adjacent_sums {
+                    let (expansion_warnings, expanded_count) =
+                        expand_adjacent_sum_formulas(&mut book, sheet_name, *insert_at, *count)?;
+                    warnings.extend(expansion_warnings);
+                    if expanded_count > 0 {
+                        counts
+                            .entry("sums_expanded".to_string())
+                            .and_modify(|v| *v += expanded_count)
+                            .or_insert(expanded_count);
+                    }
+                }
+
+                affected_sheets.insert(sheet_name.clone());
+                counts
+                    .entry("rows_inserted".to_string())
+                    .and_modify(|v| *v += *count as u64)
+                    .or_insert(*count as u64);
+                counts
+                    .entry("rows_cloned".to_string())
                     .and_modify(|v| *v += *count as u64)
                     .or_insert(*count as u64);
             }
@@ -2208,7 +2500,26 @@ pub(crate) fn apply_structure_ops_to_file(
         }
     }
 
+    let clamped_defined_names = clamp_out_of_bounds_defined_name_rows(&mut book);
+    if clamped_defined_names > 0 {
+        warnings.push(format!(
+            "Clamped {} defined name reference(s) to Excel max row 1048576 after structural edits.",
+            clamped_defined_names
+        ));
+    }
+
     umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    // Temporary guardrail: patch overflowing workbook-scoped defined-name row references
+    // directly in workbook.xml after structural writes. Remove once Formualizer/Umya
+    // perform named-range row-bound clamping during ingest/mutation.
+    let clamped_workbook_xml_defined_names = sanitize_workbook_xml_defined_name_rows(path)?;
+    if clamped_workbook_xml_defined_names > 0 {
+        warnings.push(format!(
+            "Clamped {} workbook.xml defined name reference(s) to Excel max row 1048576 after structural edits.",
+            clamped_workbook_xml_defined_names
+        ));
+    }
 
     let summary = ChangeSummary {
         op_kinds: vec!["structure_batch".to_string()],
@@ -2873,6 +3184,348 @@ fn rewrite_defined_name_formulas_for_sheet_structure_change(
     Ok(())
 }
 
+fn clamp_defined_name_refers_to_max_row(refers_to: &str) -> Option<String> {
+    const EXCEL_MAX_ROW: u32 = 1_048_576;
+
+    let trimmed = refers_to.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let had_equals = trimmed.starts_with('=');
+    let formula_in = if had_equals {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    };
+
+    let tokens = Tokenizer::new(&formula_in).ok()?.items;
+
+    let mut out = String::with_capacity(formula_in.len());
+    let mut cursor = 0usize;
+    let mut changed = false;
+
+    for token in &tokens {
+        if token.start > cursor {
+            out.push_str(&formula_in[cursor..token.start]);
+        }
+
+        let mut value = token.value.clone();
+        if token.subtype == formualizer_parse::TokenSubType::Range {
+            let clamped = clamp_range_token_max_row(&value, EXCEL_MAX_ROW);
+            if clamped != value {
+                value = clamped;
+                changed = true;
+            }
+        }
+
+        out.push_str(&value);
+        cursor = token.end;
+    }
+
+    if cursor < formula_in.len() {
+        out.push_str(&formula_in[cursor..]);
+    }
+
+    if !changed {
+        return None;
+    }
+
+    Some(if had_equals {
+        out
+    } else {
+        out.strip_prefix('=').unwrap_or(&out).to_string()
+    })
+}
+
+fn clamp_range_token_max_row(token_value: &str, max_row: u32) -> String {
+    if token_value == "#REF!" {
+        return token_value.to_string();
+    }
+
+    if let Some((sheet_part, coord_part)) = token_value.split_once('!') {
+        let clamped = clamp_coord_part_max_row(coord_part, max_row);
+        if clamped == coord_part {
+            token_value.to_string()
+        } else {
+            format!("{sheet_part}!{clamped}")
+        }
+    } else {
+        clamp_coord_part_max_row(token_value, max_row)
+    }
+}
+
+fn clamp_coord_part_max_row(coord_part: &str, max_row: u32) -> String {
+    let mut changed = false;
+    let mut union_out = Vec::new();
+
+    for union_piece in coord_part.split(',') {
+        let mut range_out = Vec::new();
+        let mut local_changed = false;
+
+        for segment in union_piece.split(':') {
+            let clamped = clamp_ref_segment_max_row(segment, max_row);
+            if clamped != segment {
+                local_changed = true;
+            }
+            range_out.push(clamped);
+        }
+
+        if local_changed {
+            changed = true;
+        }
+        union_out.push(range_out.join(":"));
+    }
+
+    if changed {
+        union_out.join(",")
+    } else {
+        coord_part.to_string()
+    }
+}
+
+fn clamp_ref_segment_max_row(segment: &str, max_row: u32) -> String {
+    use umya_spreadsheet::helper::coordinate::{
+        coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
+    };
+
+    let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
+
+    // Not a coordinate-like segment (e.g., structured reference); leave untouched.
+    if col.is_none() && row.is_none() {
+        return segment.to_string();
+    }
+
+    let row = row.map(|value| value.min(max_row));
+
+    match (col, row) {
+        (Some(c), Some(r)) => coordinate_from_index_with_lock(
+            &c,
+            &r,
+            &col_lock.unwrap_or(false),
+            &row_lock.unwrap_or(false),
+        ),
+        (Some(c), None) => {
+            let col_str = string_from_column_index(&c);
+            format!(
+                "{}{}",
+                if col_lock.unwrap_or(false) { "$" } else { "" },
+                col_str
+            )
+        }
+        (None, Some(r)) => format!("{}{}", if row_lock.unwrap_or(false) { "$" } else { "" }, r),
+        (None, None) => segment.to_string(),
+    }
+}
+
+fn clamp_out_of_bounds_defined_name_rows(book: &mut umya_spreadsheet::Spreadsheet) -> usize {
+    #[derive(Debug)]
+    struct Patch {
+        idx: usize,
+        name: String,
+        clamped_address: String,
+        hidden: bool,
+        local_sheet_id: Option<u32>,
+        sheet_hint: Option<String>,
+    }
+
+    fn extract_first_sheet_name(refers_to: &str) -> Option<String> {
+        let first = refers_to.split(',').next()?.trim();
+        let (sheet_part, _) = first.split_once('!')?;
+        let sheet_part = sheet_part.trim();
+        if let Some(inner) = sheet_part
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+        {
+            Some(inner.replace("''", "'"))
+        } else {
+            Some(sheet_part.to_string())
+        }
+    }
+
+    let mut patches = Vec::new();
+    for (idx, defined) in book.get_defined_names().iter().enumerate() {
+        let original = defined.get_address();
+        let trimmed = original.trim();
+
+        // Keep formula-like names on the tokenizer path; clamp plain address unions only.
+        if trimmed.starts_with('=') || trimmed.contains('(') || trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(clamped_address) = clamp_defined_name_refers_to_max_row(trimmed) {
+            patches.push(Patch {
+                idx,
+                name: defined.get_name().to_string(),
+                clamped_address,
+                hidden: *defined.get_hidden(),
+                local_sheet_id: if defined.has_local_sheet_id() {
+                    Some(*defined.get_local_sheet_id())
+                } else {
+                    None
+                },
+                sheet_hint: extract_first_sheet_name(trimmed),
+            });
+        }
+    }
+
+    let mut applied = 0usize;
+    for patch in patches {
+        let target_sheet = patch
+            .sheet_hint
+            .as_ref()
+            .filter(|name| book.get_sheet_by_name(name).is_some())
+            .cloned()
+            .or_else(|| {
+                book.get_sheet_collection_no_check()
+                    .first()
+                    .map(|sheet| sheet.get_name().to_string())
+            });
+
+        let Some(target_sheet) = target_sheet else {
+            continue;
+        };
+
+        let mut replacement = {
+            let Some(sheet) = book.get_sheet_by_name_mut(&target_sheet) else {
+                continue;
+            };
+            let before = sheet.get_defined_names().len();
+            if sheet
+                .add_defined_name(patch.name.clone(), patch.clamped_address.clone())
+                .is_err()
+            {
+                continue;
+            }
+            let Some(candidate) = sheet.get_defined_names().last().cloned() else {
+                sheet.get_defined_names_mut().truncate(before);
+                continue;
+            };
+            sheet.get_defined_names_mut().truncate(before);
+            candidate
+        };
+
+        replacement.set_hidden(patch.hidden);
+        if let Some(local_sheet_id) = patch.local_sheet_id {
+            replacement.set_local_sheet_id(local_sheet_id);
+        }
+
+        if let Some(slot) = book.get_defined_names_mut().get_mut(patch.idx) {
+            *slot = replacement;
+            applied += 1;
+        }
+    }
+
+    applied
+}
+
+fn clamp_defined_name_rows_in_workbook_xml(xml: &str) -> (String, usize) {
+    let defined_name_re =
+        Regex::new(r"(?s)(<definedName[^>]*>)([^<]*)(</definedName>)").expect("valid xml regex");
+
+    let mut clamped_entries = 0usize;
+    let rewritten = defined_name_re
+        .replace_all(xml, |caps: &regex::Captures<'_>| {
+            let full = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+            let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let body = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+            let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or_default();
+
+            if body.trim_start().starts_with('=') || body.contains('(') {
+                return full.to_string();
+            }
+
+            if let Some(clamped_body) = clamp_defined_name_refers_to_max_row(body) {
+                clamped_entries += 1;
+                format!("{prefix}{clamped_body}{suffix}")
+            } else {
+                full.to_string()
+            }
+        })
+        .to_string();
+
+    (rewritten, clamped_entries)
+}
+
+fn sanitize_workbook_xml_defined_name_rows(path: &Path) -> Result<usize> {
+    use zip::{ZipArchive, ZipWriter, write::FileOptions};
+
+    let input_file = fs::File::open(path)?;
+    let mut archive = ZipArchive::new(input_file)?;
+
+    #[derive(Debug)]
+    struct ZipEntry {
+        name: String,
+        is_dir: bool,
+        data: Vec<u8>,
+        compression: zip::CompressionMethod,
+        unix_mode: Option<u32>,
+        modified: zip::DateTime,
+    }
+
+    let mut entries: Vec<ZipEntry> = Vec::with_capacity(archive.len());
+    let mut clamped_defined_names = 0usize;
+
+    for idx in 0..archive.len() {
+        let mut file = archive.by_index(idx)?;
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let compression = file.compression();
+        let unix_mode = file.unix_mode();
+        let modified = file.last_modified();
+
+        let mut data = Vec::new();
+        if !is_dir {
+            file.read_to_end(&mut data)?;
+            if name == "xl/workbook.xml" {
+                let xml = String::from_utf8_lossy(&data);
+                let (rewritten, changed) = clamp_defined_name_rows_in_workbook_xml(&xml);
+                clamped_defined_names = changed;
+                if changed > 0 {
+                    data = rewritten.into_bytes();
+                }
+            }
+        }
+
+        entries.push(ZipEntry {
+            name,
+            is_dir,
+            data,
+            compression,
+            unix_mode,
+            modified,
+        });
+    }
+
+    if clamped_defined_names == 0 {
+        return Ok(0);
+    }
+
+    let temp_path = path.with_extension("xlsx.tmp");
+    let output_file = fs::File::create(&temp_path)?;
+    let mut writer = ZipWriter::new(output_file);
+
+    for entry in entries {
+        let mut options = FileOptions::default()
+            .compression_method(entry.compression)
+            .last_modified_time(entry.modified);
+        if let Some(mode) = entry.unix_mode {
+            options = options.unix_permissions(mode);
+        }
+
+        if entry.is_dir {
+            writer.add_directory(entry.name, options)?;
+        } else {
+            writer.start_file(entry.name, options)?;
+            writer.write_all(&entry.data)?;
+        }
+    }
+
+    writer.finish()?;
+    fs::rename(temp_path, path)?;
+    Ok(clamped_defined_names)
+}
+
 fn rewrite_formulas_for_sheet_col_insert(
     book: &mut umya_spreadsheet::Spreadsheet,
     sheet_name: &str,
@@ -3080,6 +3733,8 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
         coordinate_from_index_with_lock, index_from_coordinate, string_from_column_index,
     };
 
+    const EXCEL_MAX_ROW: u32 = 1_048_576;
+
     let (col, row, col_lock, row_lock) = index_from_coordinate(segment);
     let mut col = col;
     let mut row = row;
@@ -3096,7 +3751,9 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
         StructureAxis::Row => {
             if let Some(r) = row {
                 row = match edit {
-                    StructureEdit::Insert { at, count } => Some(adjust_insert(r, at, count)),
+                    StructureEdit::Insert { at, count } => {
+                        Some(adjust_insert_bounded(r, at, count, EXCEL_MAX_ROW))
+                    }
                     StructureEdit::Delete { start, count } => adjust_delete(r, start, count),
                 };
             }
@@ -3132,7 +3789,15 @@ fn adjust_ref_segment(segment: &str, axis: StructureAxis, edit: StructureEdit) -
 }
 
 fn adjust_insert(value: u32, at: u32, count: u32) -> u32 {
-    if value >= at { value + count } else { value }
+    if value >= at {
+        value.saturating_add(count)
+    } else {
+        value
+    }
+}
+
+fn adjust_insert_bounded(value: u32, at: u32, count: u32, max_value: u32) -> u32 {
+    adjust_insert(value, at, count).min(max_value)
 }
 
 fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {
@@ -3144,6 +3809,205 @@ fn adjust_delete(value: u32, start: u32, count: u32) -> Option<u32> {
     } else {
         Some(value)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Adjacent SUM expansion helpers (ticket 4104)
+// ---------------------------------------------------------------------------
+
+/// Regex for simple `SUM(ColRow:ColRow)` patterns (A1-style, no sheet prefix).
+/// Captures: full match, col1, row1, col2, row2.
+fn simple_sum_range_regex() -> Regex {
+    Regex::new(r"(?i)^SUM\(([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)\)$").expect("valid regex")
+}
+
+/// After inserting `count` rows at `at_row`, scan the subtotal row immediately
+/// below the insertion band (row `at_row + count`) for simple `SUM(Ax:Ay)`
+/// formulas whose range end was adjacent to the insertion point. Expand those
+/// ranges to include the newly inserted rows.
+///
+/// **Important**: `insert_new_row` shifts cell positions but the same-sheet
+/// formula rewriter is intentionally skipped (it only rewrites cross-sheet
+/// references). So the formula text at the subtotal row still contains
+/// pre-insert row references. If the range ended at `at_row - 1`, it was
+/// adjacent and should be expanded to `subtotal_row - 1`.
+///
+/// Only unambiguous single-range `SUM(Ax:Ay)` patterns are touched.
+/// Returns a list of warning strings for any skipped/ambiguous formulas.
+fn expand_adjacent_sum_formulas(
+    book: &mut umya_spreadsheet::Spreadsheet,
+    sheet_name: &str,
+    at_row: u32,
+    count: u32,
+) -> Result<(Vec<String>, u64)> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut expanded_count: u64 = 0;
+    // The cell that was originally at `at_row` is now at `at_row + count`.
+    let subtotal_row = at_row + count;
+    let sum_re = simple_sum_range_regex();
+
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+
+    let max_col = sheet.get_highest_column();
+    if max_col == 0 {
+        return Ok((warnings, expanded_count));
+    }
+
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, subtotal_row)) else {
+            continue;
+        };
+        if !cell.is_formula() {
+            continue;
+        }
+        let formula_text = cell.get_formula().to_string();
+        if formula_text.is_empty() {
+            continue;
+        }
+        // Strip leading = if present (umya stores without it, but be safe).
+        let formula_bare = formula_text.strip_prefix('=').unwrap_or(&formula_text);
+
+        let Some(caps) = sum_re.captures(formula_bare) else {
+            // Not a simple SUM(range) pattern.
+            if formula_bare.to_ascii_uppercase().contains("SUM") {
+                warnings.push(format!(
+                    "WARN_SUM_EXPANSION_SKIPPED: {}!{} has complex SUM formula '{}'; skipped.",
+                    sheet_name,
+                    crate::utils::cell_address(col, subtotal_row),
+                    formula_bare
+                ));
+            }
+            continue;
+        };
+
+        let col1_str = caps.get(1).unwrap().as_str().to_ascii_uppercase();
+        let row1: u32 = caps.get(2).unwrap().as_str().parse().unwrap_or(0);
+        let col2_str = caps.get(3).unwrap().as_str().to_ascii_uppercase();
+        let row2: u32 = caps.get(4).unwrap().as_str().parse().unwrap_or(0);
+
+        // Only expand single-column SUM ranges.
+        if col1_str != col2_str {
+            warnings.push(format!(
+                "WARN_SUM_EXPANSION_SKIPPED: {}!{} SUM spans columns {}:{} — not a single-column range; skipped.",
+                sheet_name,
+                crate::utils::cell_address(col, subtotal_row),
+                col1_str,
+                col2_str,
+            ));
+            continue;
+        }
+
+        // The formula text still has pre-insert references because the
+        // same-sheet rewriter was skipped. Check adjacency: the range end
+        // (row2) should be at_row - 1 (immediately above the insertion point).
+        if at_row == 0 || row2 + 1 != at_row {
+            // Range end wasn't immediately before the insertion point.
+            continue;
+        }
+        if row1 > row2 || row1 == 0 {
+            continue;
+        }
+
+        // Expand the range end to include the newly inserted rows.
+        // New end = subtotal_row - 1 = at_row + count - 1.
+        let desired_end = subtotal_row - 1;
+
+        // Build expanded formula.
+        let new_formula = format!("SUM({}{}:{}{})", col1_str, row1, col2_str, desired_end);
+
+        let cell = sheet.get_cell_mut((col, subtotal_row));
+        cell.set_formula(new_formula);
+        cell.set_formula_result_default("");
+        expanded_count += 1;
+    }
+
+    Ok((warnings, expanded_count))
+}
+
+// ---------------------------------------------------------------------------
+// Clone-row helpers (ticket 4104)
+// ---------------------------------------------------------------------------
+
+/// Captured cell data from a template row.
+#[derive(Debug, Clone)]
+struct TemplateCellData {
+    col: u32,
+    value: String,
+    formula: Option<String>,
+    style: umya_spreadsheet::Style,
+}
+
+/// Capture every non-empty cell in `source_row` as template data.
+fn capture_row_template(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_row: u32,
+) -> Result<Vec<TemplateCellData>> {
+    let max_col = sheet.get_highest_column();
+    let mut cells = Vec::new();
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, source_row)) else {
+            continue;
+        };
+        let value = cell.get_value().to_string();
+        let formula = if cell.is_formula() {
+            Some(cell.get_formula().to_string())
+        } else {
+            None
+        };
+        let style = cell.get_style().clone();
+        cells.push(TemplateCellData {
+            col,
+            value,
+            formula,
+            style,
+        });
+    }
+    Ok(cells)
+}
+
+/// Stamp template data into each inserted row, shifting formulas by row delta.
+fn stamp_template_rows(
+    sheet: &mut umya_spreadsheet::Worksheet,
+    template: &[TemplateCellData],
+    source_row: u32,
+    insert_at: u32,
+    count: u32,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for copy_idx in 0..count {
+        let dest_row = insert_at + copy_idx;
+        let delta_row = dest_row as i32 - source_row as i32;
+        for tpl in template {
+            let dest_cell = sheet.get_cell_mut((tpl.col, dest_row));
+            dest_cell.set_style(tpl.style.clone());
+
+            if let Some(formula) = &tpl.formula {
+                // Shift formula references by delta_row rows.
+                match parse_base_formula(formula)
+                    .and_then(|ast| shift_formula_ast(&ast, 0, delta_row, RelativeMode::Excel))
+                {
+                    Ok(shifted) => {
+                        let shifted = shifted.strip_prefix('=').unwrap_or(&shifted).to_string();
+                        dest_cell.set_formula(shifted);
+                        dest_cell.set_formula_result_default("");
+                    }
+                    Err(err) => {
+                        warnings.push(format!(
+                            "WARN_CLONE_FORMULA_SHIFT: could not shift formula '{}' for row {}: {}; copied verbatim.",
+                            formula, dest_row, err
+                        ));
+                        dest_cell.set_formula(formula.clone());
+                        dest_cell.set_formula_result_default("");
+                    }
+                }
+            } else {
+                dest_cell.set_value(tpl.value.clone());
+            }
+        }
+    }
+    Ok(warnings)
 }
 
 fn sheet_part_matches(sheet_part: &str, old_name: &str) -> bool {
@@ -3642,6 +4506,79 @@ pub(crate) fn apply_transform_ops_to_file(
                     }
                 }
             }
+            TransformOp::WriteMatrix {
+                sheet_name,
+                anchor,
+                rows,
+                overwrite_formulas,
+            } => {
+                let sheet = book
+                    .get_sheet_by_name_mut(sheet_name)
+                    .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))?;
+                sheets.insert(sheet_name.clone());
+
+                let (anchor_col, anchor_row) = parse_cell_ref(anchor)?;
+
+                let mut max_row = anchor_row;
+                let mut max_col = anchor_col;
+
+                for (r_idx, row) in rows.iter().enumerate() {
+                    let r = anchor_row + r_idx as u32;
+                    if r > max_row {
+                        max_row = r;
+                    }
+                    for (c_idx, cell_opt) in row.iter().enumerate() {
+                        let c = anchor_col + c_idx as u32;
+                        if c > max_col {
+                            max_col = c;
+                        }
+
+                        let Some(cell_data) = cell_opt else {
+                            continue;
+                        };
+
+                        let cell = sheet.get_cell_mut((c, r));
+                        cells_touched += 1;
+
+                        if cell.is_formula() {
+                            if !*overwrite_formulas {
+                                cells_skipped_keep_formulas += 1;
+                                continue;
+                            }
+                            cell.set_formula(String::new());
+                            cells_formula_cleared += 1;
+                        }
+
+                        match cell_data {
+                            MatrixCell::Value(v) => {
+                                let val_str = match v {
+                                    serde_json::Value::Null => String::new(),
+                                    serde_json::Value::Bool(b) => b.to_string(),
+                                    serde_json::Value::Number(n) => n.to_string(),
+                                    serde_json::Value::String(s) => s.clone(),
+                                    serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                                        v.to_string()
+                                    }
+                                };
+                                cell.set_value(val_str);
+                                cells_value_set += 1;
+                            }
+                            MatrixCell::Formula(f) => {
+                                let f_str = f.strip_prefix('=').unwrap_or(f);
+                                cell.set_formula(f_str);
+                                cell.set_formula_result_default("");
+                                cells_formula_set += 1;
+                            }
+                        }
+                    }
+                }
+
+                affected_bounds.push(format!(
+                    "{}:{}",
+                    crate::utils::cell_address(anchor_col, anchor_row),
+                    crate::utils::cell_address(max_col, max_row)
+                ));
+            }
         }
     }
 
@@ -3674,6 +4611,355 @@ pub(crate) fn apply_transform_ops_to_file(
         ops_applied: ops.len(),
         summary,
     })
+}
+
+// ── replace_in_formulas core ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReplaceInFormulasOp {
+    pub sheet_name: String,
+    pub find: String,
+    pub replace: String,
+    /// Optional A1 range to scope the replacement; defaults to the used range.
+    #[serde(default)]
+    pub range: Option<String>,
+    /// Enable regex mode (default: false).
+    #[serde(default)]
+    pub regex: bool,
+    /// Case-sensitive matching (default: true).
+    #[serde(default = "default_replace_case_sensitive")]
+    pub case_sensitive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct FormulaReplaceSample {
+    pub address: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Debug)]
+pub struct ReplaceInFormulasApplyResult {
+    pub formulas_checked: u64,
+    pub formulas_changed: u64,
+    pub samples: Vec<FormulaReplaceSample>,
+    pub warnings: Vec<String>,
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+const REPLACE_SAMPLE_LIMIT: usize = 20;
+
+pub fn apply_replace_in_formulas_to_file(
+    path: &Path,
+    op: &ReplaceInFormulasOp,
+    policy: FormulaParsePolicy,
+) -> Result<ReplaceInFormulasApplyResult> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)?;
+
+    let sheet = book
+        .get_sheet_by_name_mut(&op.sheet_name)
+        .ok_or_else(|| anyhow!("sheet '{}' not found", op.sheet_name))?;
+
+    // Determine bounds (optional range or used range).
+    let (min_col, min_row, max_col, max_row) = if let Some(range) = &op.range {
+        let bounds = parse_range_bounds(range)?;
+        (
+            bounds.min_col,
+            bounds.min_row,
+            bounds.max_col,
+            bounds.max_row,
+        )
+    } else {
+        let (hc, hr) = sheet.get_highest_column_and_row();
+        (1, 1, hc.max(1), hr.max(1))
+    };
+
+    // Build matcher.
+    let compiled_regex: Option<Regex> = if op.regex {
+        let pattern = if op.case_sensitive {
+            op.find.clone()
+        } else {
+            format!("(?i){}", op.find)
+        };
+        Some(Regex::new(&pattern).map_err(|e| anyhow!("invalid regex pattern: {}", e))?)
+    } else {
+        None
+    };
+
+    let replace_formula = |formula: &str| -> Option<String> {
+        if let Some(re) = &compiled_regex {
+            let result = re.replace_all(formula, op.replace.as_str());
+            if result != formula {
+                Some(result.into_owned())
+            } else {
+                None
+            }
+        } else if op.case_sensitive {
+            if formula.contains(&op.find) {
+                Some(formula.replace(&op.find, &op.replace))
+            } else {
+                None
+            }
+        } else {
+            // Case-insensitive plain text replacement.
+            let find_lower = op.find.to_ascii_lowercase();
+            let formula_lower = formula.to_ascii_lowercase();
+            if !formula_lower.contains(&find_lower) {
+                return None;
+            }
+            // Rebuild with original casing for non-matched parts.
+            let mut result = String::with_capacity(formula.len());
+            let mut cursor = 0usize;
+            while let Some(pos) = formula_lower[cursor..].find(&find_lower) {
+                result.push_str(&formula[cursor..cursor + pos]);
+                result.push_str(&op.replace);
+                cursor += pos + op.find.len();
+            }
+            result.push_str(&formula[cursor..]);
+            Some(result)
+        }
+    };
+
+    let mut formulas_checked: u64 = 0;
+    let mut formulas_changed: u64 = 0;
+    let mut samples: Vec<FormulaReplaceSample> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut formula_parse_diagnostics_builder = FormulaParseDiagnosticsBuilder::new(policy);
+
+    for row in min_row..=max_row {
+        for col in min_col..=max_col {
+            let exists = sheet.get_cell((col, row)).is_some();
+            if !exists {
+                continue;
+            }
+            let cell = sheet.get_cell_mut((col, row));
+            if !cell.is_formula() {
+                continue;
+            }
+            let formula = cell.get_formula().to_string();
+            if formula.is_empty() {
+                continue;
+            }
+            formulas_checked += 1;
+
+            if let Some(next) = replace_formula(&formula) {
+                let address = crate::utils::cell_address(col, row);
+
+                if policy != FormulaParsePolicy::Off
+                    && let Err(err_msg) = validate_formula(&next)
+                {
+                    if policy == FormulaParsePolicy::Fail {
+                        bail!(
+                            "{}replaced formula at {} failed parse: {}",
+                            FORMULA_PARSE_FAILED_PREFIX,
+                            address,
+                            err_msg
+                        );
+                    }
+                    formula_parse_diagnostics_builder.record_error(
+                        &op.sheet_name,
+                        &address,
+                        &next,
+                        &err_msg,
+                    );
+                    // Warn mode: keep the original formula untouched.
+                    continue;
+                }
+
+                if samples.len() < REPLACE_SAMPLE_LIMIT {
+                    samples.push(FormulaReplaceSample {
+                        address,
+                        before: formula.clone(),
+                        after: next.clone(),
+                    });
+                }
+                cell.set_formula(next);
+                cell.set_formula_result_default("");
+                formulas_changed += 1;
+            }
+        }
+    }
+
+    if formulas_changed == 0 {
+        warnings.push("WARN_NO_MATCH: no formula text matched the find pattern".to_string());
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)?;
+
+    let formula_parse_diagnostics = if formula_parse_diagnostics_builder.has_errors() {
+        Some(formula_parse_diagnostics_builder.build())
+    } else {
+        None
+    };
+
+    Ok(ReplaceInFormulasApplyResult {
+        formulas_checked,
+        formulas_changed,
+        samples,
+        warnings,
+        formula_parse_diagnostics,
+    })
+}
+
+// ── replace_in_formulas MCP fork tool ─────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReplaceInFormulasParams {
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub find: String,
+    pub replace: String,
+    /// Optional A1 range; defaults to the used range.
+    #[serde(default)]
+    pub range: Option<String>,
+    /// Enable regex mode (default: false).
+    #[serde(default)]
+    pub regex: bool,
+    /// Case-sensitive matching (default: true).
+    #[serde(default = "default_replace_case_sensitive")]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub mode: Option<BatchMode>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Formula parse policy: fail, warn (default), or off.
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ReplaceInFormulasResponse {
+    pub fork_id: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
+    pub formulas_checked: u64,
+    pub formulas_changed: u64,
+    pub recalc_needed: bool,
+    pub samples: Vec<FormulaReplaceSample>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReplaceInFormulasStagedPayload {
+    op: ReplaceInFormulasOp,
+}
+
+pub async fn replace_in_formulas(
+    state: Arc<AppState>,
+    params: ReplaceInFormulasParams,
+) -> Result<ReplaceInFormulasResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let op = ReplaceInFormulasOp {
+        sheet_name: params.sheet_name.clone(),
+        find: params.find.clone(),
+        replace: params.replace.clone(),
+        range: params.range.clone(),
+        regex: params.regex,
+        case_sensitive: params.case_sensitive,
+    };
+
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
+
+    let mode = params.mode.unwrap_or_default();
+
+    if mode.is_preview() {
+        let change_id = make_short_random_id("chg", 12);
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        std::fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        std::fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let op_clone = op.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            apply_replace_in_formulas_to_file(&snapshot_for_apply, &op_clone, policy)
+        })
+        .await??;
+
+        let staged_op = StagedOp {
+            kind: "replace_in_formulas".to_string(),
+            payload: serde_json::to_value(ReplaceInFormulasStagedPayload { op: op.clone() })?,
+        };
+
+        let summary = ChangeSummary {
+            op_kinds: vec!["replace_in_formulas".to_string()],
+            affected_sheets: vec![op.sheet_name.clone()],
+            affected_bounds: op.range.clone().into_iter().collect(),
+            counts: {
+                let mut c = BTreeMap::new();
+                c.insert("formulas_checked".to_string(), result.formulas_checked);
+                c.insert("formulas_changed".to_string(), result.formulas_changed);
+                c
+            },
+            warnings: result.warnings.clone(),
+            ..Default::default()
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary,
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(ReplaceInFormulasResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: Some(change_id),
+            formulas_checked: result.formulas_checked,
+            formulas_changed: result.formulas_changed,
+            recalc_needed: fork_ctx.recalc_needed || result.formulas_changed > 0,
+            samples: result.samples,
+            warnings: result.warnings,
+            formula_parse_diagnostics: result.formula_parse_diagnostics,
+        })
+    } else {
+        let prior_recalc_needed = fork_ctx.recalc_needed;
+        let op_clone = op.clone();
+        let work_path_for_apply = work_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            apply_replace_in_formulas_to_file(&work_path_for_apply, &op_clone, policy)
+        })
+        .await??;
+
+        if result.formulas_changed > 0 {
+            registry.with_fork_mut(&params.fork_id, |ctx| {
+                ctx.recalc_needed = true;
+                Ok(())
+            })?;
+            let fork_workbook_id = WorkbookId(params.fork_id.clone());
+            let _ = state.close_workbook(&fork_workbook_id);
+        }
+
+        Ok(ReplaceInFormulasResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: None,
+            formulas_checked: result.formulas_checked,
+            formulas_changed: result.formulas_changed,
+            recalc_needed: prior_recalc_needed || result.formulas_changed > 0,
+            samples: result.samples,
+            warnings: result.warnings,
+            formula_parse_diagnostics: result.formula_parse_diagnostics,
+        })
+    }
 }
 
 pub(crate) fn apply_style_ops_to_file(path: &Path, ops: &[StyleOp]) -> Result<StyleApplyResult> {
@@ -4625,6 +5911,29 @@ pub async fn apply_staged_change(
 
                 ops_applied += 1;
             }
+            "grid_import" => {
+                recalc_triggered = true;
+                let payload: GridImportStagedPayload =
+                    serde_json::from_value(op.payload.clone())
+                        .map_err(|e| anyhow!("invalid grid_import payload: {}", e))?;
+
+                grid_import(
+                    state.clone(),
+                    GridImportParams {
+                        fork_id: params.fork_id.clone(),
+                        sheet_name: payload.sheet_name,
+                        anchor: payload.anchor,
+                        grid: payload.grid,
+                        clear_target: payload.clear_target,
+                        mode: Some(BatchMode::Apply),
+                        label: None,
+                        formula_parse_policy: None,
+                    },
+                )
+                .await?;
+
+                ops_applied += 1;
+            }
             "apply_formula_pattern" => {
                 recalc_triggered = true;
                 let payload: ApplyFormulaPatternStagedPayload =
@@ -4773,8 +6082,11 @@ pub async fn discard_staged_change(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_SCREENSHOT_ROWS: u32 = 100;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_SCREENSHOT_COLS: u32 = 30;
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_SCREENSHOT_RANGE: &str = "A1:M40";
 #[cfg(feature = "recalc-libreoffice")]
 const DEFAULT_MAX_PNG_DIM_PX: u32 = 4096;
@@ -4802,6 +6114,7 @@ pub struct ScreenshotSheetResponse {
     pub duration_ms: u64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn screenshot_sheet(
     state: Arc<AppState>,
     params: ScreenshotSheetParams,
@@ -4884,6 +6197,7 @@ struct ScreenshotBounds {
     cols: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_screenshot_range(range: &str) -> Result<ScreenshotBounds> {
     let bounds = parse_range_bounds(range)?;
 
@@ -4964,10 +6278,12 @@ fn parse_range_bounds(range: &str) -> Result<ScreenshotBounds> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn div_ceil(n: u32, d: u32) -> u32 {
     n.div_ceil(d)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn suggest_tiled_ranges(
     bounds: &ScreenshotBounds,
     max_rows: u32,
@@ -5083,4 +6399,505 @@ Try smaller ranges. Suggested ranges: {}",
     }
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridImportParams {
+    #[serde(alias = "workbook_or_fork_id")]
+    pub fork_id: String,
+    pub sheet_name: String,
+    pub anchor: String,
+    pub grid: crate::model::GridPayload,
+    #[serde(default)]
+    pub clear_target: bool,
+    #[serde(default)]
+    pub mode: Option<BatchMode>,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub formula_parse_policy: Option<FormulaParsePolicy>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GridImportResponse {
+    pub fork_id: String,
+    pub mode: String,
+    pub change_id: Option<String>,
+    pub summary: ChangeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_parse_diagnostics: Option<FormulaParseDiagnostics>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GridImportStagedPayload {
+    sheet_name: String,
+    anchor: String,
+    clear_target: bool,
+    grid: crate::model::GridPayload,
+}
+
+pub async fn grid_import(
+    state: Arc<AppState>,
+    params: GridImportParams,
+) -> Result<GridImportResponse> {
+    let registry = state
+        .fork_registry()
+        .ok_or_else(|| anyhow!("fork registry not available"))?;
+
+    let fork_ctx = registry.get_fork(&params.fork_id)?;
+    let work_path = fork_ctx.work_path.clone();
+
+    let (anchor_col, anchor_row) = parse_cell_ref(&params.anchor)?;
+    let mut max_col = anchor_col;
+    let mut max_row = anchor_row;
+
+    let mut write_rows: Vec<Vec<Option<MatrixCell>>> = Vec::new();
+    let mut style_ops_map: BTreeMap<String, (StyleOp, Vec<String>)> = BTreeMap::new(); // keyed by json of style patch
+
+    for grid_row in &params.grid.rows {
+        for cell in &grid_row.cells {
+            let r = anchor_row + cell.offset[0];
+            let c = anchor_col + cell.offset[1];
+            if r > max_row {
+                max_row = r;
+            }
+            if c > max_col {
+                max_col = c;
+            }
+        }
+    }
+
+    let footprint_range = format!(
+        "{}:{}",
+        crate::utils::cell_address(anchor_col, anchor_row),
+        crate::utils::cell_address(max_col, max_row)
+    );
+
+    for grid_row in &params.grid.rows {
+        for cell in &grid_row.cells {
+            let row_idx = cell.offset[0] as usize;
+            let col_idx = cell.offset[1] as usize;
+            while write_rows.len() <= row_idx {
+                write_rows.push(Vec::new());
+            }
+            while write_rows[row_idx].len() <= col_idx {
+                write_rows[row_idx].push(None);
+            }
+
+            let mut mc = None;
+            if let Some(f) = &cell.f {
+                mc = Some(MatrixCell::Formula(f.clone()));
+            } else if let Some(v) = &cell.v {
+                mc = Some(MatrixCell::Value(v.clone()));
+            }
+            if mc.is_some() {
+                write_rows[row_idx][col_idx] = mc;
+            }
+
+            let mut has_style = false;
+            let mut style_patch = crate::model::StylePatch::default();
+            if let Some(st) = &cell.style {
+                style_patch = st.clone();
+                has_style = true;
+            }
+            if let Some(fmt) = &cell.fmt {
+                style_patch.number_format = Some(Some(fmt.clone()));
+                has_style = true;
+            }
+
+            if has_style {
+                let key = serde_json::to_string(&style_patch).unwrap();
+                let addr = crate::utils::cell_address(
+                    anchor_col + cell.offset[1],
+                    anchor_row + cell.offset[0],
+                );
+
+                let entry = style_ops_map.entry(key).or_insert_with(|| {
+                    (
+                        StyleOp {
+                            sheet_name: params.sheet_name.clone(),
+                            target: StyleTarget::Cells { cells: Vec::new() }, // filled later
+                            patch: style_patch.clone(),
+                            op_mode: None,
+                        },
+                        Vec::new(),
+                    )
+                });
+                entry.1.push(addr);
+            }
+        }
+    }
+
+    let mut style_ops = Vec::new();
+    if params.clear_target {
+        style_ops.push(StyleOp {
+            sheet_name: params.sheet_name.clone(),
+            target: StyleTarget::Range {
+                range: footprint_range.clone(),
+            },
+            patch: crate::model::StylePatch {
+                font: Some(None),
+                fill: Some(None),
+                borders: Some(None),
+                alignment: Some(None),
+                number_format: Some(None),
+            },
+            op_mode: None,
+        });
+    }
+    for mut group in style_ops_map.into_values() {
+        group.0.target = StyleTarget::Cells { cells: group.1 };
+        style_ops.push(group.0);
+    }
+
+    let mut transform_ops = Vec::new();
+    if params.clear_target {
+        transform_ops.push(TransformOp::ClearRange {
+            sheet_name: params.sheet_name.clone(),
+            target: TransformTarget::Range {
+                range: footprint_range.clone(),
+            },
+            clear_values: true,
+            clear_formulas: true,
+        });
+    }
+    transform_ops.push(TransformOp::WriteMatrix {
+        sheet_name: params.sheet_name.clone(),
+        anchor: params.anchor.clone(),
+        rows: write_rows,
+        overwrite_formulas: true,
+    });
+
+    let mut column_ops = Vec::new();
+    for col in &params.grid.columns {
+        let col_name = crate::utils::column_number_to_name(anchor_col + col.offset);
+        column_ops.push(ColumnSizeOp {
+            target: ColumnTarget::Columns {
+                range: format!("{}:{}", col_name, col_name),
+            },
+            size: ColumnSizeSpec::Width {
+                width_chars: col.width_chars,
+            },
+        });
+    }
+
+    let mut structure_ops = Vec::new();
+    if !params.grid.merges.is_empty() {
+        if params.clear_target {
+            structure_ops.push(StructureOp::UnmergeCells {
+                sheet_name: params.sheet_name.clone(),
+                target_range: footprint_range.clone(),
+            });
+        }
+        for merge in &params.grid.merges {
+            structure_ops.push(StructureOp::MergeCells {
+                sheet_name: params.sheet_name.clone(),
+                target_range: merge.clone(),
+            });
+        }
+    }
+
+    // Prepare ops for applying (same formula parsing as transform_batch)
+    let fork_workbook_id = WorkbookId(params.fork_id.clone());
+    let workbook = state.open_workbook(&fork_workbook_id).await?;
+    let resolved_transform_ops = resolve_transform_ops_for_workbook(&workbook, &transform_ops)?;
+    let resolved_style_ops = resolve_style_ops_for_workbook(&workbook, &style_ops)?;
+
+    let policy =
+        params
+            .formula_parse_policy
+            .unwrap_or(FormulaParsePolicy::default_for_command_class(
+                CommandClass::BatchWrite,
+            ));
+    let (ops_to_apply, formula_parse_diagnostics) = if policy == FormulaParsePolicy::Off {
+        (resolved_transform_ops, None)
+    } else {
+        let mut builder = FormulaParseDiagnosticsBuilder::new(policy);
+        let mut valid_ops = Vec::new();
+        for op in resolved_transform_ops {
+            match &op {
+                TransformOp::WriteMatrix {
+                    sheet_name,
+                    anchor,
+                    rows,
+                    overwrite_formulas,
+                } => {
+                    let mut has_errors = false;
+                    let mut valid_rows = Vec::new();
+                    let (a_col, a_row) = parse_cell_ref(anchor)?;
+                    for (r_idx, row) in rows.iter().enumerate() {
+                        let mut valid_row = Vec::new();
+                        let r = a_row + r_idx as u32;
+                        for (c_idx, cell_opt) in row.iter().enumerate() {
+                            let c = a_col + c_idx as u32;
+                            if let Some(MatrixCell::Formula(f)) = cell_opt {
+                                match validate_formula(f) {
+                                    Ok(()) => valid_row.push(cell_opt.clone()),
+                                    Err(err_msg) => {
+                                        if policy == FormulaParsePolicy::Fail {
+                                            bail!(
+                                                "{}grid_import formula failed at {}: {}",
+                                                FORMULA_PARSE_FAILED_PREFIX,
+                                                crate::utils::cell_address(c, r),
+                                                err_msg
+                                            );
+                                        }
+                                        builder.record_error(
+                                            sheet_name,
+                                            &crate::utils::cell_address(c, r),
+                                            f,
+                                            &err_msg,
+                                        );
+                                        has_errors = true;
+                                        valid_row.push(None);
+                                    }
+                                }
+                            } else {
+                                valid_row.push(cell_opt.clone());
+                            }
+                        }
+                        valid_rows.push(valid_row);
+                    }
+                    if has_errors && policy == FormulaParsePolicy::Warn {
+                        valid_ops.push(TransformOp::WriteMatrix {
+                            sheet_name: sheet_name.clone(),
+                            anchor: anchor.clone(),
+                            rows: valid_rows,
+                            overwrite_formulas: *overwrite_formulas,
+                        });
+                    } else {
+                        valid_ops.push(op);
+                    }
+                }
+                _ => valid_ops.push(op),
+            }
+        }
+        let diagnostics = if builder.has_errors() {
+            Some(builder.build())
+        } else {
+            None
+        };
+        (valid_ops, diagnostics)
+    };
+
+    let mode = params.mode.unwrap_or_default();
+
+    if mode.is_preview() {
+        let change_id = make_short_random_id("chg", 12);
+        let snapshot_path = stage_snapshot_path(&params.fork_id, &change_id);
+        fs::create_dir_all(snapshot_path.parent().unwrap())?;
+        fs::copy(&work_path, &snapshot_path)?;
+
+        let snapshot_for_apply = snapshot_path.clone();
+        let sheet_name_for_col = params.sheet_name.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            let mut summary = ChangeSummary::default();
+            summary.op_kinds.push("grid_import".to_string());
+
+            if !structure_ops.is_empty() {
+                let res = apply_structure_ops_to_file(
+                    &snapshot_for_apply,
+                    &structure_ops,
+                    FormulaParsePolicy::Off,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !column_ops.is_empty() {
+                let res = apply_column_size_ops_to_file(
+                    &snapshot_for_apply,
+                    &sheet_name_for_col,
+                    &column_ops,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !ops_to_apply.is_empty() {
+                let res = apply_transform_ops_to_file(&snapshot_for_apply, &ops_to_apply)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !resolved_style_ops.is_empty() {
+                let res = apply_style_ops_to_file(&snapshot_for_apply, &resolved_style_ops)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+
+            Ok::<_, anyhow::Error>(summary)
+        })
+        .await??;
+
+        let mut summary = apply_result;
+        set_recalc_needed_flag(&mut summary, fork_ctx.recalc_needed);
+
+        let staged_op = StagedOp {
+            kind: "grid_import".to_string(),
+            payload: serde_json::to_value(GridImportStagedPayload {
+                sheet_name: params.sheet_name.clone(),
+                anchor: params.anchor.clone(),
+                clear_target: params.clear_target,
+                grid: params.grid.clone(),
+            })?,
+        };
+
+        let staged = StagedChange {
+            change_id: change_id.clone(),
+            created_at: Utc::now(),
+            label: params.label.clone(),
+            ops: vec![staged_op],
+            summary: summary.clone(),
+            fork_path_snapshot: Some(snapshot_path),
+        };
+
+        registry.add_staged_change(&params.fork_id, staged)?;
+
+        Ok(GridImportResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: Some(change_id),
+            summary,
+            formula_parse_diagnostics,
+        })
+    } else {
+        let sheet_name_for_col = params.sheet_name.clone();
+        let work_path_for_apply = work_path.clone();
+        let apply_result = tokio::task::spawn_blocking(move || {
+            let mut summary = ChangeSummary::default();
+            summary.op_kinds.push("grid_import".to_string());
+
+            if !structure_ops.is_empty() {
+                let res = apply_structure_ops_to_file(
+                    &work_path_for_apply,
+                    &structure_ops,
+                    FormulaParsePolicy::Off,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !column_ops.is_empty() {
+                let res = apply_column_size_ops_to_file(
+                    &work_path_for_apply,
+                    &sheet_name_for_col,
+                    &column_ops,
+                )?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !ops_to_apply.is_empty() {
+                let res = apply_transform_ops_to_file(&work_path_for_apply, &ops_to_apply)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+            if !resolved_style_ops.is_empty() {
+                let res = apply_style_ops_to_file(&work_path_for_apply, &resolved_style_ops)?;
+                merge_summary_counts(&mut summary, &res.summary);
+            }
+
+            Ok::<_, anyhow::Error>(summary)
+        })
+        .await??;
+
+        let mut summary = apply_result;
+        registry.with_fork_mut(&params.fork_id, |ctx| {
+            ctx.recalc_needed = true;
+            Ok(())
+        })?;
+        set_recalc_needed_flag(&mut summary, true);
+
+        let _ = state.close_workbook(&fork_workbook_id);
+
+        Ok(GridImportResponse {
+            fork_id: params.fork_id,
+            mode: mode.as_str().to_string(),
+            change_id: None,
+            summary,
+            formula_parse_diagnostics,
+        })
+    }
+}
+
+fn merge_summary_counts(dest: &mut ChangeSummary, src: &ChangeSummary) {
+    for sheet in &src.affected_sheets {
+        if !dest.affected_sheets.contains(sheet) {
+            dest.affected_sheets.push(sheet.clone());
+        }
+    }
+    for bounds in &src.affected_bounds {
+        if !dest.affected_bounds.contains(bounds) {
+            dest.affected_bounds.push(bounds.clone());
+        }
+    }
+    for (k, v) in &src.counts {
+        *dest.counts.entry(k.clone()).or_insert(0) += v;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjust_ref_coord_part_row_insert_clamps_excel_max_row() {
+        let adjusted = adjust_ref_coord_part(
+            "$C$2:$P$1048576",
+            StructureAxis::Row,
+            StructureEdit::Insert { at: 1791, count: 7 },
+        )
+        .expect("adjust range");
+
+        assert_eq!(adjusted, "$C$2:$P$1048576");
+    }
+
+    #[test]
+    fn clamp_out_of_bounds_defined_name_rows_clamps_plain_ranges() {
+        let mut workbook = umya_spreadsheet::new_file();
+        workbook
+            .set_sheet_name(0, "GL Data".to_string())
+            .expect("rename default sheet");
+
+        let workbook_scoped = {
+            let sheet = workbook
+                .get_sheet_by_name_mut("GL Data")
+                .expect("GL Data sheet");
+            sheet
+                .add_defined_name("GLDATA", "'GL Data'!$C$2:$P$1048583")
+                .expect("add defined name");
+            let cloned = sheet
+                .get_defined_names()
+                .first()
+                .expect("sheet defined name")
+                .clone();
+            sheet.get_defined_names_mut().clear();
+            cloned
+        };
+        {
+            let defs = workbook.get_defined_names_mut();
+            defs.clear();
+            defs.push(workbook_scoped);
+        }
+
+        let changed = clamp_out_of_bounds_defined_name_rows(&mut workbook);
+        assert!(changed >= 1, "expected at least one clamped defined name");
+
+        let global_refers_to = workbook
+            .get_defined_names()
+            .iter()
+            .find(|item| item.get_name() == "GLDATA")
+            .map(|item| item.get_address().to_string())
+            .expect("global GLDATA defined name");
+        assert!(
+            global_refers_to.contains("$P$1048576"),
+            "expected clamped max-row bound, got: {global_refers_to}"
+        );
+        assert!(
+            !global_refers_to.contains("104858"),
+            "defined name should not overflow Excel max rows: {global_refers_to}"
+        );
+    }
+
+    #[test]
+    fn clamp_defined_name_rows_in_workbook_xml_clamps_overflow_rows() {
+        let xml = r#"<workbook><definedNames><definedName name="GLDATA" hidden="0">'GL Data'!$C$2:$P$1048583</definedName><definedName name="Calc">=SUM(Sheet1!A1:A10)</definedName></definedNames></workbook>"#;
+        let (rewritten, changed) = clamp_defined_name_rows_in_workbook_xml(xml);
+
+        assert_eq!(changed, 1);
+        assert!(rewritten.contains("'GL Data'!$C$2:$P$1048576"));
+        assert!(!rewritten.contains("1048583"));
+        assert!(
+            rewritten.contains("<definedName name=\"Calc\">=SUM(Sheet1!A1:A10)</definedName>"),
+            "formula-like defined names should not be rewritten"
+        );
+    }
 }

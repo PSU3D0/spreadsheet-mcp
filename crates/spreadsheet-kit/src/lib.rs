@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod caps;
+#[cfg(all(not(target_arch = "wasm32"), feature = "recalc"))]
 pub mod cli;
 pub mod config;
 pub mod core;

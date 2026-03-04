@@ -9,3 +9,4 @@ private_planning/
 tickets/
 .venv/
 .pi
+ref-libs/

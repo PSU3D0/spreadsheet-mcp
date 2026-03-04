@@ -131,7 +131,7 @@ fn cli_read_matches_mcp_tools_for_representative_commands() {
                 ranges: vec!["A1:B3".to_string()],
                 include_headers: None,
                 include_formulas: None,
-                format: Some(spreadsheet_kit::model::TableOutputFormat::Json),
+                format: Some(spreadsheet_kit::model::TableOutputFormat::Dense),
                 page_size: None,
             },
         )
@@ -156,8 +156,8 @@ fn cli_read_matches_mcp_tools_for_representative_commands() {
 
     assert_eq!(cli_list_payload["sheets"], mcp_list_payload["sheets"]);
     assert_eq!(
-        cli_ranges_payload["values"][0]["rows"],
-        mcp_ranges_payload["values"][0]["rows"]
+        cli_ranges_payload["values"][0]["dense"],
+        mcp_ranges_payload["values"][0]["dense"]
     );
     assert_eq!(
         cli_describe_payload["sheet_count"],

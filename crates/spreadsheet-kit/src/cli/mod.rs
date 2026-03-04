@@ -23,6 +23,15 @@ pub enum TableReadFormat {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum RangeValuesFormatArg {
+    Json,
+    Values,
+    Csv,
+    Dense,
+    Rows,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SheetPageFormatArg {
     #[value(name = "full")]
     Full,
@@ -70,12 +79,212 @@ pub enum TraceDirectionArg {
     Dependents,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LayoutModeArg {
+    Values,
+    Formulas,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LayoutRenderArg {
+    Json,
+    Ascii,
+    Both,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SheetportManifestCommands {
+    #[command(
+        about = "Discover candidate SheetPort ports from workbook structure",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest candidates deal_model.xlsx\n  agent-spreadsheet sheetport manifest candidates deal_model.xlsx --sheet-filter Assumptions"
+    )]
+    Candidates {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(long, value_name = "SHEET", help = "Optional sheet filter")]
+        sheet_filter: Option<String>,
+    },
+    #[command(about = "Print the canonical SheetPort JSON schema")]
+    Schema,
+    #[command(
+        about = "Validate a SheetPort manifest",
+        after_long_help = "Example:\n  agent-spreadsheet sheetport manifest validate manifest.yaml"
+    )]
+    Validate {
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+    },
+    #[command(
+        about = "Normalize a SheetPort manifest for deterministic diffs",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest normalize manifest.yaml\n  agent-spreadsheet sheetport manifest normalize manifest.yaml --output manifest.normalized.yaml"
+    )]
+    Normalize {
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, value_name = "PATH", help = "Write normalized YAML to this file")]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SheetportCommands {
+    #[command(about = "Manifest lifecycle helpers", subcommand)]
+    Manifest(SheetportManifestCommands),
+    #[command(
+        about = "Bind-check a workbook against a SheetPort manifest",
+        after_long_help = "Example:\n  agent-spreadsheet sheetport bind-check deal_model.xlsx manifest.yaml"
+    )]
+    BindCheck {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+    },
+    #[command(
+        about = "Execute a SheetPort manifest with JSON inputs",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml --inputs '{\"loan\": 10000}'\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml"
+    )]
+    Run {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, help = "JSON string or @file containing input arguments")]
+        inputs: Option<String>,
+        #[arg(long, help = "Seed for deterministic RNG evaluation")]
+        rng_seed: Option<u64>,
+        #[arg(long, help = "Freeze volatile functions (e.g. NOW(), RAND())")]
+        freeze_volatile: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SessionCommands {
+    #[command(about = "Start a new session tracking a base workbook file")]
+    Start {
+        #[arg(long, value_name = "FILE", help = "Path to the base workbook")]
+        base: PathBuf,
+        #[arg(long, value_name = "LABEL", help = "Human-readable session label")]
+        label: Option<String>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Workspace root directory (default: cwd)"
+        )]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "View the event timeline for a session")]
+    Log {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "OP_ID", help = "Show events since this op_id")]
+        since: Option<String>,
+        #[arg(
+            long,
+            value_name = "KIND",
+            help = "Filter by operation kind prefix (e.g. structure)"
+        )]
+        kind: Option<String>,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "List branches in a session")]
+    Branches {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Switch to a different branch")]
+    Switch {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "NAME", help = "Branch name to switch to")]
+        branch: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Set HEAD to a specific event (time-travel)")]
+    Checkout {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(value_name = "OP_ID", help = "Event identifier to checkout")]
+        op_id: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Move HEAD back one event (branch-local undo)")]
+    Undo {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Move HEAD forward one event (branch-local redo)")]
+    Redo {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Create a new branch forking from a given event")]
+    Fork {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(
+            long,
+            value_name = "OP_ID",
+            help = "Fork from this event (default: current HEAD)"
+        )]
+        from: Option<String>,
+        #[arg(long, value_name = "LABEL", help = "Human-readable branch label")]
+        label: Option<String>,
+        #[arg(value_name = "NAME", help = "New branch name")]
+        branch_name: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Stage an operation (compute dry-run impact without advancing HEAD)")]
+    Op {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path)"
+        )]
+        ops: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Apply a staged operation (compare-and-swap against current HEAD)")]
+    Apply {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(value_name = "STAGED_ID", help = "Staged operation identifier")]
+        staged_id: String,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Compile the current HEAD into a standalone Excel file")]
+    Materialize {
+        #[arg(long, value_name = "ID", help = "Session identifier")]
+        session: String,
+        #[arg(long, value_name = "PATH", help = "Output file path")]
+        output: PathBuf,
+        #[arg(long, help = "Allow overwriting existing output file")]
+        force: bool,
+        #[arg(long, value_name = "PATH", help = "Workspace root directory")]
+        workspace: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "agent-spreadsheet",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(
@@ -92,14 +301,14 @@ pub struct Cli {
         value_enum,
         default_value_t = OutputShape::Canonical,
         global = true,
-        help = "Output shape (canonical keeps full schema; compact applies command-specific projections: range-values single-range flattening, read-table/sheet-page branch preservation, and formula-trace layer highlight omission while preserving continuation fields)"
+        help = "Output shape (canonical keeps full schema; compact applies command-specific projections while preserving stable payload contracts for range-values/read-table/sheet-page; formula-trace compact omits per-layer highlights while preserving continuation fields)"
     )]
     pub shape: OutputShape,
 
     #[arg(
         long,
         global = true,
-        help = "Emit compact JSON without pretty-printing"
+        help = "Emit compact JSON without pretty-printing (default behavior)"
     )]
     pub compact: bool,
 
@@ -116,6 +325,18 @@ pub enum Commands {
     ListSheets {
         #[arg(value_name = "FILE", help = "Path to the workbook (.xlsx/.xlsm)")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(about = "Inspect one sheet and detect structured regions")]
     SheetOverview {
@@ -126,10 +347,22 @@ pub enum Commands {
             help = "Exact sheet name (quote names with spaces)"
         )]
         sheet: String,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read raw values for one or more A1 ranges",
-        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20 --include-formulas\n\nFormula semantics:\n  By default, range-values returns resolved cell values only.\n  Use --include-formulas to include a parallel formulas matrix for formula-driven cells.\n  In JSON output, formulas[row][col] is Some(formula_text) for formula cells and null for literal cells.\n\nShape behavior:\n  --shape canonical (default/omitted): keep values as an array of per-range entries.\n  --shape compact with one range: flatten that entry to top-level fields (range, payload, optional next_start_row).\n  --shape compact with multiple ranges: keep values as an array with per-entry range.\n\nRelated:\n  Use inspect-cells when you need formula + value + style metadata in one response."
+        after_long_help = "Examples:\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20\n  agent-spreadsheet range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20\n  agent-spreadsheet range-values data.xlsx Sheet1 A1:C20 --include-formulas\n\nDense default:\n  range-values defaults to dense JSON encoding optimized for agent consumption:\n  dictionary + row_runs + optional sparse formulas.\n\nFormula semantics:\n  By default, range-values returns resolved values only.\n  Use --include-formulas to include formulas in the response (sparse list in dense mode, matrix in json mode).\n\nShape behavior:\n  range-values keeps a stable top-level shape in both canonical and compact modes (no single-range flattening).\n\nRelated:\n  Use inspect-cells when you need formula + value + style metadata in one response."
     )]
     RangeValues {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
@@ -142,30 +375,141 @@ pub enum Commands {
         )]
         ranges: Vec<String>,
         #[arg(
+            long,
+            value_enum,
+            value_name = "FORMAT",
+            help = "Output payload format (dense default, or json/values/csv explicitly)"
+        )]
+        format: Option<RangeValuesFormatArg>,
+        #[arg(
             long = "include-formulas",
             value_name = "BOOL",
             num_args = 0..=1,
             default_missing_value = "true",
-            help = "Include formula text matrix aligned with returned JSON rows (default false)"
+            help = "Include formulas (sparse list in dense mode, matrix in json mode)"
         )]
         include_formulas: Option<bool>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
-        about = "Inspect one A1 range and return per-cell formula/value/style snapshots",
-        after_long_help = "Examples:
-  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C10
-  agent-spreadsheet inspect-cells data.xlsx \"Q1 Actuals\" D4:F12
-
-inspect-cells is a triage-friendly read surface that combines formula text, value/cached_value, and style metadata per cell.
-For broader discovery, pair with range-values, find-formula, and formula-trace."
+        about = "Export a range to a specific format (e.g., csv, grid)",
+        after_long_help = "Examples:\n  agent-spreadsheet range-export data.xlsx Sheet1 A1:C20 --format csv --output data.csv\n  agent-spreadsheet range-export data.xlsx Sheet1 A1:C20 --format csv --output -"
     )]
-    InspectCells {
+    RangeExport {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
         #[arg(value_name = "SHEET", help = "Sheet name containing the range")]
         sheet: String,
-        #[arg(value_name = "RANGE", help = "Single A1 range to inspect")]
+        #[arg(value_name = "RANGE", help = "A1 range (for example A1:C10)")]
         range: String,
+        #[arg(long, help = "Output format (e.g. csv, grid)", default_value = "json")]
+        format: String,
+        #[arg(long, help = "Output path or '-' for stdout")]
+        output: Option<String>,
+        #[arg(
+            long = "include-formulas",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            default_missing_value = "true",
+            help = "Include parsed formulas in formula cells alongside evaluated values (JSON only)"
+        )]
+        include_formulas: Option<bool>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
+    },
+    #[command(
+        about = "Import range data from grid JSON or CSV",
+        after_long_help = "Examples:\n  agent-spreadsheet range-import data.xlsx Sheet1 --anchor B7 --from-grid region.json\n  agent-spreadsheet range-import data.xlsx Sheet1 --anchor B7 --from-csv data.csv --in-place"
+    )]
+    RangeImport {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name to import into")]
+        sheet: String,
+        #[arg(long, help = "Anchor cell for import (e.g. B7)")]
+        anchor: String,
+        #[arg(long, help = "Path to the grid JSON file to import")]
+        from_grid: Option<String>,
+        #[arg(long, help = "Path to the CSV file to import")]
+        from_csv: Option<String>,
+        #[arg(long, help = "Skip first CSV row when importing --from-csv")]
+        header: bool,
+        #[arg(long, help = "Clear the target area before import")]
+        clear_target: bool,
+        #[arg(long, help = "Validate ops without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply imports by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, help = "Apply imports to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Inspect detail snapshots for targeted A1 cells/ranges (detail view, default max 25 cells)",
+        after_long_help = "Examples:
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:C3
+  agent-spreadsheet inspect-cells data.xlsx \"Q1 Actuals\" D4 D7:F8
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 B2,C4 --include-empty
+  agent-spreadsheet inspect-cells data.xlsx Sheet1 A1:J10 --budget 100
+
+inspect-cells is a detail view for formula/value/cached/style triage and enforces a small per-request cell budget.
+Use --budget to raise the limit for rect-style reads (up to 200).
+For broader discovery, use sheet-page, range-values, or layout-page."
+    )]
+    InspectCells {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name containing the targets")]
+        sheet: String,
+        #[arg(
+            value_name = "TARGET",
+            value_delimiter = ',',
+            num_args = 1..,
+            help = "One or more A1 cells/ranges (e.g. B2, A1:C3, D7:F8)"
+        )]
+        targets: Vec<String>,
+        #[arg(long, help = "Include empty cells in the response")]
+        include_empty: bool,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Override the per-request cell budget (default 25, max 200)"
+        )]
+        budget: Option<u32>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read one sheet page with deterministic continuation",
@@ -230,6 +574,18 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
             help = "Page output format: full, compact, or values_only"
         )]
         format: SheetPageFormatArg,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Read a table-like region as json, values, or csv",
@@ -280,6 +636,18 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
             help = "Output format for this command"
         )]
         table_format: Option<TableReadFormat>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Find cells matching a text query by value or label",
@@ -306,6 +674,18 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
             help = "For --mode label, read the value from right, below, or any (default: any)"
         )]
         label_direction: Option<LabelDirectionArg>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "List workbook named ranges and table/formula named items",
@@ -322,6 +702,107 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
             help = "Optional case-insensitive prefix filter for item names"
         )]
         name_prefix: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
+    },
+    #[command(
+        about = "Define a new named range in a workbook",
+        after_long_help = "Examples:\n  agent-spreadsheet define-name data.xlsx MyRange 'Sheet1!$A$1:$B$10'\n  agent-spreadsheet define-name data.xlsx SheetLocal 'Sheet1!$A$1' --scope sheet --scope-sheet-name Sheet1 --in-place"
+    )]
+    DefineName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to define")]
+        name: String,
+        #[arg(value_name = "REFERS_TO", help = "Range or formula the name refers to")]
+        refers_to: String,
+        #[arg(
+            long,
+            value_name = "SCOPE",
+            help = "Scope: workbook (default) or sheet"
+        )]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name when scope is 'sheet'"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Update an existing named range",
+        after_long_help = "Examples:\n  agent-spreadsheet update-name data.xlsx MyRange 'Sheet1!$A$1:$C$20' --in-place\n  agent-spreadsheet update-name data.xlsx SheetLocal --scope sheet --scope-sheet-name Sheet1 --in-place\n\nNote: REFERS_TO is optional. Omit it to update scope metadata only."
+    )]
+    UpdateName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to update")]
+        name: String,
+        #[arg(
+            value_name = "REFERS_TO",
+            help = "Optional new range or formula the name refers to"
+        )]
+        refers_to: Option<String>,
+        #[arg(long, value_name = "SCOPE", help = "Scope filter: workbook or sheet")]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name to disambiguate"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
+        about = "Delete a named range from a workbook",
+        after_long_help = "Examples:\n  agent-spreadsheet delete-name data.xlsx MyRange --in-place\n  agent-spreadsheet delete-name data.xlsx SheetLocal --scope sheet --scope-sheet-name Sheet1 --in-place"
+    )]
+    DeleteName {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "NAME", help = "Name to delete")]
+        name: String,
+        #[arg(long, value_name = "SCOPE", help = "Scope filter: workbook or sheet")]
+        scope: Option<String>,
+        #[arg(
+            long = "scope-sheet-name",
+            value_name = "SHEET",
+            help = "Sheet name to disambiguate"
+        )]
+        scope_sheet_name: Option<String>,
+        #[arg(long, help = "Validate without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
     },
     #[command(
         about = "Find formulas containing a text query with pagination",
@@ -451,11 +932,35 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
             help = "Formula parse policy: fail, warn (default), or off"
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(about = "Describe workbook-level metadata and sheet counts")]
     Describe {
         #[arg(value_name = "FILE", help = "Path to the workbook")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Profile table headers, types, and column distributions",
@@ -466,6 +971,76 @@ For broader discovery, pair with range-values, find-formula, and formula-trace."
         file: PathBuf,
         #[arg(long, value_name = "SHEET", help = "Optional sheet to profile")]
         sheet: Option<String>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
+    },
+    #[command(
+        about = "Render a range with layout: column widths, borders, bold/italic, alignment",
+        after_long_help = "Examples:\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range A1:F30\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range A1:H40 --render both\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range B2:G20 --mode formulas\n  agent-spreadsheet layout-page data.xlsx Sheet1 --range B2:G20 --render ascii\n\nThe JSON output (default) includes per-column widths, merged cell spans, and per-cell style metadata.\nThe ASCII render gives a proportional grid with box-drawing borders and bold/italic markers.\n\nCLI notes:\n  --render ascii prints the grid directly (plain text) instead of JSON.\n  Empty edge columns are trimmed by default; use --skip-empty-columns-trim to keep them.\n\nLimits: 80 rows × 25 columns. Ranges exceeding these are silently capped."
+    )]
+    LayoutPage {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "SHEET", help = "Sheet name")]
+        sheet: String,
+        #[arg(
+            long,
+            value_name = "RANGE",
+            help = "A1 range to render (default: A1:T50)"
+        )]
+        range: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            value_name = "MODE",
+            help = "Cell content: values (default) or formulas"
+        )]
+        mode: Option<LayoutModeArg>,
+        #[arg(
+            long = "max-col-width",
+            value_name = "N",
+            help = "Maximum column width in character units before truncating (default: 20)"
+        )]
+        max_col_width: Option<u32>,
+        #[arg(
+            long = "fit-columns",
+            help = "Set each column width to the longest rendered cell so truncation is avoided (default off)"
+        )]
+        fit_columns: bool,
+        #[arg(
+            long = "skip-empty-columns-trim",
+            help = "Disable default trimming of empty edge columns"
+        )]
+        skip_empty_columns_trim: bool,
+        #[arg(
+            long,
+            value_enum,
+            value_name = "RENDER",
+            help = "Output format: json (default), ascii, or both"
+        )]
+        render: Option<LayoutRenderArg>,
+        #[arg(
+            long,
+            value_name = "ID",
+            help = "Read from a session's materialized state instead of the file"
+        )]
+        session: Option<String>,
+        #[arg(
+            long = "session-workspace",
+            value_name = "PATH",
+            help = "Workspace root for session resolution"
+        )]
+        session_workspace: Option<PathBuf>,
     },
     #[command(
         about = "Create a new workbook at a destination path",
@@ -778,6 +1353,46 @@ Cache note:
             help = "Formula parse policy: fail, warn (default for structure-batch), or off"
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
+        #[arg(
+            long = "impact-report",
+            help = "Include a structural impact report (shifted spans, absolute-ref warnings). Requires --dry-run."
+        )]
+        impact_report: bool,
+        #[arg(
+            long = "show-formula-delta",
+            help = "Include before/after formula delta preview samples. Requires --dry-run."
+        )]
+        show_formula_delta: bool,
+    },
+    #[command(
+        about = "Analyze structural operation impact without mutation (preflight ref-risk check)",
+        after_long_help = r#"Examples:
+  agent-spreadsheet check-ref-impact workbook.xlsx --ops @structure_ops.json
+  agent-spreadsheet check-ref-impact workbook.xlsx --ops @structure_ops.json --show-formula-delta
+
+Payload format is the same as structure-batch --ops.
+This command is read-only: it never modifies the workbook.
+
+Output includes:
+  - shifted_spans: which rows/cols shift and by how much
+  - absolute_ref_warnings: $-anchored references that cross insertion/deletion boundaries
+  - tokens_affected / tokens_unaffected counts
+  - optional formula_delta_preview (before/after formula samples)"#
+    )]
+    CheckRefImpact {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(
+            long,
+            value_name = "OPS_REF",
+            help = "Ops payload file reference (@path) \u{2014} same format as structure-batch"
+        )]
+        ops: String,
+        #[arg(
+            long = "show-formula-delta",
+            help = "Include before/after formula delta preview samples"
+        )]
+        show_formula_delta: bool,
     },
     #[command(
         about = "Apply stateless column sizing operations from an @ops payload",
@@ -941,37 +1556,263 @@ Note:
         )]
         formula_parse_policy: Option<FormulaParsePolicy>,
     },
-    #[command(about = "Recalculate workbook formulas")]
+    #[command(
+        about = "SheetPort manifest lifecycle and execution commands",
+        after_long_help = "Examples:\n  agent-spreadsheet sheetport manifest candidates model.xlsx\n  agent-spreadsheet sheetport manifest validate manifest.yaml\n  agent-spreadsheet sheetport bind-check model.xlsx manifest.yaml\n  agent-spreadsheet sheetport run model.xlsx manifest.yaml --inputs @inputs.json"
+    )]
+    Sheetport {
+        #[command(subcommand)]
+        command: SheetportCommands,
+    },
+    #[command(
+        about = "Find and replace text in formula bodies (not values)",
+        after_long_help = r#"Examples:
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find '$64' --replace '$65' --dry-run
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find 'SUM' --replace 'SUMIFS' --in-place
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find 'Sheet1!' --replace 'Sheet2!' --range A1:Z100 --output fixed.xlsx
+  agent-spreadsheet replace-in-formulas data.xlsx Sheet1 --find '(?i)old_name' --replace 'new_name' --regex --in-place
+
+Mode selection:
+  Choose exactly one of --dry-run, --in-place, or --output <PATH>.
+
+Behavior:
+  Only formula-bearing cells are considered. Literal values are never touched.
+  When --range is omitted, the used range of the sheet is scanned.
+  Output includes a count of changed formulas and sample diffs (address, before, after).
+
+Regex mode:
+  Use --regex for regular expression patterns. Capture groups are supported in --replace (e.g. $1).
+
+Formula parse policy:
+  After replacement, each new formula is validated. Policy controls behavior on malformed results:
+    warn (default) => report diagnostics and skip invalid replacements
+    fail => reject and error
+    off => skip validation"#
+    )]
+    ReplaceInFormulas {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            value_name = "SHEET",
+            help = "Sheet name containing formulas to update"
+        )]
+        sheet: String,
+        #[arg(long, help = "Text or pattern to find in formula bodies")]
+        find: String,
+        #[arg(long, help = "Replacement text")]
+        replace: String,
+        #[arg(
+            long,
+            value_name = "RANGE",
+            help = "Optional A1 range to scope replacement (default: used range)"
+        )]
+        range: Option<String>,
+        #[arg(long, help = "Interpret --find as a regular expression")]
+        regex: bool,
+        #[arg(long, help = "Case-sensitive matching (default: true)")]
+        case_sensitive: Option<bool>,
+        #[arg(long, help = "Validate ops and report summary without mutating files")]
+        dry_run: bool,
+        #[arg(
+            long,
+            help = "Apply replacement by atomically replacing the source file"
+        )]
+        in_place: bool,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Apply replacement to this output path"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+        #[arg(
+            long = "formula-parse-policy",
+            value_enum,
+            value_name = "POLICY",
+            help = "Formula parse policy: warn (default), fail, or off"
+        )]
+        formula_parse_policy: Option<FormulaParsePolicy>,
+    },
+    #[command(
+        about = "Recalculate workbook formulas",
+        after_long_help = "Examples:\n  agent-spreadsheet recalculate data.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx --force\n\nDefault (no flags): recalculate the file in-place.\n--output <PATH>: copy source to output, recalculate the copy, leave source unchanged.\n--force: allow overwriting an existing --output file."
+    )]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
         file: PathBuf,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Recalculate into this output path (source stays unchanged)"
+        )]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+        #[arg(
+            long = "ignore-sheets",
+            value_name = "SHEETS",
+            value_delimiter = ',',
+            help = "Comma-separated sheet names to exclude from changed-cells summary"
+        )]
+        ignore_sheets: Option<Vec<String>>,
+        #[arg(
+            long = "changed-cells",
+            help = "Include a summary of cells whose values changed after recalculation"
+        )]
+        changed_cells: bool,
     },
     #[command(
-        about = "Diff two workbook versions and report changed cells",
-        after_long_help = "Examples:\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx\n  agent-spreadsheet diff data.xlsx /tmp/data-edited.xlsx"
+        about = "Diff two workbook versions with summary-first, paged details",
+        after_long_help = "Examples:\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200"
     )]
     Diff {
         #[arg(value_name = "ORIGINAL", help = "Baseline workbook path")]
         original: PathBuf,
         #[arg(value_name = "MODIFIED", help = "Modified workbook path")]
         modified: PathBuf,
+        #[arg(long, help = "Limit diff to one sheet name")]
+        sheet: Option<String>,
+        #[arg(
+            long,
+            value_name = "SHEETS",
+            value_delimiter = ',',
+            help = "Limit diff to multiple sheet names (comma-separated)"
+        )]
+        sheets: Option<Vec<String>>,
+        #[arg(
+            long,
+            value_name = "A1_RANGE",
+            help = "Optional A1 range filter (e.g. A1:C100)"
+        )]
+        range: Option<String>,
+        #[arg(
+            long,
+            help = "Include paged change items; default output is summary-only"
+        )]
+        details: bool,
+        #[arg(
+            long,
+            default_value_t = 200,
+            help = "Page size for --details (1..2000)"
+        )]
+        limit: u32,
+        #[arg(long, default_value_t = 0, help = "Offset for --details pagination")]
+        offset: u32,
+    },
+    #[command(
+        about = "Event-sourced session management (start, navigate, stage, apply, materialize)",
+        subcommand,
+        after_long_help = "Session commands provide event-sourced workbook editing with undo/redo, branching, and staged apply.\n\nWorkflow:\n  1. asp session start --base model.xlsx\n  2. asp session op --session <id> --ops @edits.json\n  3. asp session apply --session <id> <staged_id>\n  4. asp session materialize --session <id> --output result.xlsx"
+    )]
+    Session(Box<SessionCommands>),
+    #[command(
+        about = "[Deprecated] Execute a SheetPort manifest with JSON inputs",
+        after_long_help = "Use `agent-spreadsheet sheetport run ...` for new workflows.\n\nExamples:\n  agent-spreadsheet run-manifest data.xlsx manifest.yaml --inputs '{\"loan\": 10000}'\n  agent-spreadsheet sheetport run data.xlsx manifest.yaml --inputs @inputs.json"
+    )]
+    RunManifest {
+        #[arg(value_name = "FILE", help = "Path to the workbook")]
+        file: PathBuf,
+        #[arg(value_name = "MANIFEST", help = "Path to the YAML manifest")]
+        manifest: PathBuf,
+        #[arg(long, help = "JSON string or @file containing input arguments")]
+        inputs: Option<String>,
+        #[arg(long, help = "Seed for deterministic RNG evaluation")]
+        rng_seed: Option<u64>,
+        #[arg(long, help = "Freeze volatile functions (e.g. NOW(), RAND())")]
+        freeze_volatile: bool,
     },
 }
 
 pub async fn run_command(command: Commands) -> Result<Value> {
     match command {
-        Commands::ListSheets { file } => commands::read::list_sheets(file).await,
-        Commands::SheetOverview { file, sheet } => {
-            commands::read::sheet_overview(file, sheet).await
+        Commands::ListSheets {
+            file,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::list_sheets(resolved).await
+        }
+        Commands::SheetOverview {
+            file,
+            sheet,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::sheet_overview(resolved, sheet).await
         }
         Commands::RangeValues {
             file,
             sheet,
             ranges,
+            format,
             include_formulas,
-        } => commands::read::range_values(file, sheet, ranges, include_formulas).await,
-        Commands::InspectCells { file, sheet, range } => {
-            commands::read::inspect_cells(file, sheet, range).await
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::range_values(resolved, sheet, ranges, format, include_formulas).await
+        }
+        Commands::RangeExport {
+            file,
+            sheet,
+            range,
+            format,
+            output,
+            include_formulas,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::range_export(resolved, sheet, range, format, output, include_formulas)
+                .await
+        }
+        Commands::RangeImport {
+            file,
+            sheet,
+            anchor,
+            from_grid,
+            from_csv,
+            header,
+            clear_target,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::range_import(
+                file,
+                sheet,
+                anchor,
+                from_grid,
+                from_csv,
+                header,
+                clear_target,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
+        Commands::InspectCells {
+            file,
+            sheet,
+            targets,
+            include_empty,
+            budget,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::inspect_cells(resolved, sheet, targets, include_empty, budget).await
         }
         Commands::SheetPage {
             file,
@@ -984,9 +1825,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             include_styles,
             include_header,
             format,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::sheet_page(
-                file,
+                resolved,
                 sheet,
                 start_row,
                 page_size,
@@ -1011,9 +1856,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             filters_json,
             filters_file,
             table_format,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::read_table(
-                file,
+                resolved,
                 sheet,
                 range,
                 table_name,
@@ -1033,12 +1882,94 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             sheet,
             mode,
             label_direction,
-        } => commands::read::find_value(file, query, sheet, mode, label_direction).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::find_value(resolved, query, sheet, mode, label_direction).await
+        }
         Commands::NamedRanges {
             file,
             sheet,
             name_prefix,
-        } => commands::read::named_ranges(file, sheet, name_prefix).await,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::named_ranges(resolved, sheet, name_prefix).await
+        }
+        Commands::DefineName {
+            file,
+            name,
+            refers_to,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::define_name(
+                file,
+                name,
+                refers_to,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
+        Commands::UpdateName {
+            file,
+            name,
+            refers_to,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::update_name(
+                file,
+                name,
+                refers_to,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
+        Commands::DeleteName {
+            file,
+            name,
+            scope,
+            scope_sheet_name,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::delete_name(
+                file,
+                name,
+                scope,
+                scope_sheet_name,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
         Commands::FindFormula {
             file,
             query,
@@ -1073,9 +2004,13 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             cursor_depth,
             cursor_offset,
             formula_parse_policy,
+            session,
+            session_workspace,
         } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
             commands::read::formula_trace(
-                file,
+                resolved,
                 sheet,
                 cell,
                 direction,
@@ -1087,8 +2022,51 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
-        Commands::Describe { file } => commands::read::describe(file).await,
-        Commands::TableProfile { file, sheet } => commands::read::table_profile(file, sheet).await,
+        Commands::Describe {
+            file,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::describe(resolved).await
+        }
+        Commands::TableProfile {
+            file,
+            sheet,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::table_profile(resolved, sheet).await
+        }
+        Commands::LayoutPage {
+            file,
+            sheet,
+            range,
+            mode,
+            max_col_width,
+            fit_columns,
+            skip_empty_columns_trim,
+            render,
+            session,
+            session_workspace,
+        } => {
+            let (resolved, _guard) =
+                commands::read::resolve_file_or_session(file, session, session_workspace)?;
+            commands::read::layout_page(
+                resolved,
+                sheet,
+                range,
+                mode,
+                max_col_width,
+                fit_columns,
+                skip_empty_columns_trim,
+                render,
+            )
+            .await
+        }
         Commands::CreateWorkbook {
             path,
             sheets,
@@ -1206,6 +2184,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             force,
             print_schema,
             formula_parse_policy,
+            impact_report,
+            show_formula_delta,
         } => {
             if print_schema {
                 commands::write::batch_payload_schema(
@@ -1226,10 +2206,17 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                     output,
                     force,
                     formula_parse_policy,
+                    impact_report,
+                    show_formula_delta,
                 )
                 .await
             }
         }
+        Commands::CheckRefImpact {
+            file,
+            ops,
+            show_formula_delta,
+        } => commands::write::check_ref_impact(file, ops, show_formula_delta).await,
         Commands::ColumnSizeBatch {
             file,
             ops,
@@ -1309,8 +2296,149 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                 .await
             }
         }
-        Commands::Recalculate { file } => commands::recalc::recalculate(file).await,
-        Commands::Diff { original, modified } => commands::diff::diff(original, modified).await,
+        Commands::Sheetport { command } => match command {
+            SheetportCommands::Manifest(manifest_command) => match manifest_command {
+                SheetportManifestCommands::Candidates { file, sheet_filter } => {
+                    commands::read::sheetport_manifest_candidates(file, sheet_filter).await
+                }
+                SheetportManifestCommands::Schema => commands::read::sheetport_manifest_schema(),
+                SheetportManifestCommands::Validate { manifest } => {
+                    commands::read::sheetport_manifest_validate(manifest)
+                }
+                SheetportManifestCommands::Normalize { manifest, output } => {
+                    commands::read::sheetport_manifest_normalize(manifest, output)
+                }
+            },
+            SheetportCommands::BindCheck { file, manifest } => {
+                commands::read::sheetport_bind_check(file, manifest).await
+            }
+            SheetportCommands::Run {
+                file,
+                manifest,
+                inputs,
+                rng_seed,
+                freeze_volatile,
+            } => {
+                commands::read::sheetport_run(file, manifest, inputs, rng_seed, freeze_volatile)
+                    .await
+            }
+        },
+        Commands::ReplaceInFormulas {
+            file,
+            sheet,
+            find,
+            replace,
+            range,
+            regex,
+            case_sensitive,
+            dry_run,
+            in_place,
+            output,
+            force,
+            formula_parse_policy,
+        } => {
+            commands::write::replace_in_formulas(
+                file,
+                sheet,
+                find,
+                replace,
+                range,
+                regex,
+                case_sensitive.unwrap_or(true),
+                dry_run,
+                in_place,
+                output,
+                force,
+                formula_parse_policy,
+            )
+            .await
+        }
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+            ignore_sheets,
+            changed_cells,
+        } => commands::recalc::recalculate(file, output, force, ignore_sheets, changed_cells).await,
+        Commands::Diff {
+            original,
+            modified,
+            sheet,
+            sheets,
+            range,
+            details,
+            limit,
+            offset,
+        } => {
+            commands::diff::diff(
+                original, modified, sheet, sheets, range, details, limit, offset,
+            )
+            .await
+        }
+        Commands::Session(command) => match *command {
+            SessionCommands::Start {
+                base,
+                label,
+                workspace,
+            } => commands::session::session_start(base, label, workspace).await,
+            SessionCommands::Log {
+                session,
+                since,
+                kind,
+                workspace,
+            } => commands::session::session_log(session, workspace, since, kind).await,
+            SessionCommands::Branches { session, workspace } => {
+                commands::session::session_branches(session, workspace).await
+            }
+            SessionCommands::Switch {
+                session,
+                branch,
+                workspace,
+            } => commands::session::session_switch(session, branch, workspace).await,
+            SessionCommands::Checkout {
+                session,
+                op_id,
+                workspace,
+            } => commands::session::session_checkout(session, op_id, workspace).await,
+            SessionCommands::Undo { session, workspace } => {
+                commands::session::session_undo(session, workspace).await
+            }
+            SessionCommands::Redo { session, workspace } => {
+                commands::session::session_redo(session, workspace).await
+            }
+            SessionCommands::Fork {
+                session,
+                from,
+                label,
+                branch_name,
+                workspace,
+            } => {
+                commands::session::session_fork(session, from, label, branch_name, workspace).await
+            }
+            SessionCommands::Op {
+                session,
+                ops,
+                workspace,
+            } => commands::session::session_op_stage(session, ops, workspace).await,
+            SessionCommands::Apply {
+                session,
+                staged_id,
+                workspace,
+            } => commands::session::session_apply(session, staged_id, workspace).await,
+            SessionCommands::Materialize {
+                session,
+                output,
+                force,
+                workspace,
+            } => commands::session::session_materialize(session, output, workspace, force).await,
+        },
+        Commands::RunManifest {
+            file,
+            manifest,
+            inputs,
+            rng_seed,
+            freeze_volatile,
+        } => commands::read::sheetport_run(file, manifest, inputs, rng_seed, freeze_volatile).await,
     }
 }
 
@@ -1364,7 +2492,9 @@ fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
     let first_subcommand_name = first_subcommand_index
         .map(|index| argv[index].to_string_lossy().into_owned())
         .unwrap_or_default();
-    let preserve_sheet_page_format = first_subcommand_name == "sheet-page";
+    let preserve_sheet_page_format = first_subcommand_name == "sheet-page"
+        || first_subcommand_name == "range-export"
+        || first_subcommand_name == "range-values";
 
     let mut normalized = Vec::with_capacity(argv.len());
     normalized.push(argv[0].clone());
@@ -1428,9 +2558,29 @@ pub async fn run_with_options(
     }
 
     let projection_target = compact_projection_target_for_command(&command);
+    let emit_layout_ascii_direct = matches!(
+        &command,
+        Commands::LayoutPage {
+            render: Some(LayoutRenderArg::Ascii),
+            ..
+        }
+    );
 
     match run_command(command).await {
         Ok(payload) => {
+            if emit_layout_ascii_direct {
+                if let Some(ascii) = payload.get("ascii_render").and_then(|v| v.as_str()) {
+                    print!("{ascii}");
+                    if !ascii.ends_with('\n') {
+                        println!();
+                    }
+                    return Ok(());
+                }
+                emit_error_and_exit(anyhow::anyhow!(
+                    "layout-page --render ascii expected ascii_render in response"
+                ));
+            }
+
             if let Err(error) =
                 output::emit_value(&payload, format, shape, projection_target, compact, quiet)
             {
@@ -1518,6 +2668,7 @@ mod tests {
                 filters_json,
                 filters_file,
                 table_format,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
@@ -1600,12 +2751,180 @@ mod tests {
                 file,
                 sheet,
                 ranges,
+                format,
                 include_formulas,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
                 assert_eq!(ranges, vec!["A1:C10".to_string()]);
+                assert!(format.is_none());
                 assert_eq!(include_formulas, Some(true));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_values_format_argument() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-values",
+            "workbook.xlsx",
+            "Sheet1",
+            "A1:C10",
+            "--format",
+            "json",
+        ])
+        .expect("parse command");
+
+        match cli.command {
+            Commands::RangeValues { format, .. } => {
+                assert!(matches!(format, Some(RangeValuesFormatArg::Json)));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_arguments_with_paging_and_filters() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "diff",
+            "baseline.xlsx",
+            "candidate.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--range",
+            "A1:C20",
+            "--details",
+            "--limit",
+            "150",
+            "--offset",
+            "300",
+        ])
+        .expect("parse diff command");
+
+        match cli.command {
+            Commands::Diff {
+                original,
+                modified,
+                sheet,
+                sheets,
+                range,
+                details,
+                limit,
+                offset,
+            } => {
+                assert_eq!(original, PathBuf::from("baseline.xlsx"));
+                assert_eq!(modified, PathBuf::from("candidate.xlsx"));
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert!(sheets.is_none());
+                assert_eq!(range.as_deref(), Some("A1:C20"));
+                assert!(details);
+                assert_eq!(limit, 150);
+                assert_eq!(offset, 300);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_defaults_to_summary_only() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "diff",
+            "baseline.xlsx",
+            "candidate.xlsx",
+        ])
+        .expect("parse diff command defaults");
+
+        match cli.command {
+            Commands::Diff {
+                details,
+                limit,
+                offset,
+                ..
+            } => {
+                assert!(!details);
+                assert_eq!(limit, 200);
+                assert_eq!(offset, 0);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_import_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-import",
+            "workbook.xlsx",
+            "Sheet1",
+            "--anchor",
+            "B7",
+            "--from-grid",
+            "region.json",
+            "--in-place",
+        ])
+        .expect("parse range-import");
+
+        match cli.command {
+            Commands::RangeImport {
+                file,
+                sheet,
+                anchor,
+                from_grid,
+                from_csv,
+                header,
+                clear_target,
+                dry_run,
+                in_place,
+                output,
+                force,
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet, "Sheet1");
+                assert_eq!(anchor, "B7");
+                assert_eq!(from_grid.as_deref(), Some("region.json"));
+                assert!(from_csv.is_none());
+                assert!(!header);
+                assert!(!clear_target);
+                assert!(!dry_run);
+                assert!(in_place);
+                assert!(output.is_none());
+                assert!(!force);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_range_import_from_csv_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "range-import",
+            "workbook.xlsx",
+            "Sheet1",
+            "--anchor",
+            "B7",
+            "--from-csv",
+            "data.csv",
+            "--header",
+            "--in-place",
+        ])
+        .expect("parse range-import csv");
+
+        match cli.command {
+            Commands::RangeImport {
+                from_grid,
+                from_csv,
+                header,
+                ..
+            } => {
+                assert!(from_grid.is_none());
+                assert_eq!(from_csv.as_deref(), Some("data.csv"));
+                assert!(header);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1619,14 +2938,25 @@ mod tests {
             "workbook.xlsx",
             "Sheet1",
             "A1:C10",
+            "D4",
+            "--include-empty",
         ])
         .expect("parse command");
 
         match cli.command {
-            Commands::InspectCells { file, sheet, range } => {
+            Commands::InspectCells {
+                file,
+                sheet,
+                targets,
+                include_empty,
+                budget,
+                ..
+            } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
-                assert_eq!(range, "A1:C10");
+                assert_eq!(targets, vec!["A1:C10", "D4"]);
+                assert!(include_empty);
+                assert_eq!(budget, None);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -1667,6 +2997,7 @@ mod tests {
                 include_styles,
                 include_header,
                 format,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet, "Sheet1");
@@ -2079,6 +3410,7 @@ mod tests {
                 file,
                 sheet,
                 name_prefix,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet.as_deref(), Some("Sheet1"));
@@ -2141,6 +3473,7 @@ mod tests {
                 sheet,
                 mode,
                 label_direction,
+                ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(query, "Amount");
@@ -2308,5 +3641,100 @@ mod tests {
                 "compact"
             ]
         );
+    }
+
+    #[test]
+    fn preserves_range_values_local_format_flag() {
+        let normalized = normalize_legacy_global_format_argv(
+            [
+                "agent-spreadsheet",
+                "range-values",
+                "workbook.xlsx",
+                "Sheet1",
+                "A1:B2",
+                "--format",
+                "json",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        );
+
+        let tokens = normalized
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tokens,
+            vec![
+                "agent-spreadsheet",
+                "range-values",
+                "workbook.xlsx",
+                "Sheet1",
+                "A1:B2",
+                "--format",
+                "json"
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_sheetport_manifest_validate_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheetport",
+            "manifest",
+            "validate",
+            "manifest.yaml",
+        ])
+        .expect("parse sheetport manifest validate");
+
+        match cli.command {
+            Commands::Sheetport { command } => match command {
+                SheetportCommands::Manifest(SheetportManifestCommands::Validate { manifest }) => {
+                    assert_eq!(manifest, PathBuf::from("manifest.yaml"));
+                }
+                other => panic!("unexpected sheetport command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_sheetport_run_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "sheetport",
+            "run",
+            "workbook.xlsx",
+            "manifest.yaml",
+            "--inputs",
+            "@inputs.json",
+            "--rng-seed",
+            "42",
+            "--freeze-volatile",
+        ])
+        .expect("parse sheetport run");
+
+        match cli.command {
+            Commands::Sheetport { command } => match command {
+                SheetportCommands::Run {
+                    file,
+                    manifest,
+                    inputs,
+                    rng_seed,
+                    freeze_volatile,
+                } => {
+                    assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                    assert_eq!(manifest, PathBuf::from("manifest.yaml"));
+                    assert_eq!(inputs.as_deref(), Some("@inputs.json"));
+                    assert_eq!(rng_seed, Some(42));
+                    assert!(freeze_volatile);
+                }
+                other => panic!("unexpected sheetport command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

@@ -397,7 +397,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let diff_help = run_cli(&["diff", "--help"]);
     assert!(diff_help.status.success(), "stderr: {:?}", diff_help.stderr);
     let diff = parse_stdout_text(&diff_help);
-    assert!(diff.contains("Diff two workbook versions and report changed cells"));
+    assert!(diff.contains("Diff two workbook versions with summary-first, paged details"));
     assert!(diff.contains("Examples:"));
     assert!(diff.contains("diff baseline.xlsx candidate.xlsx"));
 
@@ -423,7 +423,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(range.contains("Examples:"));
     assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
     assert!(range.contains("--include-formulas"));
-    assert!(range.contains("formulas matrix"));
+    assert!(range.contains("dense JSON encoding"));
+    assert!(range.contains("sparse list in dense mode"));
 
     let inspect_help = run_cli(&["inspect-cells", "--help"]);
     assert!(
@@ -432,10 +433,11 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
         inspect_help.stderr
     );
     let inspect = parse_stdout_text(&inspect_help);
-    assert!(
-        inspect.contains("Inspect one A1 range and return per-cell formula/value/style snapshots")
-    );
-    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C10"));
+    assert!(inspect.contains(
+        "Inspect detail snapshots for targeted A1 cells/ranges (detail view, default max 25 cells)"
+    ));
+    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C3"));
+    assert!(inspect.contains("--include-empty"));
 
     let sheet_page_help = run_cli(&["sheet-page", "--help"]);
     assert!(
@@ -540,9 +542,10 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`",
         "Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.",
         "Machine continuation example:",
-        "`range-values <file> <sheet> <range> [range...] [--include-formulas]`",
-        "range-values `--include-formulas`:** adds a `formulas` matrix aligned to `rows`",
-        "`inspect-cells <file> <sheet> <range>`",
+        "`range-values <file> <sheet> <range> [range...] [--format dense\\|json\\|values\\|csv] [--include-formulas]`",
+        "range-values default encoding:** dense JSON (`dense.encoding = \"dense_v1\"`)",
+        "range-values `--include-formulas`:** includes sparse formula coordinates in dense mode",
+        "`inspect-cells <file> <sheet> <target> [target...] [--include-empty]`",
         "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
@@ -551,7 +554,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "#### Financial presentation starter defaults",
         "Keep label columns (often column A) explicitly sized",
         "Percent: `0.0%`",
-        "Compact (single range):** flatten that entry to top-level fields",
+        "range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
         "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
         "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
@@ -3137,7 +3140,7 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     assert_eq!(canonical_values.len(), 1);
     let canonical_entry = canonical_values.first().expect("single range entry");
     assert_eq!(canonical_entry["range"], "A1:C4");
-    assert!(canonical_entry.get("rows").is_some());
+    assert!(canonical_entry.get("dense").is_some());
 
     let compact = run_cli(&[
         "--shape",
@@ -3151,13 +3154,16 @@ fn cli_range_values_shape_single_range_canonical_vs_compact() {
     let compact_payload = parse_stdout_json(&compact);
     assert!(compact_payload.get("workbook_id").is_some());
     assert!(compact_payload.get("workbook_short_id").is_none());
-    assert!(compact_payload.get("values").is_none());
-    assert_eq!(compact_payload["range"], "A1:C4");
-    assert!(compact_payload.get("rows").is_some());
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact single-range values");
+    assert_eq!(compact_values.len(), 1);
+    assert_eq!(compact_values[0]["range"], "A1:C4");
+    assert!(compact_values[0].get("dense").is_some());
 }
 
 #[test]
-fn cli_range_values_include_formulas_returns_formula_matrix() {
+fn cli_range_values_include_formulas_returns_dense_sparse_formulas() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("range-values-include-formulas.xlsx");
     write_fixture(&workbook_path);
@@ -3183,11 +3189,14 @@ fn cli_range_values_include_formulas_returns_formula_matrix() {
         .cloned()
         .expect("range entry");
 
-    let formulas = entry["formulas"].as_array().expect("formulas matrix rows");
+    let dense = entry["dense"].as_object().expect("dense payload");
+    let formulas = dense["formulas"].as_array().expect("dense sparse formulas");
     assert_eq!(formulas.len(), 3);
-    assert_eq!(formulas[0][0].as_str(), Some("B2*2"));
-    assert_eq!(formulas[1][0].as_str(), Some("B3*2"));
-    assert_eq!(formulas[2][0].as_str(), Some("B4*2"));
+    assert_eq!(formulas[0]["row"].as_u64(), Some(0));
+    assert_eq!(formulas[0]["col"].as_u64(), Some(0));
+    assert_eq!(formulas[0]["formula"].as_str(), Some("B2*2"));
+    assert_eq!(formulas[1]["formula"].as_str(), Some("B3*2"));
+    assert_eq!(formulas[2]["formula"].as_str(), Some("B4*2"));
 
     let default_output = run_cli(&["range-values", file, "Sheet1", "C2:C4"]);
     assert!(
@@ -3202,10 +3211,60 @@ fn cli_range_values_include_formulas_returns_formula_matrix() {
         .first()
         .cloned()
         .expect("range entry");
+    let default_dense = default_entry["dense"].as_object().expect("dense payload");
+    let default_formulas = default_dense
+        .get("formulas")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        default_entry.get("formulas").is_none(),
-        "default range-values output should not include formulas field"
+        default_formulas.is_empty(),
+        "default range-values output should not include formulas"
     );
+}
+
+#[test]
+fn cli_range_values_dense_encoding_rolls_up_repeated_values() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("range-values-dense-rollup.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    let sheet = workbook
+        .get_sheet_by_name_mut("Sheet1")
+        .expect("default sheet exists");
+    for row in 1..=3 {
+        for col in ["A", "B", "C", "D", "E", "F"] {
+            sheet
+                .get_cell_mut(format!("{}{}", col, row).as_str())
+                .set_value("#NAME?");
+        }
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let output = run_cli(&["range-values", file, "Sheet1", "A1:F3"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    let entry = payload["values"]
+        .as_array()
+        .expect("values array")
+        .first()
+        .cloned()
+        .expect("range entry");
+    let dense = entry["dense"].as_object().expect("dense payload");
+
+    let dictionary = dense["dictionary"].as_array().expect("dictionary array");
+    assert!(dictionary.len() <= 2, "expected null + one repeated token");
+
+    let row_runs = dense["row_runs"].as_array().expect("row runs");
+    assert_eq!(row_runs.len(), 3);
+    for row in row_runs {
+        let runs = row.as_array().expect("run array");
+        assert_eq!(runs.len(), 1, "single run expected for repeated row");
+        assert_eq!(runs[0]["len"].as_u64(), Some(6));
+        assert_ne!(runs[0]["value_idx"].as_u64(), Some(0));
+    }
 }
 
 #[test]
@@ -3242,9 +3301,12 @@ fn cli_range_values_shape_continuation_representable_canonical_and_compact() {
     let compact_payload = parse_stdout_json(&compact);
     assert!(compact_payload.get("workbook_id").is_some());
     assert!(compact_payload.get("workbook_short_id").is_none());
-    assert!(compact_payload.get("values").is_none());
-    assert_eq!(compact_payload["range"], "A1:XFD1");
-    assert_eq!(compact_payload["next_start_row"].as_u64(), Some(1));
+    let compact_values = compact_payload["values"]
+        .as_array()
+        .expect("compact values array");
+    assert_eq!(compact_values.len(), 1);
+    assert_eq!(compact_values[0]["range"], "A1:XFD1");
+    assert_eq!(compact_values[0]["next_start_row"].as_u64(), Some(1));
 }
 
 #[test]
@@ -3294,7 +3356,7 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         .expect("canonical multi-range values");
     assert_eq!(canonical_values.len(), 2);
     assert!(canonical_values.iter().all(|entry| {
-        entry.get("range").and_then(Value::as_str).is_some() && entry.get("rows").is_some()
+        entry.get("range").and_then(Value::as_str).is_some() && entry.get("dense").is_some()
     }));
 
     let compact = run_cli(&[
@@ -3315,11 +3377,9 @@ fn cli_range_values_shape_multi_range_canonical_vs_compact() {
         .as_array()
         .expect("compact multi-range values");
     assert_eq!(compact_values.len(), 2);
-    assert!(
-        compact_values
-            .iter()
-            .all(|entry| entry.get("range").and_then(Value::as_str).is_some())
-    );
+    assert!(compact_values.iter().all(|entry| {
+        entry.get("range").and_then(Value::as_str).is_some() && entry.get("dense").is_some()
+    }));
 }
 
 #[test]
@@ -3425,20 +3485,85 @@ fn cli_inspect_cells_returns_unified_snapshot() {
 }
 
 #[test]
-fn cli_inspect_cells_large_range_truncates_to_limits() {
+fn cli_inspect_cells_rejects_large_requests_with_hint() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("inspect-cells-large.xlsx");
     write_fixture(&workbook_path);
     let file = workbook_path.to_str().expect("path utf8");
 
     let output = run_cli(&["inspect-cells", file, "Sheet1", "A1:XFD10"]);
+    assert!(!output.status.success(), "stdout: {:?}", output.stdout);
+    let err = parse_stderr_json(&output);
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(message.contains("detail view"), "message={message}");
+    assert!(message.contains("sheet-page"), "message={message}");
+}
+
+#[test]
+fn cli_inspect_cells_supports_multi_targets_and_dedupes_overlap() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-multi.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "B2:C2", "C2", "A2"]);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     let payload = parse_stdout_json(&output);
 
-    assert_eq!(payload["truncated"], Value::Bool(true));
+    assert_eq!(payload["range"], "B2:C2,C2,A2");
+    assert_eq!(payload["targets"], serde_json::json!(["B2:C2", "C2", "A2"]));
+
     let cells = payload["cells"].as_array().expect("cells array");
-    assert!(!cells.is_empty());
-    assert!(cells.len() <= 10_000);
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2", "C2", "A2"]);
+}
+
+#[test]
+fn cli_inspect_cells_omits_empty_cells_by_default() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-empty-default.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["inspect-cells", file, "Sheet1", "B2", "D2"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let cells = payload["cells"].as_array().expect("cells array");
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2"]);
+}
+
+#[test]
+fn cli_inspect_cells_include_empty_keeps_empty_addresses() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("inspect-cells-empty-include.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "inspect-cells",
+        file,
+        "Sheet1",
+        "B2",
+        "D2",
+        "--include-empty",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    let cells = payload["cells"].as_array().expect("cells array");
+    let addresses: Vec<&str> = cells
+        .iter()
+        .filter_map(|cell| cell["address"].as_str())
+        .collect();
+    assert_eq!(addresses, vec!["B2", "D2"]);
 }
 
 #[test]
@@ -5776,6 +5901,182 @@ fn cli_copy_edit_diff_are_stateless_and_persisted() {
 }
 
 #[test]
+fn cli_diff_defaults_to_summary_only() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-summary-original.xlsx");
+    let modified = tmp.path().join("diff-summary-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+        "C2==B2*3",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+    ]);
+    assert!(diff.status.success(), "stderr: {:?}", diff.stderr);
+
+    let payload = parse_stdout_json(&diff);
+    assert!(payload.get("summary").is_some());
+    assert!(payload.get("changes").is_none());
+    assert_eq!(payload["summary"]["returned_changes"].as_u64(), Some(0));
+    assert_eq!(
+        payload["summary"]["total_changes"].as_u64(),
+        payload["change_count"].as_u64()
+    );
+    assert!(
+        payload["summary"]["counts_by_kind"]["cell"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+}
+
+#[test]
+fn cli_diff_details_supports_pagination() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-page-original.xlsx");
+    let modified = tmp.path().join("diff-page-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+        "C2==B2*3",
+        "B3=25",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let first = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "1",
+    ]);
+    assert!(first.status.success(), "stderr: {:?}", first.stderr);
+    let first_payload = parse_stdout_json(&first);
+    assert_eq!(
+        first_payload["summary"]["returned_changes"].as_u64(),
+        Some(1)
+    );
+    let first_changes = first_payload["changes"].as_array().expect("changes page");
+    assert_eq!(first_changes.len(), 1);
+    let next_offset = first_payload["summary"]["next_offset"]
+        .as_u64()
+        .expect("next offset");
+
+    let second = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "1",
+        "--offset",
+        &next_offset.to_string(),
+    ]);
+    assert!(second.status.success(), "stderr: {:?}", second.stderr);
+    let second_payload = parse_stdout_json(&second);
+    let second_changes = second_payload["changes"].as_array().expect("changes page");
+    assert_eq!(second_changes.len(), 1);
+    assert_eq!(
+        second_payload["change_count"], first_payload["change_count"],
+        "paged requests must report stable total change_count"
+    );
+}
+
+#[test]
+fn cli_diff_sheet_and_range_filters_scope_results() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-filter-original.xlsx");
+    let modified = tmp.path().join("diff-filter-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let filtered = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--range",
+        "B2:B2",
+        "--details",
+        "--limit",
+        "50",
+    ]);
+    assert!(filtered.status.success(), "stderr: {:?}", filtered.stderr);
+    let payload = parse_stdout_json(&filtered);
+    assert_eq!(payload["change_count"].as_u64(), Some(1));
+
+    let changes = payload["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["address"].as_str(), Some("B2"));
+}
+
+#[test]
+fn cli_diff_rejects_invalid_range_filter() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-invalid-range-original.xlsx");
+    let modified = tmp.path().join("diff-invalid-range-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--range",
+        "NOT_A_RANGE",
+    ]);
+    assert!(!diff.status.success(), "diff should fail for invalid range");
+    let err = parse_stderr_json(&diff);
+    assert_eq!(err["code"], "INVALID_ARGUMENT", "unexpected error: {err}");
+}
+
+#[test]
+fn cli_diff_rejects_invalid_details_limit() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-invalid-limit-original.xlsx");
+    let modified = tmp.path().join("diff-invalid-limit-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "0",
+    ]);
+    assert!(!diff.status.success(), "diff should fail for limit=0");
+    let err = parse_stderr_json(&diff);
+    assert_eq!(err["code"], "INVALID_ARGUMENT", "unexpected error: {err}");
+}
+
+#[test]
 fn cli_edit_dry_run_reports_preview_and_preserves_source() {
     let tmp = tempdir().expect("tempdir");
     let workbook_path = tmp.path().join("edit-dry-run.xlsx");
@@ -6984,6 +7285,295 @@ fn structure_batch_help_mentions_formula_cache() {
     );
 }
 
+fn write_complex_grid_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("default sheet exists");
+
+        sheet.get_cell_mut("A1").set_value("Quarterly Report");
+        sheet.add_merge_cells("A1:B1");
+        sheet.get_cell_mut("A2").set_value("Name");
+        sheet.get_cell_mut("B2").set_value("Amount");
+        sheet.get_cell_mut("A3").set_value("Alice");
+        sheet.get_cell_mut("B3").set_value_number(1234.0);
+        sheet.get_cell_mut("A4").set_value("Bob");
+        sheet.get_cell_mut("B4").set_value_number(5678.0);
+
+        sheet.get_column_dimension_mut("A").set_width(26.0);
+        sheet.get_column_dimension_mut("B").set_width(14.0);
+
+        sheet.get_style_mut("A1").get_font_mut().set_bold(true);
+        sheet
+            .get_style_mut("A1")
+            .get_alignment_mut()
+            .set_horizontal(umya_spreadsheet::HorizontalAlignmentValues::Center);
+        sheet
+            .get_style_mut("A1")
+            .get_borders_mut()
+            .get_bottom_border_mut()
+            .set_border_style("medium");
+        sheet.get_style_mut("B3").get_font_mut().set_italic(true);
+        sheet
+            .get_style_mut("B3")
+            .get_number_format_mut()
+            .set_format_code("$#,##0");
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write workbook");
+}
+
+#[test]
+fn cli_range_export_csv_and_range_import_from_csv_roundtrip() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("csv-source.xlsx");
+    let target_path = tmp.path().join("csv-target.xlsx");
+    let csv_path = tmp.path().join("export.csv");
+
+    write_fixture(&source_path);
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let source = source_path.to_str().expect("source path utf8");
+    let target = target_path.to_str().expect("target path utf8");
+    let csv = csv_path.to_str().expect("csv path utf8");
+
+    let export = run_cli(&[
+        "range-export",
+        source,
+        "Sheet1",
+        "A1:B4",
+        "--format",
+        "csv",
+        "--output",
+        csv,
+    ]);
+    assert!(export.status.success(), "stderr: {:?}", export.stderr);
+    let export_payload = parse_stdout_json(&export);
+    assert_eq!(export_payload["status"], "ok");
+    assert_json_path_eq(&export_payload, "path", csv);
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "B2",
+        "--from-csv",
+        csv,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let read = run_cli(&[
+        "range-values",
+        target,
+        "Sheet1",
+        "B2:C5",
+        "--format",
+        "json",
+    ]);
+    assert!(read.status.success(), "stderr: {:?}", read.stderr);
+    let payload = parse_stdout_json(&read);
+    let rows = payload["values"][0]["rows"]
+        .as_array()
+        .expect("rows matrix");
+
+    assert_eq!(rows[0][0]["value"], "Name");
+    assert_eq!(rows[0][1]["value"], "Amount");
+    assert_eq!(rows[1][0]["value"], "Alice");
+    assert_eq!(rows[1][1]["value"], 10.0);
+    assert_eq!(rows[3][0]["value"], "Carol");
+    assert_eq!(rows[3][1]["value"], 30.0);
+
+    let target_header_path = tmp.path().join("csv-target-header.xlsx");
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_header_path)
+        .expect("write header target workbook");
+    let target_header = target_header_path.to_str().expect("header path utf8");
+
+    let import_header = run_cli(&[
+        "range-import",
+        target_header,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-csv",
+        csv,
+        "--header",
+        "--in-place",
+    ]);
+    assert!(
+        import_header.status.success(),
+        "stderr: {:?}",
+        import_header.stderr
+    );
+
+    let read_header = run_cli(&[
+        "range-values",
+        target_header,
+        "Sheet1",
+        "A1:B3",
+        "--format",
+        "json",
+    ]);
+    assert!(
+        read_header.status.success(),
+        "stderr: {:?}",
+        read_header.stderr
+    );
+    let header_payload = parse_stdout_json(&read_header);
+    let header_rows = header_payload["values"][0]["rows"]
+        .as_array()
+        .expect("header rows matrix");
+    assert_eq!(header_rows[0][0]["value"], "Alice");
+    assert_eq!(header_rows[0][1]["value"], 10.0);
+}
+
+#[test]
+fn cli_grid_export_import_roundtrip_preserves_layout_and_styles() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("grid-source.xlsx");
+    let target_path = tmp.path().join("grid-target.xlsx");
+    let grid_path = tmp.path().join("region.grid.json");
+
+    write_complex_grid_fixture(&source_path);
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let source = source_path.to_str().expect("source path utf8");
+    let target = target_path.to_str().expect("target path utf8");
+    let grid = grid_path.to_str().expect("grid path utf8");
+
+    let export = run_cli(&[
+        "range-export",
+        source,
+        "Sheet1",
+        "A1:B4",
+        "--format",
+        "grid",
+        "--output",
+        grid,
+    ]);
+    assert!(export.status.success(), "stderr: {:?}", export.stderr);
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-grid",
+        grid,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let layout = run_cli(&[
+        "layout-page",
+        target,
+        "Sheet1",
+        "--range",
+        "A1:B4",
+        "--max-col-width",
+        "40",
+        "--skip-empty-columns-trim",
+    ]);
+    assert!(layout.status.success(), "stderr: {:?}", layout.stderr);
+    let layout_payload = parse_stdout_json(&layout);
+
+    let merges = layout_payload["merged_cells"]
+        .as_array()
+        .expect("merged cells");
+    assert!(
+        merges.iter().any(|v| v.as_str() == Some("A1:B1")),
+        "expected A1:B1 merge, got {:?}",
+        merges
+    );
+
+    let columns = layout_payload["columns"].as_array().expect("columns");
+    assert_eq!(columns[0]["width_chars"], 26.0);
+    assert_eq!(columns[1]["width_chars"], 14.0);
+
+    let row1_cells = layout_payload["rows"][0]["cells"]
+        .as_array()
+        .expect("row1 cells");
+    let a1 = row1_cells
+        .iter()
+        .find(|c| c["address"] == "A1")
+        .expect("A1 cell");
+    assert_eq!(a1["bold"], true);
+
+    let inspect = run_cli(&["inspect-cells", target, "Sheet1", "B3:B3"]);
+    assert!(inspect.status.success(), "stderr: {:?}", inspect.stderr);
+    let inspect_payload = parse_stdout_json(&inspect);
+    let b3 = inspect_payload["cells"].as_array().expect("cells")[0].clone();
+    assert_eq!(b3["number_format"], "$#,##0");
+}
+
+#[test]
+fn cli_range_import_from_csv_handles_quotes_crlf_and_blanks() {
+    let tmp = tempdir().expect("tempdir");
+    let target_path = tmp.path().join("csv-edge-target.xlsx");
+    let csv_path = tmp.path().join("edge.csv");
+
+    umya_spreadsheet::writer::xlsx::write(&umya_spreadsheet::new_file(), &target_path)
+        .expect("write target workbook");
+
+    let csv_content = concat!(
+        "Name,Note,Amount,Extra\r\n",
+        "\"Doe, Jane\",\"He said \"\"Hi\"\"\",123,\r\n",
+        "\"Multiline\",\"First line\r\nSecond line\",45.67,\"\"\r\n"
+    );
+    fs::write(&csv_path, csv_content).expect("write csv");
+
+    let target = target_path.to_str().expect("target path utf8");
+    let csv = csv_path.to_str().expect("csv path utf8");
+
+    let import = run_cli(&[
+        "range-import",
+        target,
+        "Sheet1",
+        "--anchor",
+        "A1",
+        "--from-csv",
+        csv,
+        "--in-place",
+    ]);
+    assert!(import.status.success(), "stderr: {:?}", import.stderr);
+
+    let read = run_cli(&[
+        "range-values",
+        target,
+        "Sheet1",
+        "A1:D3",
+        "--format",
+        "json",
+    ]);
+    assert!(read.status.success(), "stderr: {:?}", read.stderr);
+    let payload = parse_stdout_json(&read);
+    let rows = payload["values"][0]["rows"]
+        .as_array()
+        .expect("rows matrix");
+
+    assert_eq!(rows[0][0]["value"], "Name");
+    assert_eq!(rows[0][1]["value"], "Note");
+    assert_eq!(rows[0][2]["value"], "Amount");
+    assert_eq!(rows[0][3]["value"], "Extra");
+
+    assert_eq!(rows[1][0]["value"], "Doe, Jane");
+    assert_eq!(rows[1][1]["value"], "He said \"Hi\"");
+    assert_eq!(rows[1][2]["value"], 123.0);
+    assert!(rows[1][3].is_null());
+
+    assert_eq!(rows[2][0]["value"], "Multiline");
+    let multiline = rows[2][1]["value"].as_str().expect("multiline text value");
+    assert!(multiline.contains("First line"));
+    assert!(multiline.contains("Second line"));
+    assert_eq!(rows[2][2]["value"], 45.67);
+    assert!(rows[2][3].is_null());
+}
+
 #[test]
 fn edit_help_mentions_formula_cache_and_modes() {
     let output = run_cli(&["edit", "--help"]);
@@ -7011,5 +7601,801 @@ fn edit_help_mentions_formula_cache_and_modes() {
     assert!(
         combined.contains("write_path_provenance"),
         "edit help should mention provenance diagnostics"
+    );
+}
+
+// ─── 4101: structure-batch impact report & formula delta preview ───
+
+#[test]
+fn structure_batch_impact_report_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("impact-report.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("impact-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":3}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--impact-report",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // Standard dry-run fields are still present.
+    assert!(payload["would_change"].as_bool().unwrap_or(false));
+    assert!(payload["op_count"].as_u64().is_some());
+
+    // Impact report is present.
+    let ir = &payload["impact_report"];
+    assert!(!ir.is_null(), "impact_report should be present");
+    assert!(
+        !ir["shifted_spans"].as_array().unwrap().is_empty(),
+        "should have at least one shifted span"
+    );
+    assert!(ir["tokens_affected"].is_number());
+    assert!(ir["tokens_unaffected"].is_number());
+}
+
+#[test]
+fn structure_batch_show_formula_delta_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("formula-delta.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("delta-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+        "--show-formula-delta",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // Formula delta preview should be present.
+    let fdp = &payload["formula_delta_preview"];
+    assert!(fdp.is_array(), "formula_delta_preview should be an array");
+    let items = fdp.as_array().unwrap();
+    assert!(!items.is_empty(), "should have at least one delta item");
+
+    // Each item should have the expected fields.
+    let first = &items[0];
+    assert!(first["cell"].is_string());
+    assert!(first["before"].is_string());
+    assert!(first["after"].is_string());
+    assert!(first["classification"].is_string());
+}
+
+#[test]
+fn structure_batch_impact_flags_require_dry_run() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("impact-no-dry.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("impact-no-dry-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    // --impact-report without --dry-run → error
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--impact-report",
+    ]);
+    assert!(!output.status.success(), "should fail without --dry-run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--dry-run") || stderr.contains("dry-run"),
+        "error should mention --dry-run: {}",
+        stderr
+    );
+
+    // --show-formula-delta without --dry-run → error
+    let output2 = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+        "--show-formula-delta",
+    ]);
+    assert!(!output2.status.success(), "should fail without --dry-run");
+}
+
+#[test]
+fn structure_batch_dry_run_without_impact_flags_is_backward_compatible() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("compat.xlsx");
+    write_fixture(&workbook_path);
+    let ops_path = tmp.path().join("compat-ops.json");
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":2,"count":1}]}"#,
+    );
+
+    let file = workbook_path.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+
+    // impact_report and formula_delta_preview should NOT be present when not requested.
+    assert!(
+        payload.get("impact_report").is_none() || payload["impact_report"].is_null(),
+        "impact_report should be absent when not requested"
+    );
+    assert!(
+        payload.get("formula_delta_preview").is_none()
+            || payload["formula_delta_preview"].is_null(),
+        "formula_delta_preview should be absent when not requested"
+    );
+}
+
+// ── Named Range CRUD Tests ───────────────────────────────────────────────────
+
+#[test]
+fn cli_define_name_dry_run_validates_without_mutating() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-dry-run.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "NewRange",
+        "Sheet1!$A$1:$C$4",
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "NewRange");
+    assert_eq!(payload["refers_to"], "Sheet1!$A$1:$C$4");
+    assert_eq!(payload["scope_kind"], "workbook");
+    assert_eq!(payload["dry_run"], true);
+
+    // Verify the original file is unchanged: no NewRange should exist.
+    let check = run_cli(&["named-ranges", file, "--name-prefix", "NewRange"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    // Empty arrays are pruned by the output layer, so items may be absent or empty.
+    let items = check_payload["items"].as_array();
+    assert!(
+        items.is_none() || items.unwrap().is_empty(),
+        "dry-run should not have mutated the file"
+    );
+}
+
+#[test]
+fn cli_define_name_in_place_creates_workbook_scoped_name() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-inplace.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "TotalSales",
+        "Sheet1!$B$2:$B$4",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "TotalSales");
+    assert_eq!(payload["scope_kind"], "workbook");
+    assert_eq!(payload["dry_run"], false);
+
+    // Verify the name is now visible.
+    let check = run_cli(&["named-ranges", file, "--name-prefix", "TotalSales"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    let items = check_payload["items"].as_array().expect("items array");
+    assert!(
+        !items.is_empty(),
+        "TotalSales should exist after define-name --in-place"
+    );
+    assert_eq!(items[0]["name"], "TotalSales");
+}
+
+#[test]
+fn cli_define_name_sheet_scoped_with_output() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("define-name-sheet.xlsx");
+    let output_path = tmp.path().join("define-name-sheet-out.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+    let output_file = output_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "define-name",
+        file,
+        "LocalName",
+        "Sheet1!$A$1",
+        "--scope",
+        "sheet",
+        "--scope-sheet-name",
+        "Sheet1",
+        "--output",
+        output_file,
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "LocalName");
+    assert_eq!(payload["scope_kind"], "sheet");
+    assert_eq!(payload["scope_sheet_name"], "Sheet1");
+
+    // Verify in the output file.
+    let check = run_cli(&["named-ranges", output_file, "--name-prefix", "LocalName"]);
+    assert!(check.status.success());
+    let check_payload = parse_stdout_json(&check);
+    let items = check_payload["items"].as_array().expect("items array");
+    assert!(!items.is_empty(), "LocalName should exist in output file");
+}
+
+#[test]
+fn cli_update_name_in_place_changes_refers_to() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("update-name.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // First define a name.
+    let def = run_cli(&[
+        "define-name",
+        file,
+        "MyRange",
+        "Sheet1!$A$1:$B$2",
+        "--in-place",
+    ]);
+    assert!(def.status.success(), "define failed: {:?}", def.stderr);
+
+    // Update it.
+    let output = run_cli(&[
+        "update-name",
+        file,
+        "MyRange",
+        "Sheet1!$A$1:$D$10",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "MyRange");
+    assert_eq!(payload["refers_to"], "Sheet1!$A$1:$D$10");
+    assert!(payload["previous_refers_to"].is_string());
+    assert_eq!(payload["dry_run"], false);
+}
+
+#[test]
+fn cli_update_name_scope_only_keeps_existing_refers_to() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("update-name-scope-only.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let def = run_cli(&[
+        "define-name",
+        file,
+        "ScopeOnlyName",
+        "Sheet1!$A$1:$B$2",
+        "--in-place",
+    ]);
+    assert!(def.status.success(), "define failed: {:?}", def.stderr);
+
+    let output = run_cli(&[
+        "update-name",
+        file,
+        "ScopeOnlyName",
+        "--scope",
+        "sheet",
+        "--scope-sheet-name",
+        "Sheet1",
+        "--in-place",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "ScopeOnlyName");
+    assert_eq!(payload["refers_to"], "'Sheet1'!$A$1:$B$2");
+    assert_eq!(payload["scope_kind"], "sheet");
+    assert_eq!(payload["scope_sheet_name"], "Sheet1");
+    assert!(payload["previous_refers_to"].is_string());
+}
+
+#[test]
+fn cli_delete_name_in_place_removes_name() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("delete-name.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    // The fixture already has Sales_Amount.
+    let before = run_cli(&["named-ranges", file, "--name-prefix", "Sales_Amount"]);
+    assert!(before.status.success());
+    let before_payload = parse_stdout_json(&before);
+    let before_items = before_payload["items"].as_array().expect("items");
+    assert!(
+        !before_items.is_empty(),
+        "Sales_Amount should exist before delete"
+    );
+
+    let output = run_cli(&["delete-name", file, "Sales_Amount", "--in-place"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["name"], "Sales_Amount");
+    assert_eq!(payload["deleted"], true);
+
+    // Verify it's gone.
+    let after = run_cli(&["named-ranges", file, "--name-prefix", "Sales_Amount"]);
+    assert!(after.status.success());
+    let after_payload = parse_stdout_json(&after);
+    let after_items = after_payload["items"].as_array();
+    assert!(
+        after_items.is_none() || after_items.unwrap().is_empty(),
+        "Sales_Amount should not exist after delete"
+    );
+}
+
+#[test]
+fn cli_delete_name_not_found_returns_error() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("delete-name-notfound.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["delete-name", file, "NonExistent", "--in-place"]);
+    assert!(
+        !output.status.success(),
+        "should fail for non-existent name"
+    );
+}
+
+#[test]
+fn cli_named_ranges_includes_scope_metadata() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("scope-metadata.xlsx");
+    write_phase1_read_surface_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["named-ranges", file]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    let items = payload["items"].as_array().expect("items array");
+    assert!(!items.is_empty());
+
+    // All items should have scope_kind.
+    for item in items {
+        let scope_kind = item["scope_kind"].as_str();
+        assert!(
+            scope_kind == Some("workbook") || scope_kind == Some("sheet"),
+            "item {:?} should have scope_kind 'workbook' or 'sheet', got {:?}",
+            item["name"],
+            scope_kind
+        );
+        if scope_kind == Some("sheet") {
+            assert!(
+                item["scope_sheet_name"].is_string(),
+                "sheet-scoped item should have scope_sheet_name"
+            );
+        }
+    }
+}
+
+// ─── 4105: Recalculate output mode and stateless safety ───
+
+#[test]
+fn cli_recalculate_in_place_preserves_existing_behavior() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("recalc-inplace.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", file]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert!(payload["file"].as_str().is_some(), "file field present");
+    assert!(
+        payload["backend"].as_str().is_some(),
+        "backend field present"
+    );
+    assert!(
+        payload["duration_ms"].as_u64().is_some(),
+        "duration_ms present"
+    );
+    // In-place mode should NOT have source_path/target_path/changed
+    assert!(
+        payload.get("source_path").is_none(),
+        "in-place should not emit source_path"
+    );
+    assert!(
+        payload.get("target_path").is_none(),
+        "in-place should not emit target_path"
+    );
+    assert!(
+        payload.get("changed").is_none(),
+        "in-place should not emit changed"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_mode_copies_and_recalcs_target() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-output-source.xlsx");
+    let target_path = tmp.path().join("recalc-output-target.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    // Capture source bytes before recalc
+    let source_bytes_before = fs::read(&source_path).expect("read source before");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+
+    // Response metadata fields
+    assert!(
+        payload["source_path"].as_str().is_some(),
+        "source_path should be present in output mode"
+    );
+    assert!(
+        payload["target_path"].as_str().is_some(),
+        "target_path should be present in output mode"
+    );
+    assert_eq!(
+        payload["changed"], true,
+        "changed should be true in output mode"
+    );
+
+    // file field points to the target
+    assert_json_path_eq(&payload, "target_path", target);
+    assert_json_path_eq(&payload, "source_path", source);
+
+    // Target file should exist
+    assert!(
+        target_path.exists(),
+        "target file should exist after recalculate --output"
+    );
+
+    // Source should be unchanged
+    let source_bytes_after = fs::read(&source_path).expect("read source after");
+    assert_eq!(
+        source_bytes_before, source_bytes_after,
+        "source file should remain unchanged in output mode"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_mode_rejects_existing_target_without_force() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-target.xlsx");
+    write_fixture(&source_path);
+    // Create an existing target
+    write_fixture(&target_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(
+        !output.status.success(),
+        "should fail when target exists without --force"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "OUTPUT_EXISTS", "unexpected error: {err}");
+}
+
+#[test]
+fn cli_recalculate_output_mode_allows_existing_target_with_force() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-ok-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-ok-target.xlsx");
+    write_fixture(&source_path);
+    write_fixture(&target_path);
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target, "--force"]);
+    assert!(
+        output.status.success(),
+        "should succeed with --force, stderr: {:?}",
+        output.stderr
+    );
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["changed"], true);
+    assert_json_path_eq(&payload, "target_path", target);
+}
+
+#[test]
+fn cli_recalculate_output_force_failure_preserves_existing_target() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-fail-source.xlsx");
+    let target_path = tmp.path().join("recalc-force-fail-target.xlsx");
+
+    // Invalid source payload to force recalc failure.
+    fs::write(&source_path, b"not-an-xlsx").expect("write invalid source");
+    write_fixture(&target_path);
+
+    let source = source_path.to_str().expect("path utf8");
+    let target = target_path.to_str().expect("path utf8");
+
+    let target_before = fs::read(&target_path).expect("read target before");
+
+    let output = run_cli(&["recalculate", source, "--output", target, "--force"]);
+    assert!(
+        !output.status.success(),
+        "recalc should fail for invalid source payload"
+    );
+
+    // Existing target must remain untouched on failure.
+    assert!(
+        target_path.exists(),
+        "target should still exist after failure"
+    );
+    let target_after = fs::read(&target_path).expect("read target after");
+    assert_eq!(
+        target_before, target_after,
+        "existing target content should be preserved on recalc failure"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_rejects_same_path_as_source() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-same.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", source]);
+    assert!(
+        !output.status.success(),
+        "should fail when output == source"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(
+        err["code"], "INVALID_ARGUMENT",
+        "unexpected error envelope: {err}"
+    );
+}
+
+#[test]
+fn cli_recalculate_force_without_output_is_invalid() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-force-alone.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--force"]);
+    assert!(
+        !output.status.success(),
+        "should fail when --force used without --output"
+    );
+    let err = parse_stderr_json(&output);
+    assert_eq!(
+        err["code"], "INVALID_ARGUMENT",
+        "unexpected error envelope: {err}"
+    );
+}
+
+#[test]
+fn cli_recalculate_output_invalid_parent_dir_returns_error() {
+    let tmp = tempdir().expect("tempdir");
+    let source_path = tmp.path().join("recalc-invalid-output.xlsx");
+    write_fixture(&source_path);
+    let source = source_path.to_str().expect("path utf8");
+
+    let bad_target = tmp.path().join("nonexistent_dir").join("output.xlsx");
+    let target = bad_target.to_str().expect("path utf8");
+
+    let output = run_cli(&["recalculate", source, "--output", target]);
+    assert!(
+        !output.status.success(),
+        "should fail when output parent dir doesn't exist"
+    );
+}
+
+#[test]
+fn cli_recalculate_help_shows_output_mode_docs() {
+    let help = run_cli(&["recalculate", "--help"]);
+    assert!(help.status.success(), "stderr: {:?}", help.stderr);
+    let text = parse_stdout_text(&help);
+    assert!(text.contains("--output"), "help should document --output");
+    assert!(text.contains("--force"), "help should document --force");
+    assert!(
+        text.contains("source stays unchanged"),
+        "help should explain source safety"
+    );
+}
+
+#[test]
+fn cli_recalculate_parse_output_and_force_flags() {
+    use clap::Parser;
+    use spreadsheet_kit::cli::{Cli, Commands};
+
+    let cli = Cli::try_parse_from([
+        "agent-spreadsheet",
+        "recalculate",
+        "workbook.xlsx",
+        "--output",
+        "out.xlsx",
+        "--force",
+    ])
+    .expect("parse recalculate with output and force");
+
+    match cli.command {
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+            ..
+        } => {
+            assert_eq!(file, PathBuf::from("workbook.xlsx"));
+            assert_eq!(output, Some(PathBuf::from("out.xlsx")));
+            assert!(force);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+
+    // Without output/force
+    let cli2 = Cli::try_parse_from(["agent-spreadsheet", "recalculate", "workbook.xlsx"])
+        .expect("parse recalculate without flags");
+
+    match cli2.command {
+        Commands::Recalculate {
+            file,
+            output,
+            force,
+            ..
+        } => {
+            assert_eq!(file, PathBuf::from("workbook.xlsx"));
+            assert!(output.is_none());
+            assert!(!force);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ticket 4104 – CLI integration: insert_rows expand_adjacent_sums + clone_row
+// ---------------------------------------------------------------------------
+
+fn write_sum_fixture(path: &Path) {
+    let mut workbook = umya_spreadsheet::new_file();
+    let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
+    sheet.get_cell_mut("A1").set_value_number(10.0);
+    sheet.get_cell_mut("A2").set_value_number(20.0);
+    sheet.get_cell_mut("A3").set_value_number(30.0);
+    sheet.get_cell_mut("A4").set_formula("SUM(A1:A3)");
+    umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write fixture");
+}
+
+#[test]
+fn cli_structure_batch_insert_rows_expand_adjacent_sums() {
+    let tmp = tempdir().expect("tempdir");
+    let wb = tmp.path().join("expand_sum.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    write_sum_fixture(&wb);
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"insert_rows","sheet_name":"Sheet1","at_row":4,"count":1,"expand_adjacent_sums":true}]}"#,
+    );
+
+    let file = wb.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let book = umya_spreadsheet::reader::xlsx::read(&wb).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").unwrap();
+    // Subtotal shifted to row 5; formula expanded to include new row 4.
+    let formula = sheet.get_cell("A5").unwrap().get_formula().to_string();
+    assert_eq!(
+        formula.to_uppercase().replace(' ', ""),
+        "SUM(A1:A4)",
+        "SUM should expand to include inserted row"
+    );
+}
+
+#[test]
+fn cli_structure_batch_clone_row_in_place() {
+    let tmp = tempdir().expect("tempdir");
+    let wb = tmp.path().join("clone_row.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+
+    // Build fixture: header, template row, subtotal
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("Header");
+        sheet.get_cell_mut("B1").set_value_number(100.0);
+        sheet.get_cell_mut("A2").set_value("Total");
+        sheet.get_cell_mut("B2").set_formula("SUM(B1:B1)");
+        umya_spreadsheet::writer::xlsx::write(&workbook, &wb).expect("write fixture");
+    }
+
+    write_ops_payload(
+        &ops_path,
+        r#"{"ops":[{"kind":"clone_row","sheet_name":"Sheet1","source_row":1,"insert_at":2,"count":2,"expand_adjacent_sums":true}]}"#,
+    );
+
+    let file = wb.to_str().unwrap();
+    let ops_ref = format!("@{}", ops_path.to_str().unwrap());
+
+    let output = run_cli(&[
+        "structure-batch",
+        file,
+        "--ops",
+        ops_ref.as_str(),
+        "--in-place",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload = parse_stdout_json(&output);
+    assert!(payload["changed"].as_bool().unwrap_or(false));
+
+    let book = umya_spreadsheet::reader::xlsx::read(&wb).expect("read workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").unwrap();
+
+    // Cloned rows at 2 and 3 should copy template values.
+    let a2 = sheet.get_cell("A2").unwrap().get_value().to_string();
+    assert_eq!(a2, "Header");
+    let b2 = sheet.get_cell("B2").unwrap().get_value().to_string();
+    assert_eq!(b2, "100");
+
+    // Subtotal shifted to row 4; formula expanded.
+    let formula = sheet.get_cell("B4").unwrap().get_formula().to_string();
+    assert_eq!(
+        formula.to_uppercase().replace(' ', ""),
+        "SUM(B1:B3)",
+        "SUM should expand to include cloned rows"
     );
 }
