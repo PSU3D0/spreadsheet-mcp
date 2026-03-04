@@ -12,11 +12,13 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/spreadsheet-mcp/Cargo.toml crates/spreadsheet-mcp/Cargo.toml
 COPY crates/spreadsheet-kit/Cargo.toml crates/spreadsheet-kit/Cargo.toml
+COPY crates/spreadsheet-kit-wasm/Cargo.toml crates/spreadsheet-kit-wasm/Cargo.toml
 
 # Create dummy src to build deps
-RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src \
+RUN mkdir -p crates/spreadsheet-mcp/src crates/spreadsheet-kit/src crates/spreadsheet-kit-wasm/src \
     && echo "fn main() {}" > crates/spreadsheet-mcp/src/main.rs \
-    && echo "" > crates/spreadsheet-kit/src/lib.rs
+    && echo "" > crates/spreadsheet-kit/src/lib.rs \
+    && echo "" > crates/spreadsheet-kit-wasm/src/lib.rs
 
 # Build dependencies only (cached unless Cargo.toml/lock change)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
