@@ -18,9 +18,8 @@ pub async fn session_start(
     label: Option<String>,
     workspace: Option<PathBuf>,
 ) -> Result<Value> {
-    let workspace_root = workspace.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let workspace_root =
+        workspace.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     if !base.exists() {
         bail!("base file not found: {}", base.display());
@@ -105,10 +104,7 @@ pub async fn session_log(
 // Session branches
 // ---------------------------------------------------------------------------
 
-pub async fn session_branches(
-    session_id: String,
-    workspace: Option<PathBuf>,
-) -> Result<Value> {
+pub async fn session_branches(session_id: String, workspace: Option<PathBuf>) -> Result<Value> {
     let handle = open_session(&session_id, workspace.as_deref())?;
     let branches = handle.list_branches()?;
     let current = handle.current_branch()?;
@@ -175,10 +171,7 @@ pub async fn session_checkout(
 // Session undo / redo
 // ---------------------------------------------------------------------------
 
-pub async fn session_undo(
-    session_id: String,
-    workspace: Option<PathBuf>,
-) -> Result<Value> {
+pub async fn session_undo(session_id: String, workspace: Option<PathBuf>) -> Result<Value> {
     let handle = open_session(&session_id, workspace.as_deref())?;
     let new_head = handle.undo()?;
 
@@ -189,10 +182,7 @@ pub async fn session_undo(
     }))
 }
 
-pub async fn session_redo(
-    session_id: String,
-    workspace: Option<PathBuf>,
-) -> Result<Value> {
+pub async fn session_redo(session_id: String, workspace: Option<PathBuf>) -> Result<Value> {
     let handle = open_session(&session_id, workspace.as_deref())?;
     let new_head = handle.redo()?;
 
@@ -245,8 +235,12 @@ pub async fn session_op_stage(
     let payload_json = load_ops_payload(&ops_ref)?;
     let head = handle.read_head()?;
 
+    // Compute dry-run impact
+    let dry_run_impact = compute_staging_impact(&handle, &payload_json);
+
     // Create a staged artifact
-    let staged_id = format!("stg_{:013x}_{:08x}",
+    let staged_id = format!(
+        "stg_{:013x}_{:08x}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -259,16 +253,21 @@ pub async fn session_op_stage(
         "session_id": session_id,
         "head_at_stage": head,
         "ops_payload": payload_json,
+        "dry_run_impact": dry_run_impact,
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
 
     let staged_path = handle.staged_dir().join(format!("{}.json", staged_id));
-    std::fs::write(&staged_path, serde_json::to_string_pretty(&staged_artifact)?)?;
+    std::fs::write(
+        &staged_path,
+        serde_json::to_string_pretty(&staged_artifact)?,
+    )?;
 
     Ok(json!({
         "staged_id": staged_id,
         "session_id": session_id,
         "head_at_stage": head,
+        "dry_run_impact": dry_run_impact,
         "staged_path": staged_path.display().to_string(),
     }))
 }
@@ -313,10 +312,7 @@ pub async fn session_apply(
         );
     }
 
-    let payload = staged
-        .get("ops_payload")
-        .cloned()
-        .unwrap_or(json!({}));
+    let payload = staged.get("ops_payload").cloned().unwrap_or(json!({}));
 
     // Infer the operation kind from the payload so that replay_event_on_session
     // can route to the correct handler. If the payload contains a `kind` field,
@@ -335,8 +331,8 @@ pub async fn session_apply(
         OpKind::edit_batch()
     };
 
-    // Create and append the event
-    let event = OpEvent::new(
+    // Build the event, attaching dry_run_impact from the staged artifact if present
+    let mut event = OpEvent::new(
         session_id.clone(),
         current_head.clone(),
         Actor {
@@ -347,6 +343,22 @@ pub async fn session_apply(
         kind,
         payload,
     );
+
+    if let Some(impact_val) = staged.get("dry_run_impact")
+        && !impact_val.is_null()
+        && let Ok(impact) =
+            serde_json::from_value::<crate::core::events::DryRunImpact>(impact_val.clone())
+    {
+        event = event.with_dry_run_impact(impact);
+    }
+
+    if let Some(precond_val) = staged.get("preconditions")
+        && !precond_val.is_null()
+        && let Ok(preconditions) =
+            serde_json::from_value::<crate::core::events::Preconditions>(precond_val.clone())
+    {
+        event = event.with_preconditions(preconditions);
+    }
 
     let op_id = event.op_id.clone();
     handle.append_event(event)?;
@@ -431,4 +443,114 @@ fn load_ops_payload(ops_ref: &str) -> Result<Value> {
 
     serde_json::from_str(&content)
         .map_err(|e| anyhow::anyhow!("failed to parse ops payload JSON from '{}': {}", path, e))
+}
+
+/// Compute dry-run impact for a staged operation payload.
+///
+/// Returns a `DryRunImpact` value as JSON, or `null` if impact cannot be
+/// determined (e.g. unknown op kind or materialization failure).
+fn compute_staging_impact(handle: &SessionHandle, payload: &Value) -> Value {
+    use crate::core::events::{DryRunImpact, ShiftedSpan};
+
+    let impact = (|| -> Result<DryRunImpact> {
+        // Infer kind from payload
+        let kind_hint = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+
+        if kind_hint.starts_with("structure.") {
+            // Structure ops: use compute_structure_impact for detailed analysis
+            let ops: Vec<crate::tools::fork::StructureOp> =
+                if let Some(ops_val) = payload.get("ops") {
+                    serde_json::from_value(ops_val.clone())?
+                } else {
+                    vec![serde_json::from_value(payload.clone())?]
+                };
+
+            let wb_bytes = handle.materialize()?;
+            let mut tmp = tempfile::Builder::new().suffix(".xlsx").tempfile()?;
+            std::io::Write::write_all(&mut tmp, &wb_bytes)?;
+
+            let (report, _) =
+                crate::tools::structure_impact::compute_structure_impact(tmp.path(), &ops, false)?;
+
+            let shifted_spans = report
+                .shifted_spans
+                .into_iter()
+                .map(|s| ShiftedSpan {
+                    op_index: s.op_index,
+                    sheet_name: s.sheet_name,
+                    axis: s.axis,
+                    at: s.at,
+                    count: s.count,
+                    direction: s.direction,
+                    description: s.description,
+                })
+                .collect();
+
+            let boundary_warnings: Vec<String> = report
+                .absolute_ref_warnings
+                .iter()
+                .map(|w| w.message.clone())
+                .collect();
+
+            Ok(DryRunImpact {
+                cells_changed: 0,
+                formulas_rewritten: report.tokens_affected,
+                shifted_spans,
+                ref_errors_generated: 0,
+                warnings: report.notes,
+                boundary_warnings,
+            })
+        } else if payload.get("rows").is_some() {
+            // write_matrix: compute cell count from dimensions
+            let rows = payload
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    let row_count = arr.len() as u64;
+                    let col_count = arr
+                        .first()
+                        .and_then(|r| r.as_array())
+                        .map(|c| c.len() as u64)
+                        .unwrap_or(0);
+                    row_count * col_count
+                })
+                .unwrap_or(0);
+
+            Ok(DryRunImpact {
+                cells_changed: rows,
+                formulas_rewritten: 0,
+                shifted_spans: vec![],
+                ref_errors_generated: 0,
+                warnings: vec![],
+                boundary_warnings: vec![],
+            })
+        } else if let Some(ops_val) = payload.get("ops").and_then(|v| v.as_array()) {
+            // Generic batch ops: estimate from ops count
+            let ops_count = ops_val.len() as u64;
+            Ok(DryRunImpact {
+                cells_changed: ops_count,
+                formulas_rewritten: 0,
+                shifted_spans: vec![],
+                ref_errors_generated: 0,
+                warnings: vec![
+                    "impact estimate based on ops count; precise analysis not available for this op kind".to_string(),
+                ],
+                boundary_warnings: vec![],
+            })
+        } else {
+            Ok(DryRunImpact {
+                cells_changed: 0,
+                formulas_rewritten: 0,
+                shifted_spans: vec![],
+                ref_errors_generated: 0,
+                warnings: vec![],
+                boundary_warnings: vec![],
+            })
+        }
+    })();
+
+    match impact {
+        Ok(i) => serde_json::to_value(i).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    }
 }

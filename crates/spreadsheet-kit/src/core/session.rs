@@ -414,7 +414,7 @@ impl WorkbookSession {
         let mut truncated = false;
 
         'outer: for sheet_name in sheet_names {
-            let sheet = self.sheet_by_name(&sheet_name)?;
+            let sheet = self.sheet_by_name_required(&sheet_name)?;
             let max_row = sheet.get_highest_row().max(1);
             let max_col = sheet.get_highest_column().max(1);
 
@@ -476,7 +476,7 @@ impl WorkbookSession {
                 .next()
                 .ok_or_else(|| anyhow!("workbook has no sheets"))?
         };
-        let sheet = self.sheet_by_name(&sheet_name)?;
+        let sheet = self.sheet_by_name_required(&sheet_name)?;
 
         let bounds = if let Some(range) = params.range.as_ref() {
             parse_range_bounds(range)?
@@ -616,7 +616,7 @@ impl WorkbookSession {
         sheet_name: &str,
         ranges: impl Into<SessionRangeSelection>,
     ) -> Result<Vec<RangeValuesEntry>> {
-        let sheet = self.sheet_by_name(sheet_name)?;
+        let sheet = self.sheet_by_name_required(sheet_name)?;
         let ranges = ranges.into().into_vec();
         if ranges.is_empty() {
             return Err(anyhow!("at least one range is required"));
@@ -657,7 +657,7 @@ impl WorkbookSession {
             return Err(anyhow!("page_size must be greater than zero"));
         }
 
-        let sheet = self.sheet_by_name(&params.sheet_name)?;
+        let sheet = self.sheet_by_name_required(&params.sheet_name)?;
         let start_row = params.start_row.max(1);
         let page_size = params.page_size.min(500);
         let max_row = sheet.get_highest_row();
@@ -697,7 +697,7 @@ impl WorkbookSession {
 
     /// Export a range as grid payload (value/formula/style patch surface).
     pub fn grid_export(&self, sheet_name: &str, range: &str) -> Result<GridPayload> {
-        let sheet = self.sheet_by_name(sheet_name)?;
+        let sheet = self.sheet_by_name_required(sheet_name)?;
         let bounds = parse_range_bounds(range)?;
 
         let mut columns = Vec::new();
@@ -860,6 +860,35 @@ impl WorkbookSession {
         Ok(bytes)
     }
 
+    /// Write current workbook state to a temporary XLSX file.
+    ///
+    /// The caller owns the `NamedTempFile` and must keep it alive for as long as
+    /// the path is needed (e.g. during apply-to-file round-trips).
+    pub fn to_temp_file(&self) -> Result<tempfile::NamedTempFile> {
+        let bytes = self.to_bytes()?;
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".xlsx")
+            .tempfile()
+            .context("failed to create session temp file")?;
+        std::io::Write::write_all(&mut tmp, &bytes)
+            .context("failed to write workbook to temp file")?;
+        Ok(tmp)
+    }
+
+    /// Reload in-memory workbook state from an on-disk XLSX file.
+    ///
+    /// Used after an external `apply_*_to_file()` function has mutated the file
+    /// to bring the session back in sync.
+    pub fn reload_from_path(&mut self, path: &Path) -> Result<()> {
+        let bytes = fs::read(path)
+            .with_context(|| format!("failed to read workbook from '{}'", path.display()))?;
+        let cursor = std::io::Cursor::new(&bytes);
+        let spreadsheet = umya_spreadsheet::reader::xlsx::read_reader(cursor, true)
+            .context("failed to parse workbook after reload")?;
+        self.spreadsheet = spreadsheet;
+        Ok(())
+    }
+
     /// Serialize and consume the current in-memory workbook state.
     pub fn into_bytes(self) -> Result<Vec<u8>> {
         self.to_bytes()
@@ -909,7 +938,12 @@ impl WorkbookSession {
         )
     }
 
-    fn sheet_by_name(&self, sheet_name: &str) -> Result<&Worksheet> {
+    /// Look up a sheet by name, returning `Some` if found.
+    pub fn sheet_by_name(&self, sheet_name: &str) -> Option<&Worksheet> {
+        self.spreadsheet.get_sheet_by_name(sheet_name)
+    }
+
+    fn sheet_by_name_required(&self, sheet_name: &str) -> Result<&Worksheet> {
         self.spreadsheet
             .get_sheet_by_name(sheet_name)
             .ok_or_else(|| anyhow!("sheet '{}' not found", sheet_name))
@@ -927,7 +961,7 @@ impl WorkbookSession {
                 SessionTransformOp::WriteMatrix {
                     sheet_name, anchor, ..
                 } => {
-                    self.sheet_by_name(sheet_name)?;
+                    self.sheet_by_name_required(sheet_name)?;
                     let _ = parse_cell_ref(anchor)?;
                 }
             }

@@ -20,6 +20,44 @@ use crate::tools::{
     SheetOverviewParams, SheetPageParams, SheetStatisticsParams, TableFilter, TableProfileParams,
 };
 
+// ---------------------------------------------------------------------------
+// Session resolution helper
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective workbook path, optionally materializing from a session.
+///
+/// When `session` is `Some`, the session's current state is materialized to a
+/// temp file whose path is returned. The caller must keep the returned
+/// `NamedTempFile` alive for the duration of the read operation.
+///
+/// When `session` is `None`, the provided `file` path is returned as-is.
+pub fn resolve_file_or_session(
+    file: PathBuf,
+    session: Option<String>,
+    workspace: Option<PathBuf>,
+) -> Result<(PathBuf, Option<tempfile::NamedTempFile>)> {
+    match session {
+        Some(session_id) => {
+            let workspace_root = workspace
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let store = crate::core::session_store::SessionStore::open(&workspace_root)?;
+            let handle = store.open_session(&session_id)?;
+            let bytes = handle.materialize()?;
+
+            let mut tmp = tempfile::Builder::new()
+                .suffix(".xlsx")
+                .tempfile()
+                .context("failed to create temp file for session read")?;
+            std::io::Write::write_all(&mut tmp, &bytes)
+                .context("failed to write materialized session to temp file")?;
+
+            let path = tmp.path().to_path_buf();
+            Ok((path, Some(tmp)))
+        }
+        None => Ok((file, None)),
+    }
+}
+
 const TRACE_DEPTH_MIN: u32 = 1;
 const TRACE_DEPTH_MAX: u32 = 5;
 const TRACE_PAGE_SIZE_MIN: usize = 5;
@@ -200,10 +238,10 @@ pub async fn inspect_cells(
     include_empty: bool,
     budget: Option<u32>,
 ) -> Result<Value> {
-    if let Some(b) = budget {
-        if b < 1 || b > 200 {
-            bail!("--budget must be between 1 and 200 (got {b})");
-        }
+    if let Some(b) = budget
+        && !(1..=200).contains(&b)
+    {
+        bail!("--budget must be between 1 and 200 (got {b})");
     }
     let runtime = StatelessRuntime;
     let (state, workbook_id) = runtime.open_state_for_file(&file).await?;

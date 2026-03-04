@@ -1226,12 +1226,11 @@ pub async fn check_ref_impact(
     .map_err(|error| invalid_ops_payload(error.to_string()))?;
 
     // Call compute_structure_impact (read-only analysis, never mutates the file).
-    let (impact_report, formula_delta) =
-        crate::tools::structure_impact::compute_structure_impact(
-            &source,
-            &normalized.ops,
-            show_formula_delta,
-        )?;
+    let (impact_report, formula_delta) = crate::tools::structure_impact::compute_structure_impact(
+        &source,
+        &normalized.ops,
+        show_formula_delta,
+    )?;
 
     // Build response JSON.
     let mut response = serde_json::to_value(&impact_report)?;

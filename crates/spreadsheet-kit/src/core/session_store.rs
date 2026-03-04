@@ -54,11 +54,7 @@ impl SessionStore {
     }
 
     /// Create a new session from a base workbook file.
-    pub fn create_session(
-        &self,
-        base_path: &Path,
-        label: Option<&str>,
-    ) -> Result<SessionHandle> {
+    pub fn create_session(&self, base_path: &Path, label: Option<&str>) -> Result<SessionHandle> {
         let session_count = self.list_sessions()?.len();
         if session_count >= MAX_SESSIONS {
             bail!(
@@ -134,12 +130,11 @@ impl SessionStore {
         if self.root.exists() {
             for entry in fs::read_dir(&self.root)? {
                 let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name.starts_with("sess_") {
-                            sessions.push(name.to_string());
-                        }
-                    }
+                if entry.file_type()?.is_dir()
+                    && let Some(name) = entry.file_name().to_str()
+                    && name.starts_with("sess_")
+                {
+                    sessions.push(name.to_string());
                 }
             }
         }
@@ -238,8 +233,7 @@ impl SessionHandle {
 
     /// Read the current HEAD op_id. Returns None if HEAD is empty (at base).
     pub fn read_head(&self) -> Result<Option<String>> {
-        let content = fs::read_to_string(self.head_path())
-            .context("failed to read HEAD")?;
+        let content = fs::read_to_string(self.head_path()).context("failed to read HEAD")?;
         let trimmed = content.trim();
         if trimmed.is_empty() {
             Ok(None)
@@ -332,6 +326,36 @@ impl SessionHandle {
                 event.parent_id,
                 current_head
             );
+        }
+
+        // Evaluate preconditions (cell_matches + workbook_hash_before)
+        if let Some(ref preconditions) = event.preconditions {
+            let has_cell_matches = !preconditions.cell_matches.is_empty();
+            let has_hash_before = preconditions.workbook_hash_before.is_some();
+
+            if has_cell_matches || has_hash_before {
+                let wb_bytes = self.materialize()?;
+
+                if has_hash_before {
+                    let actual = compute_workbook_hash(&wb_bytes);
+                    let expected = preconditions.workbook_hash_before.as_ref().unwrap();
+                    if &actual != expected {
+                        bail!(
+                            "precondition failed: workbook_hash_before mismatch (expected {}, got {})",
+                            expected,
+                            actual
+                        );
+                    }
+                }
+
+                if has_cell_matches {
+                    let ws = crate::core::session::WorkbookSession::from_bytes(&wb_bytes)?;
+                    let violations = evaluate_cell_matches(&ws, &preconditions.cell_matches)?;
+                    if !violations.is_empty() {
+                        bail!("precondition failed: {}", violations.join("; "));
+                    }
+                }
+            }
         }
 
         // Seal the event hash
@@ -499,9 +523,8 @@ impl SessionHandle {
         let (start_bytes, replay_events) =
             if let Some(snap) = manifest.nearest_snapshot(target_op_id, &event_ids) {
                 let snap_path = self.dir.join("snapshots").join(&snap.file_name);
-                let bytes = fs::read(&snap_path).with_context(|| {
-                    format!("failed to read snapshot: {}", snap_path.display())
-                })?;
+                let bytes = fs::read(&snap_path)
+                    .with_context(|| format!("failed to read snapshot: {}", snap_path.display()))?;
                 let after = events
                     .iter()
                     .skip_while(|e| e.op_id != snap.op_id)
@@ -521,8 +544,7 @@ impl SessionHandle {
                     .collect::<Vec<_>>();
                 (bytes, after)
             } else {
-                let bytes = fs::read(self.base_path())
-                    .context("failed to read base workbook")?;
+                let bytes = fs::read(self.base_path()).context("failed to read base workbook")?;
                 let up_to = events
                     .iter()
                     .take_while(|e| {
@@ -562,18 +584,17 @@ impl SessionHandle {
         let lock_path = self.lock_path();
         if lock_path.exists() {
             // Check if lock is stale (>60 seconds old)
-            if let Ok(metadata) = fs::metadata(&lock_path) {
-                if let Ok(modified) = metadata.modified() {
-                    if modified.elapsed().unwrap_or_default() > std::time::Duration::from_secs(60)
-                    {
-                        // Stale lock, remove it
-                        let _ = fs::remove_file(&lock_path);
-                    } else {
-                        bail!(
-                            "session is locked by another writer (lock file: {})",
-                            lock_path.display()
-                        );
-                    }
+            if let Ok(metadata) = fs::metadata(&lock_path)
+                && let Ok(modified) = metadata.modified()
+            {
+                if modified.elapsed().unwrap_or_default() > std::time::Duration::from_secs(60) {
+                    // Stale lock, remove it
+                    let _ = fs::remove_file(&lock_path);
+                } else {
+                    bail!(
+                        "session is locked by another writer (lock file: {})",
+                        lock_path.display()
+                    );
                 }
             }
         }
@@ -609,22 +630,50 @@ impl Drop for SessionLock {
 // Event replay
 // ---------------------------------------------------------------------------
 
+/// Write session state to a temp file, apply a mutation via the provided
+/// closure, then reload the session from the mutated file.
+///
+/// This reuses the battle-tested file-based `apply_*_to_file()` functions
+/// and defers in-memory optimization to a future phase.
+fn replay_via_temp_file<F>(
+    session: &mut crate::core::session::WorkbookSession,
+    apply_fn: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let tmp = session.to_temp_file()?;
+    apply_fn(tmp.path())?;
+    session.reload_from_path(tmp.path())?;
+    Ok(())
+}
+
 /// Replay a single OpEvent on a WorkbookSession.
 ///
 /// This is the core event-to-mutation mapping. Each OpKind is routed to the
-/// appropriate session method.
+/// appropriate session method or file-based apply function (via temp-file
+/// round-trip).
 fn replay_event_on_session(
     session: &mut crate::core::session::WorkbookSession,
     event: &OpEvent,
 ) -> Result<()> {
     use crate::core::session::SessionTransformOp;
+    use crate::model::diagnostics::FormulaParsePolicy;
+    use crate::tools::fork::{
+        ApplyFormulaPatternOpInput, ColumnSizeOp, ReplaceInFormulasOp, StructureOp, StyleOp,
+        TransformOp, apply_column_size_ops_to_file, apply_formula_pattern_ops_to_file,
+        apply_replace_in_formulas_to_file, apply_structure_ops_to_file, apply_style_ops_to_file,
+        apply_transform_ops_to_file,
+    };
+    use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
+    use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
 
     let kind_str = &event.kind.0;
     let payload = &event.payload;
 
     match kind_str.as_str() {
+        // -- write_matrix / edit.batch (existing) --
         "transform.write_matrix" | "edit.batch" => {
-            // Extract write matrix parameters from payload
             let sheet_name = payload
                 .get("sheet_name")
                 .and_then(|v| v.as_str())
@@ -653,10 +702,119 @@ fn replay_event_on_session(
                 session.apply_ops(&ops)?;
             }
         }
+
+        // -- Structure family (insert_rows, delete_rows, clone_row, etc.) --
+        k if k.starts_with("structure.") => {
+            let ops: Vec<StructureOp> = deserialize_ops_array(payload)?;
+            let policy = FormulaParsePolicy::default();
+            replay_via_temp_file(session, |path| {
+                apply_structure_ops_to_file(path, &ops, policy)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Transform family (clear_range, fill_range, replace_in_range) --
+        "transform.clear_range" | "transform.fill_range" | "transform.replace_in_range" => {
+            let ops: Vec<TransformOp> = deserialize_ops_array(payload)?;
+            replay_via_temp_file(session, |path| {
+                apply_transform_ops_to_file(path, &ops)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Style family --
+        "style.apply" => {
+            let ops: Vec<StyleOp> = deserialize_ops_array(payload)?;
+            replay_via_temp_file(session, |path| {
+                apply_style_ops_to_file(path, &ops)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Formula pattern family --
+        "formula.apply_pattern" => {
+            let ops: Vec<ApplyFormulaPatternOpInput> = deserialize_ops_array(payload)?;
+            replay_via_temp_file(session, |path| {
+                apply_formula_pattern_ops_to_file(path, &ops)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Replace in formulas --
+        "formula.replace_in_formulas" => {
+            let op: ReplaceInFormulasOp = serde_json::from_value(payload.clone())
+                .context("failed to deserialize replace_in_formulas payload")?;
+            let policy = FormulaParsePolicy::default();
+            replay_via_temp_file(session, |path| {
+                apply_replace_in_formulas_to_file(path, &op, policy)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Column sizing family --
+        "column.size" => {
+            let sheet_name = payload
+                .get("sheet_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ops: Vec<ColumnSizeOp> = deserialize_ops_array(payload)?;
+            replay_via_temp_file(session, |path| {
+                apply_column_size_ops_to_file(path, &sheet_name, &ops)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Sheet layout family --
+        "layout.apply" => {
+            let ops: Vec<SheetLayoutOp> = deserialize_ops_array(payload)?;
+            replay_via_temp_file(session, |path| {
+                apply_sheet_layout_ops_to_file(path, &ops)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Rules family (data validation, conditional formatting) --
+        "rules.apply" => {
+            let ops: Vec<RulesOp> = deserialize_ops_array(payload)?;
+            let policy = FormulaParsePolicy::default();
+            replay_via_temp_file(session, |path| {
+                apply_rules_ops_to_file(path, &ops, policy)?;
+                Ok(())
+            })?;
+        }
+
+        // -- Name family (direct session mutations, no temp file) --
+        "name.define" => {
+            let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let refers_to = payload
+                .get("refers_to")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let scope = payload.get("scope").and_then(|v| v.as_str());
+            let scope_sheet = payload.get("scope_sheet_name").and_then(|v| v.as_str());
+            session.define_name(name, refers_to, scope, scope_sheet)?;
+        }
+        "name.update" => {
+            let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let refers_to = payload.get("refers_to").and_then(|v| v.as_str());
+            let scope = payload.get("scope").and_then(|v| v.as_str());
+            let scope_sheet = payload.get("scope_sheet_name").and_then(|v| v.as_str());
+            session.update_name(name, refers_to, scope, scope_sheet)?;
+        }
+        "name.delete" => {
+            let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let scope = payload.get("scope").and_then(|v| v.as_str());
+            let scope_sheet = payload.get("scope_sheet_name").and_then(|v| v.as_str());
+            session.delete_name(name, scope, scope_sheet)?;
+        }
+
+        // -- Session meta events --
+        "session.materialize" => {
+            // No-op — meta-event recorded for audit purposes.
+        }
+
         _ => {
-            // For operation kinds not yet implemented in the session API,
-            // log a warning but don't fail replay. This allows forward
-            // compatibility with events from newer versions.
             tracing::warn!(
                 "replay: unsupported event kind '{}' (op_id: {}), skipping",
                 kind_str,
@@ -666,6 +824,103 @@ fn replay_event_on_session(
     }
 
     Ok(())
+}
+
+/// Deserialize an ops array from an event payload.
+///
+/// Tries `payload["ops"]` first (the standard `{"ops": [...]}` envelope used by
+/// batch commands). Falls back to wrapping the entire payload as a single-element
+/// vec for events that store a flat operation object.
+fn deserialize_ops_array<T: serde::de::DeserializeOwned>(
+    payload: &serde_json::Value,
+) -> Result<Vec<T>> {
+    if let Some(ops_val) = payload.get("ops") {
+        serde_json::from_value(ops_val.clone())
+            .context("failed to deserialize ops array from payload")
+    } else {
+        // Single-op shorthand: wrap the entire payload into a one-element vec.
+        let single: T = serde_json::from_value(payload.clone())
+            .context("failed to deserialize single op from payload")?;
+        Ok(vec![single])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Precondition evaluation
+// ---------------------------------------------------------------------------
+
+/// Evaluate `cell_matches` preconditions against current workbook state.
+///
+/// Returns a list of violation descriptions (empty = all passed).
+fn evaluate_cell_matches(
+    session: &crate::core::session::WorkbookSession,
+    cell_matches: &[crate::core::events::CellMatch],
+) -> Result<Vec<String>> {
+    let mut violations = Vec::new();
+
+    for cm in cell_matches {
+        let (sheet_name, cell_ref) = if let Some(pos) = cm.address.rfind('!') {
+            (&cm.address[..pos], &cm.address[pos + 1..])
+        } else {
+            return Err(anyhow!(
+                "cell_matches address '{}' missing Sheet!Cell notation",
+                cm.address
+            ));
+        };
+
+        let sheet = match session.sheet_by_name(sheet_name) {
+            Some(s) => s,
+            None => {
+                violations.push(format!("{}: sheet '{}' not found", cm.address, sheet_name));
+                continue;
+            }
+        };
+
+        let actual_value = sheet
+            .get_cell(cell_ref)
+            .map(|c| {
+                let val = c.get_value();
+                if val.is_empty() {
+                    serde_json::Value::Null
+                } else if let Ok(n) = val.parse::<f64>() {
+                    serde_json::json!(n)
+                } else if val == "TRUE" || val == "true" {
+                    serde_json::Value::Bool(true)
+                } else if val == "FALSE" || val == "false" {
+                    serde_json::Value::Bool(false)
+                } else {
+                    serde_json::Value::String(val.to_string())
+                }
+            })
+            .unwrap_or(serde_json::Value::Null);
+
+        let expected = &cm.value;
+
+        // Compare with tolerance for numbers
+        let matches = match (expected, &actual_value) {
+            (serde_json::Value::Number(e), serde_json::Value::Number(a)) => {
+                let ef = e.as_f64().unwrap_or(f64::NAN);
+                let af = a.as_f64().unwrap_or(f64::NAN);
+                (ef - af).abs() < 1e-9
+            }
+            (serde_json::Value::Null, serde_json::Value::Null) => true,
+            _ => expected == &actual_value,
+        };
+
+        if !matches {
+            violations.push(format!(
+                "{}: expected {}, got {}",
+                cm.address, expected, actual_value
+            ));
+        }
+    }
+
+    Ok(violations)
+}
+
+/// Compute a SHA-256 hash of raw workbook bytes.
+fn compute_workbook_hash(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -714,9 +969,7 @@ mod tests {
         let base = create_test_base(tmp.path());
 
         let store = SessionStore::open(tmp.path()).unwrap();
-        let handle = store
-            .create_session(&base, Some("Test Session"))
-            .unwrap();
+        let handle = store.create_session(&base, Some("Test Session")).unwrap();
 
         let sessions = store.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
@@ -745,7 +998,10 @@ mod tests {
         let op1_id = event1.op_id.clone();
         handle.append_event(event1).unwrap();
 
-        assert_eq!(handle.read_head().unwrap().as_deref(), Some(op1_id.as_str()));
+        assert_eq!(
+            handle.read_head().unwrap().as_deref(),
+            Some(op1_id.as_str())
+        );
 
         // Append second event
         let event2 = OpEvent::new(
@@ -758,7 +1014,10 @@ mod tests {
         let op2_id = event2.op_id.clone();
         handle.append_event(event2).unwrap();
 
-        assert_eq!(handle.read_head().unwrap().as_deref(), Some(op2_id.as_str()));
+        assert_eq!(
+            handle.read_head().unwrap().as_deref(),
+            Some(op2_id.as_str())
+        );
 
         let events = handle.read_events().unwrap();
         assert_eq!(events.len(), 2);
@@ -795,7 +1054,10 @@ mod tests {
         // Undo back to event1
         let undone = handle.undo().unwrap();
         assert_eq!(undone.as_deref(), Some(op1_id.as_str()));
-        assert_eq!(handle.read_head().unwrap().as_deref(), Some(op1_id.as_str()));
+        assert_eq!(
+            handle.read_head().unwrap().as_deref(),
+            Some(op1_id.as_str())
+        );
 
         // Undo back to base
         let undone = handle.undo().unwrap();

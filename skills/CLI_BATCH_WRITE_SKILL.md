@@ -118,13 +118,81 @@ After any write operation:
 
 ## Session Integration
 
-For complex multi-step edits, use the session workflow instead of raw batch commands:
+For complex multi-step edits, use the session workflow instead of raw batch commands.
+**All batch operation families** are supported through sessions and replay correctly
+during materialization.
+
+### Session Workflow
 
 ```bash
-asp session start --base workbook.xlsx
-asp session op --session <id> --ops @edits.json
-asp session apply --session <id> <staged_id>
-asp session materialize --session <id> --output result.xlsx
+asp session start --base workbook.xlsx --workspace <dir>
+asp session op --session <id> --ops @edits.json --workspace <dir>
+asp session apply --session <id> <staged_id> --workspace <dir>
+asp session materialize --session <id> --output result.xlsx --workspace <dir>
+```
+
+### Session Payload Convention
+
+When using `session op`, the ops payload must include a `"kind"` field so the
+session can route to the correct replay handler:
+
+```json
+{
+  "kind": "structure.insert_rows",
+  "ops": [{
+    "kind": "insert_rows",
+    "sheet_name": "Sheet1",
+    "at_row": 5,
+    "count": 2
+  }]
+}
+```
+
+### Supported Session Op Kinds
+
+| Batch command | Session `kind` value |
+|---|---|
+| `transform-batch` | `transform.clear_range`, `transform.fill_range`, `transform.replace_in_range` |
+| `edit` / write_matrix | `transform.write_matrix` or `edit.batch` |
+| `structure-batch` | `structure.insert_rows`, `structure.clone_row`, etc. |
+| `style-batch` | `style.apply` |
+| `apply-formula-pattern` | `formula.apply_pattern` |
+| `replace-in-formulas` | `formula.replace_in_formulas` |
+| `column-size-batch` | `column.size` |
+| `sheet-layout-batch` | `layout.apply` |
+| `rules-batch` | `rules.apply` |
+| `define-name` | `name.define` |
+| `update-name` | `name.update` |
+| `delete-name` | `name.delete` |
+
+### Dry-Run Impact
+
+Staging (`session op`) computes `dry_run_impact` and returns it in the response:
+
+```json
+{
+  "staged_id": "stg_...",
+  "dry_run_impact": {
+    "cells_changed": 9,
+    "formulas_rewritten": 45,
+    "shifted_spans": [...],
+    "warnings": [],
+    "boundary_warnings": []
+  }
+}
+```
+
+For structure ops, the impact analysis uses `compute_structure_impact()` and
+reports absolute reference warnings and shifted spans. For write_matrix ops,
+impact is the cell count from payload dimensions.
+
+### Session-Aware Reads
+
+After applying operations, verify results without materializing:
+
+```bash
+asp range-values workbook.xlsx Sheet1 A1:C10 --format rows \
+    --session <id> --session-workspace <dir>
 ```
 
 This provides undo/redo, branching, and atomic apply semantics.

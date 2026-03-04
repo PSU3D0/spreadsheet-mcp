@@ -121,55 +121,113 @@ impl OpKind {
     }
 
     // -- Structure family --
-    pub fn structure_insert_rows() -> Self { Self::new("structure", "insert_rows") }
-    pub fn structure_delete_rows() -> Self { Self::new("structure", "delete_rows") }
-    pub fn structure_insert_cols() -> Self { Self::new("structure", "insert_cols") }
-    pub fn structure_delete_cols() -> Self { Self::new("structure", "delete_cols") }
-    pub fn structure_clone_row() -> Self { Self::new("structure", "clone_row") }
-    pub fn structure_merge_cells() -> Self { Self::new("structure", "merge_cells") }
-    pub fn structure_unmerge_cells() -> Self { Self::new("structure", "unmerge_cells") }
-    pub fn structure_rename_sheet() -> Self { Self::new("structure", "rename_sheet") }
-    pub fn structure_create_sheet() -> Self { Self::new("structure", "create_sheet") }
-    pub fn structure_delete_sheet() -> Self { Self::new("structure", "delete_sheet") }
-    pub fn structure_copy_range() -> Self { Self::new("structure", "copy_range") }
-    pub fn structure_move_range() -> Self { Self::new("structure", "move_range") }
+    pub fn structure_insert_rows() -> Self {
+        Self::new("structure", "insert_rows")
+    }
+    pub fn structure_delete_rows() -> Self {
+        Self::new("structure", "delete_rows")
+    }
+    pub fn structure_insert_cols() -> Self {
+        Self::new("structure", "insert_cols")
+    }
+    pub fn structure_delete_cols() -> Self {
+        Self::new("structure", "delete_cols")
+    }
+    pub fn structure_clone_row() -> Self {
+        Self::new("structure", "clone_row")
+    }
+    pub fn structure_merge_cells() -> Self {
+        Self::new("structure", "merge_cells")
+    }
+    pub fn structure_unmerge_cells() -> Self {
+        Self::new("structure", "unmerge_cells")
+    }
+    pub fn structure_rename_sheet() -> Self {
+        Self::new("structure", "rename_sheet")
+    }
+    pub fn structure_create_sheet() -> Self {
+        Self::new("structure", "create_sheet")
+    }
+    pub fn structure_delete_sheet() -> Self {
+        Self::new("structure", "delete_sheet")
+    }
+    pub fn structure_copy_range() -> Self {
+        Self::new("structure", "copy_range")
+    }
+    pub fn structure_move_range() -> Self {
+        Self::new("structure", "move_range")
+    }
 
     // -- Transform family --
-    pub fn transform_clear_range() -> Self { Self::new("transform", "clear_range") }
-    pub fn transform_fill_range() -> Self { Self::new("transform", "fill_range") }
-    pub fn transform_replace_in_range() -> Self { Self::new("transform", "replace_in_range") }
-    pub fn transform_write_matrix() -> Self { Self::new("transform", "write_matrix") }
+    pub fn transform_clear_range() -> Self {
+        Self::new("transform", "clear_range")
+    }
+    pub fn transform_fill_range() -> Self {
+        Self::new("transform", "fill_range")
+    }
+    pub fn transform_replace_in_range() -> Self {
+        Self::new("transform", "replace_in_range")
+    }
+    pub fn transform_write_matrix() -> Self {
+        Self::new("transform", "write_matrix")
+    }
 
     // -- Style family --
-    pub fn style_apply() -> Self { Self::new("style", "apply") }
+    pub fn style_apply() -> Self {
+        Self::new("style", "apply")
+    }
 
     // -- Formula pattern family --
-    pub fn formula_apply_pattern() -> Self { Self::new("formula", "apply_pattern") }
-    pub fn formula_replace_in_formulas() -> Self { Self::new("formula", "replace_in_formulas") }
+    pub fn formula_apply_pattern() -> Self {
+        Self::new("formula", "apply_pattern")
+    }
+    pub fn formula_replace_in_formulas() -> Self {
+        Self::new("formula", "replace_in_formulas")
+    }
 
     // -- Column sizing family --
-    pub fn column_size() -> Self { Self::new("column", "size") }
+    pub fn column_size() -> Self {
+        Self::new("column", "size")
+    }
 
     // -- Sheet layout family --
-    pub fn layout_apply() -> Self { Self::new("layout", "apply") }
+    pub fn layout_apply() -> Self {
+        Self::new("layout", "apply")
+    }
 
     // -- Rules family --
-    pub fn rules_apply() -> Self { Self::new("rules", "apply") }
+    pub fn rules_apply() -> Self {
+        Self::new("rules", "apply")
+    }
 
     // -- Name family --
-    pub fn name_define() -> Self { Self::new("name", "define") }
-    pub fn name_update() -> Self { Self::new("name", "update") }
-    pub fn name_delete() -> Self { Self::new("name", "delete") }
+    pub fn name_define() -> Self {
+        Self::new("name", "define")
+    }
+    pub fn name_update() -> Self {
+        Self::new("name", "update")
+    }
+    pub fn name_delete() -> Self {
+        Self::new("name", "delete")
+    }
 
     // -- Edit family (shorthand cell edits) --
-    pub fn edit_batch() -> Self { Self::new("edit", "batch") }
+    pub fn edit_batch() -> Self {
+        Self::new("edit", "batch")
+    }
 
     // -- Import family --
-    pub fn import_range() -> Self { Self::new("import", "range") }
-    pub fn import_grid() -> Self { Self::new("import", "grid") }
+    pub fn import_range() -> Self {
+        Self::new("import", "range")
+    }
+    pub fn import_grid() -> Self {
+        Self::new("import", "grid")
+    }
 
     // -- Session meta --
-    pub fn session_materialize() -> Self { Self::new("session", "materialize") }
+    pub fn session_materialize() -> Self {
+        Self::new("session", "materialize")
+    }
 }
 
 impl std::fmt::Display for OpKind {
@@ -291,7 +349,13 @@ fn canonical_json(value: &serde_json::Value) -> String {
             sorted.sort_by_key(|(k, _)| *k);
             let entries: Vec<String> = sorted
                 .into_iter()
-                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap(), canonical_json(v)))
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap(),
+                        canonical_json(v)
+                    )
+                })
                 .collect();
             format!("{{{}}}", entries.join(","))
         }
@@ -471,7 +535,10 @@ mod tests {
         }"#;
 
         let event: OpEvent = serde_json::from_str(json_str).unwrap();
-        assert_eq!(event.extra.get("future_field").unwrap(), "should be preserved");
+        assert_eq!(
+            event.extra.get("future_field").unwrap(),
+            "should be preserved"
+        );
     }
 
     #[test]

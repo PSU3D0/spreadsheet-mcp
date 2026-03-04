@@ -2179,7 +2179,10 @@ fn cell_matrix_to_rows_keyed(
                 cells.insert(col_letter, cell_value_to_primitive(value));
             }
         }
-        out.push(RangeValuesRowEntry { row: row_number, cells });
+        out.push(RangeValuesRowEntry {
+            row: row_number,
+            cells,
+        });
     }
     out
 }
@@ -4370,14 +4373,14 @@ pub async fn inspect_cells(
         ));
     }
 
-    if let Some(b) = params.budget {
-        if b < 1 || b as usize > DETAIL_LIMIT_MAX {
-            return Err(anyhow!(
-                "budget must be between 1 and {} (got {})",
-                DETAIL_LIMIT_MAX,
-                b
-            ));
-        }
+    if let Some(b) = params.budget
+        && (b < 1 || b as usize > DETAIL_LIMIT_MAX)
+    {
+        return Err(anyhow!(
+            "budget must be between 1 and {} (got {})",
+            DETAIL_LIMIT_MAX,
+            b
+        ));
     }
 
     let effective_cap = params
