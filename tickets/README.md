@@ -1,0 +1,101 @@
+# Tickets: Agent Surface Hardening + Headless Strategy
+
+This directory is the committed planning system for improving `asp` / CLI, MCP, WASM, and JS SDK usability for real spreadsheet-agent work.
+
+## Why this roadmap exists
+
+Recent benchmark work showed that the core architecture is directionally strong, but agent cost is still too high for moderate scenarios like `scenario-01-roll-forward`.
+
+The expensive parts were not spreadsheet reasoning. The expensive parts were:
+
+- command discovery
+- payload-shape uncertainty
+- recalc/debug ambiguity
+- repeated verification
+- too many low-level steps for common edits
+
+That is good news: it means we can make meaningful near-term gains by hardening the agent surface rather than waiting on a full long-term rewrite.
+
+## Strategic thesis
+
+UI-driven agents in Excel/LibreOffice currently win on:
+
+- visual locality
+- implicit affordances
+- easy ambiguity resolution
+
+Headless workflows can win on:
+
+- deterministic edits
+- replayability and audit trails
+- safe mutation flows
+- machine-verifiable postconditions
+- CI/runtime portability
+
+The roadmap below is organized to improve the **near-term user experience** while building toward the **long-term headless advantage**.
+
+## Horizons
+
+- **Now** — remove obvious friction and harden contracts for benchmark-grade use.
+- **Next** — add workflow-oriented helpers and stronger MCP/SDK ergonomics.
+- **Strategic** — build structural understanding and proof/automation layers that can outperform UI agents over time.
+
+## Tranches
+
+| Tranche | Horizon | Focus |
+|---|---|---|
+| [42-surface-contract-hardening-now](./42-surface-contract-hardening-now/README.md) | now | `asp` obviousness, canonical payloads, explicit result contracts, thin docs |
+| [43-verification-and-workflows-now](./43-verification-and-workflows-now/README.md) | now | post-edit proof, grouped change summaries, workflow helpers, benchmark gates |
+| [44-mcp-sdk-ergonomics-next](./44-mcp-sdk-ergonomics-next/README.md) | next | task-oriented MCP flows, SDK workflow objects, CLI grouping vnext |
+| [45-headless-proof-strategic](./45-headless-proof-strategic/README.md) | strategic | structural model, dependency-cone verification, contract-driven automation |
+
+## Planning principles
+
+1. **One semantic core**
+   - Avoid surface drift across CLI, MCP, WASM, and SDK.
+2. **Strict over implicit**
+   - Ambiguous payloads and empty-result inference should be eliminated.
+3. **Proof beats vibes**
+   - The headless advantage comes from verification and explainability.
+4. **Task flows matter**
+   - Agents should solve spreadsheet tasks, not rediscover substrate rules.
+5. **Benchmark against real scenarios**
+   - `scenario-01-roll-forward` should be a standing regression harness, not a one-off exercise.
+
+## Design doc policy
+
+Anything with meaningful semantic, contract, or architecture complexity should have its own technical design doc.
+
+In this roadmap, design docs are attached for items such as:
+
+- canonical session payload contracts
+- post-edit verification and provenance
+- region/footer-aware workflow helpers
+- SDK workflow object model
+- structural workbook model
+- dependency-cone verification
+- contract/assertion automation
+
+## Suggested execution order
+
+### Immediate execution lane
+1. Tranche 42
+2. Tranche 43
+
+### Follow-on productization lane
+3. Tranche 44
+
+### Long-term moat lane
+4. Tranche 45
+
+## Acceptance outcome for this roadmap
+
+When the "now" tranches are complete, a moderate spreadsheet workflow should:
+
+- use a discoverable command/tool surface
+- fail loudly on malformed payloads
+- expose explicit results and warnings
+- require fewer primitive edit steps
+- provide clear proof of what changed and whether anything newly broke
+
+That is the baseline needed before we can credibly claim the headless workflow is competitive in practice.

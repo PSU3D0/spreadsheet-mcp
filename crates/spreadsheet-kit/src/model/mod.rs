@@ -910,6 +910,7 @@ pub struct LabelHit {
 pub struct FindValueResponse {
     pub workbook_id: WorkbookId,
     pub matches: Vec<FindValueMatch>,
+    pub match_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
 }

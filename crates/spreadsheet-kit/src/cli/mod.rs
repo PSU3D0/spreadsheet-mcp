@@ -244,7 +244,10 @@ pub enum SessionCommands {
         #[arg(long, value_name = "PATH", help = "Workspace root directory")]
         workspace: Option<PathBuf>,
     },
-    #[command(about = "Stage an operation (compute dry-run impact without advancing HEAD)")]
+    #[command(
+        about = "Stage an operation (compute dry-run impact without advancing HEAD)",
+        after_long_help = "Canonical session payload contract:\n  • Every payload must include a top-level kind field.\n  • transform.write_matrix is a flat object with sheet_name/anchor/rows.\n  • Batch families use an ops array envelope.\n\nExamples:\n  asp session op --session sess_abc123 --ops @write_matrix.json\n\n  write_matrix.json\n  {\n    \"kind\": \"transform.write_matrix\",\n    \"sheet_name\": \"Sheet1\",\n    \"anchor\": \"B7\",\n    \"rows\": [[\"Revenue\", 100]]\n  }\n\n  asp session op --session sess_abc123 --ops @structure_ops.json\n\n  structure_ops.json\n  {\n    \"kind\": \"structure.insert_rows\",\n    \"ops\": [{ \"sheet_name\": \"Sheet1\", \"at\": 12, \"count\": 2 }]\n  }"
+    )]
     Op {
         #[arg(long, value_name = "ID", help = "Session identifier")]
         session: String,
@@ -281,10 +284,10 @@ pub enum SessionCommands {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "agent-spreadsheet",
+    name = "asp",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nPrimary command: asp\nCompatibility alias: agent-spreadsheet\n\nVerify install:\n  asp --version\n  asp --help\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(

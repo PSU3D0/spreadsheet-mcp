@@ -16,6 +16,11 @@ name = "agent-spreadsheet"
 path = "src/bin/agent-spreadsheet.rs"
 required-features = ["recalc"]
 
+[[bin]]
+name = "asp"
+path = "src/bin/asp.rs"
+required-features = ["recalc"]
+
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"

@@ -461,6 +461,7 @@ impl WorkbookSession {
 
         Ok(FindValueResponse {
             workbook_id: WorkbookId("session".to_string()),
+            match_count: matches.len() as u32,
             matches,
             next_offset: truncated.then_some(offset + limit),
         })

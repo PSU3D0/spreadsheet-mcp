@@ -158,6 +158,13 @@ fn run_cli(args: &[&str]) -> std::process::Output {
         .expect("run agent-spreadsheet")
 }
 
+fn run_asp(args: &[&str]) -> std::process::Output {
+    Command::new(assert_cmd::cargo::cargo_bin!("asp"))
+        .args(args)
+        .output()
+        .expect("run asp")
+}
+
 fn parse_stdout_json(output: &std::process::Output) -> Value {
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf8");
     serde_json::from_str(&stdout).expect("valid json")
@@ -277,6 +284,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root_help.status.success(), "stderr: {:?}", root_help.stderr);
     let root = parse_stdout_text(&root_help);
     assert!(root.contains("Stateless spreadsheet CLI for AI and automation workflows"));
+    assert!(root.contains("Primary command: asp"));
+    assert!(root.contains("Compatibility alias: agent-spreadsheet"));
     assert!(root.contains("Common workflows:"));
     assert!(
         root.contains("Inspect a workbook: list-sheets → sheet-overview → table-profile"),
@@ -301,6 +310,11 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root.contains("scan-volatiles"));
     assert!(root.contains("sheet-statistics"));
     assert!(root.contains("Find cells matching a text query by value or label"));
+
+    let asp_help = run_asp(&["--help"]);
+    assert!(asp_help.status.success(), "stderr: {:?}", asp_help.stderr);
+    let asp_root = parse_stdout_text(&asp_help);
+    assert!(asp_root.contains("Primary command: asp"));
 
     let find_help = run_cli(&["find-value", "--help"]);
     assert!(find_help.status.success(), "stderr: {:?}", find_help.stderr);
@@ -522,10 +536,10 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
 fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
     let readme = read_repo_doc("README.md");
     for anchor in [
-        "agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200",
-        "agent-spreadsheet read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
-        "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
-        "agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run",
+        "asp sheet-page data.xlsx Sheet1 --format compact --page-size 200",
+        "asp read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
+        "asp transform-batch data.xlsx --ops @ops.json --dry-run",
+        "asp style-batch data.xlsx --ops @style_ops.json --dry-run",
         "##### transform-batch payloads (`@transform_ops.json`)",
         "##### style-batch payloads (`@style_ops.json`)",
         "##### apply-formula-pattern payloads (`@formula_ops.json`)",
@@ -536,7 +550,7 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "##### sheet-layout-batch payloads (`@layout_ops.json`)",
         "##### rules-batch payloads (`@rules_ops.json`)",
         "top-level envelope object",
-        "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
+        "asp find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "#### `sheet-page` machine contract",
         "format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`",
@@ -665,9 +679,9 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
 fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
     let readme = read_repo_doc("npm/agent-spreadsheet/README.md");
     for anchor in [
-        "agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200",
-        "agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run",
-        "agent-spreadsheet find-value data.xlsx \"Net Income\" --mode label --label-direction below",
+        "asp sheet-page data.xlsx Sheet1 --format compact --page-size 200",
+        "asp transform-batch data.xlsx --ops @ops.json --dry-run",
+        "asp find-value data.xlsx \"Net Income\" --mode label --label-direction below",
         "`sheet-page <file> <sheet> --format <full|compact|values_only>",
         "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
         "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
@@ -895,6 +909,30 @@ fn cli_find_value_label_mode_uses_query_as_label_and_direction() {
     assert_eq!(any_matches[0]["address"], "B1");
     assert_eq!(any_matches[0]["value"]["kind"], "Text");
     assert_eq!(any_matches[0]["value"]["value"], "Total");
+}
+
+#[test]
+fn cli_find_value_no_match_returns_explicit_empty_matches_and_count() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("find-value-no-match.xlsx");
+    write_fixture(&workbook_path);
+    let file = workbook_path.to_str().expect("path utf8");
+
+    let output = run_cli(&[
+        "find-value",
+        file,
+        "definitely-not-present",
+        "--sheet",
+        "Sheet1",
+        "--mode",
+        "value",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["match_count"], 0);
+    assert_eq!(payload["matches"], serde_json::json!([]));
+    assert!(payload.get("workbook_id").is_some());
 }
 
 #[test]

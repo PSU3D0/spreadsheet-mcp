@@ -22,7 +22,8 @@
     "mcp"
   ],
   "bin": {
-    "agent-spreadsheet": "bin/agent-spreadsheet.js"
+    "agent-spreadsheet": "bin/agent-spreadsheet.js",
+    "asp": "bin/agent-spreadsheet.js"
   },
   "files": [
     "bin",

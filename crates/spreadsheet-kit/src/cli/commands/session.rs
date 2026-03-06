@@ -231,12 +231,14 @@ pub async fn session_op_stage(
 ) -> Result<Value> {
     let handle = open_session(&session_id, workspace.as_deref())?;
 
-    // Load the ops payload
-    let payload_json = load_ops_payload(&ops_ref)?;
+    // Load and validate the ops payload
+    let validated = load_ops_payload(&ops_ref)?;
+    let payload_json = validated.payload;
+    let kind = validated.kind;
     let head = handle.read_head()?;
 
     // Compute dry-run impact
-    let dry_run_impact = compute_staging_impact(&handle, &payload_json);
+    let dry_run_impact = compute_staging_impact(&handle, &kind, &payload_json);
 
     // Create a staged artifact
     let staged_id = format!(
@@ -252,6 +254,7 @@ pub async fn session_op_stage(
         "staged_id": staged_id,
         "session_id": session_id,
         "head_at_stage": head,
+        "op_kind": kind.to_string(),
         "ops_payload": payload_json,
         "dry_run_impact": dry_run_impact,
         "created_at": chrono::Utc::now().to_rfc3339(),
@@ -313,23 +316,9 @@ pub async fn session_apply(
     }
 
     let payload = staged.get("ops_payload").cloned().unwrap_or(json!({}));
-
-    // Infer the operation kind from the payload so that replay_event_on_session
-    // can route to the correct handler. If the payload contains a `kind` field,
-    // use it directly; otherwise, infer from structural hints (rows → write_matrix,
-    // fallback to edit.batch).
-    let kind = if let Some(kind_val) = payload.get("kind").and_then(|v| v.as_str()) {
-        let parts: Vec<&str> = kind_val.splitn(2, '.').collect();
-        if parts.len() == 2 {
-            OpKind::new(parts[0], parts[1])
-        } else {
-            OpKind::edit_batch()
-        }
-    } else if payload.get("rows").is_some() {
-        OpKind::transform_write_matrix()
-    } else {
-        OpKind::edit_batch()
-    };
+    let validated = validate_session_payload(payload)?;
+    let kind = validated.kind;
+    let payload = validated.payload;
 
     // Build the event, attaching dry_run_impact from the staged artifact if present
     let mut event = OpEvent::new(
@@ -431,7 +420,19 @@ fn open_session(session_id: &str, workspace: Option<&Path>) -> Result<SessionHan
     store.open_session(session_id)
 }
 
-fn load_ops_payload(ops_ref: &str) -> Result<Value> {
+struct ValidatedSessionPayload {
+    kind: OpKind,
+    payload: Value,
+}
+
+fn parse_op_kind(kind: &str) -> Result<OpKind> {
+    let (namespace, action) = kind.split_once('.').ok_or_else(|| {
+        anyhow::anyhow!("session payload kind must be '<namespace>.<action>' (got '{kind}')")
+    })?;
+    Ok(OpKind::new(namespace, action))
+}
+
+fn load_ops_payload(ops_ref: &str) -> Result<ValidatedSessionPayload> {
     let path = if let Some(stripped) = ops_ref.strip_prefix('@') {
         stripped
     } else {
@@ -441,22 +442,104 @@ fn load_ops_payload(ops_ref: &str) -> Result<Value> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("failed to read ops payload from '{}': {}", path, e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("failed to parse ops payload JSON from '{}': {}", path, e))
+    let payload: Value = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("failed to parse ops payload JSON from '{}': {}", path, e))?;
+    validate_session_payload(payload)
+        .map_err(|e| anyhow::anyhow!("invalid session ops payload in '{}': {}", path, e))
+}
+
+fn validate_session_payload(payload: Value) -> Result<ValidatedSessionPayload> {
+    let obj = payload.as_object().ok_or_else(|| {
+        anyhow::anyhow!("session ops payload must be a JSON object with a top-level 'kind' field")
+    })?;
+
+    let kind_str = obj.get("kind").and_then(|v| v.as_str()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "session ops payload must include a top-level string 'kind'. Example write_matrix payload: {{\"kind\":\"transform.write_matrix\",\"sheet_name\":\"Sheet1\",\"anchor\":\"B7\",\"rows\":[[\"Revenue\",100]]}}"
+        )
+    })?;
+    let kind = parse_op_kind(kind_str)?;
+
+    match kind_str {
+        "transform.write_matrix" => {
+            if obj.contains_key("ops") {
+                bail!(
+                    "transform.write_matrix uses a flat payload with sheet_name/anchor/rows; do not wrap it in an 'ops' array"
+                );
+            }
+            if !obj.contains_key("sheet_name") || !obj.contains_key("rows") {
+                bail!("transform.write_matrix requires 'sheet_name', 'anchor', and 'rows' fields");
+            }
+        }
+        "edit.batch" => {
+            bail!(
+                "session op does not support 'edit.batch'. Use 'transform.write_matrix' for matrix writes, or the stateless 'edit' CLI for direct cell edits"
+            );
+        }
+        k if k.starts_with("structure.")
+            || matches!(
+                k,
+                "transform.clear_range"
+                    | "transform.fill_range"
+                    | "transform.replace_in_range"
+                    | "style.apply"
+                    | "formula.apply_pattern"
+                    | "layout.apply"
+                    | "rules.apply"
+            ) =>
+        {
+            if !matches!(obj.get("ops"), Some(Value::Array(_))) {
+                bail!(
+                    "{kind_str} requires an 'ops' array envelope. Example: {{\"kind\":\"{kind_str}\",\"ops\":[...]}}"
+                );
+            }
+        }
+        "column.size" => {
+            if !obj.contains_key("sheet_name") {
+                bail!("column.size requires a top-level 'sheet_name'");
+            }
+            if !matches!(obj.get("ops"), Some(Value::Array(_))) {
+                bail!(
+                    "column.size requires an 'ops' array envelope. Example: {{\"kind\":\"column.size\",\"sheet_name\":\"Sheet1\",\"ops\":[...]}}"
+                );
+            }
+        }
+        "formula.replace_in_formulas" => {
+            if obj.contains_key("ops") {
+                bail!(
+                    "formula.replace_in_formulas uses a flat payload; do not wrap it in an 'ops' array"
+                );
+            }
+        }
+        "name.define" | "name.update" | "name.delete" => {
+            if obj.contains_key("ops") {
+                bail!("{kind_str} uses a flat payload; do not wrap it in an 'ops' array");
+            }
+            if !obj.contains_key("name") {
+                bail!("{kind_str} requires a top-level 'name' field");
+            }
+        }
+        _ => {
+            bail!(
+                "unsupported session op kind '{kind_str}'. Supported kinds today: transform.write_matrix, structure.*, transform.clear_range, transform.fill_range, transform.replace_in_range, style.apply, formula.apply_pattern, formula.replace_in_formulas, column.size, layout.apply, rules.apply, name.define, name.update, name.delete"
+            );
+        }
+    }
+
+    Ok(ValidatedSessionPayload { kind, payload })
 }
 
 /// Compute dry-run impact for a staged operation payload.
 ///
 /// Returns a `DryRunImpact` value as JSON, or `null` if impact cannot be
 /// determined (e.g. unknown op kind or materialization failure).
-fn compute_staging_impact(handle: &SessionHandle, payload: &Value) -> Value {
+fn compute_staging_impact(handle: &SessionHandle, kind: &OpKind, payload: &Value) -> Value {
     use crate::core::events::{DryRunImpact, ShiftedSpan};
 
     let impact = (|| -> Result<DryRunImpact> {
-        // Infer kind from payload
-        let kind_hint = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let kind_str = kind.to_string();
 
-        if kind_hint.starts_with("structure.") {
+        if kind_str.starts_with("structure.") {
             // Structure ops: use compute_structure_impact for detailed analysis
             let ops: Vec<crate::tools::fork::StructureOp> =
                 if let Some(ops_val) = payload.get("ops") {
@@ -500,7 +583,7 @@ fn compute_staging_impact(handle: &SessionHandle, payload: &Value) -> Value {
                 warnings: report.notes,
                 boundary_warnings,
             })
-        } else if payload.get("rows").is_some() {
+        } else if kind_str == "transform.write_matrix" {
             // write_matrix: compute cell count from dimensions
             let rows = payload
                 .get("rows")

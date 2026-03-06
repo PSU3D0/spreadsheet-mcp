@@ -66,9 +66,10 @@ fn write_fixture(path: &Path) {
     umya_spreadsheet::writer::xlsx::write(&workbook, path).expect("write fixture");
 }
 
-/// Write an ops JSON file with a write_matrix payload that sets A2 = "Eve".
+/// Write an ops JSON file with a canonical transform.write_matrix payload that sets A2 = "Eve".
 fn write_ops_json(path: &Path) {
     let payload = serde_json::json!({
+        "kind": "transform.write_matrix",
         "sheet_name": "Sheet1",
         "anchor": "A2",
         "rows": [[{"v": "Eve"}]],
@@ -77,9 +78,10 @@ fn write_ops_json(path: &Path) {
     std::fs::write(path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
 }
 
-/// Write an ops JSON file with a write_matrix payload that sets B2 = 99.
+/// Write an ops JSON file with a canonical transform.write_matrix payload that sets B2 = 99.
 fn write_second_ops_json(path: &Path) {
     let payload = serde_json::json!({
+        "kind": "transform.write_matrix",
         "sheet_name": "Sheet1",
         "anchor": "B2",
         "rows": [[{"v": 99.0}]],
@@ -753,7 +755,7 @@ fn session_log_filters_by_kind() {
     };
     let session_id = start_json["session_id"].as_str().unwrap();
 
-    // Apply an op (kind inferred as transform.write_matrix from payload)
+    // Apply a canonical transform.write_matrix op
     let ops = workspace.join("logfilter_ops.json");
     write_ops_json(&ops);
     let stg = {
@@ -926,6 +928,62 @@ fn session_start_rejects_missing_base() {
 // ---------------------------------------------------------------------------
 // Apply with nonexistent staged_id
 // ---------------------------------------------------------------------------
+
+#[test]
+fn session_op_stage_rejects_missing_kind() {
+    let workspace = tempdir().expect("workspace");
+    let base_path = workspace.path().join("missing_kind_base.xlsx");
+    write_fixture(&base_path);
+    let ws_str = workspace.path().to_str().unwrap();
+    let base_str = base_path.to_str().unwrap();
+
+    let start = run_cli(&[
+        "session",
+        "start",
+        "--base",
+        base_str,
+        "--workspace",
+        ws_str,
+    ]);
+    assert_success(&start);
+    let session_id = parse_stdout_json(&start)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let ops_path = workspace.path().join("missing_kind_ops.json");
+    let payload = serde_json::json!({
+        "sheet_name": "Sheet1",
+        "anchor": "A2",
+        "rows": [[{"v": "Eve"}]],
+        "overwrite_formulas": false,
+    });
+    std::fs::write(&ops_path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
+
+    let out = run_cli(&[
+        "session",
+        "op",
+        "--session",
+        &session_id,
+        "--ops",
+        &format!("@{}", ops_path.display()),
+        "--workspace",
+        ws_str,
+    ]);
+    assert!(
+        !out.status.success(),
+        "expected session op to reject payload without kind"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("top-level string 'kind'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("transform.write_matrix"),
+        "stderr: {stderr}"
+    );
+}
 
 #[test]
 fn session_apply_rejects_unknown_staged_id() {
@@ -1503,6 +1561,7 @@ fn session_precondition_cell_match_blocks_apply() {
     // A1 is "Name" but we claim it should be "WRONG_VALUE"
     let ops_path = workspace.join("precond_ops.json");
     let payload = serde_json::json!({
+        "kind": "transform.write_matrix",
         "sheet_name": "Sheet1",
         "anchor": "A2",
         "rows": [[{"v": "Eve"}]],
@@ -1599,6 +1658,7 @@ fn session_precondition_cell_match_passes() {
 
     let ops_path = workspace.join("precond_pass_ops.json");
     let payload = serde_json::json!({
+        "kind": "transform.write_matrix",
         "sheet_name": "Sheet1",
         "anchor": "A2",
         "rows": [[{"v": "Eve"}]],

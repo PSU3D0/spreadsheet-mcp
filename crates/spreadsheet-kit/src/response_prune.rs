@@ -35,6 +35,19 @@ impl<T: JsonSchema> JsonSchema for Pruned<T> {
     }
 }
 
+fn preserve_empty_array_for_key(key: &str) -> bool {
+    matches!(
+        key,
+        "warnings"
+            | "matches"
+            | "target_deltas"
+            | "changed_targets"
+            | "new_errors"
+            | "preexisting_errors"
+            | "named_range_deltas"
+    )
+}
+
 pub fn prune_non_structural_empties(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -53,7 +66,7 @@ pub fn prune_non_structural_empties(value: &mut Value) {
                 }
                 if let Value::Array(arr) = child
                     && arr.is_empty()
-                    && key != "warnings"
+                    && !preserve_empty_array_for_key(key)
                 {
                     remove_keys.push(key.clone());
                 }

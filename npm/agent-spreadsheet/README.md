@@ -11,37 +11,39 @@ Part of the [spreadsheet-kit](https://github.com/PSU3D0/spreadsheet-mcp) workspa
 
 ```bash
 npm i -g agent-spreadsheet
-agent-spreadsheet --help
+asp --help
 ```
+
+Installs both `asp` (primary command) and `agent-spreadsheet` (compatibility alias).
 
 ## Quickstart
 
 ```bash
 # List sheets in a workbook
-agent-spreadsheet list-sheets data.xlsx
+asp list-sheets data.xlsx
 
 # Read a table as structured JSON
-agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
+asp read-table data.xlsx --sheet "Sheet1"
 
 # Deterministic row paging
-agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200
+asp sheet-page data.xlsx Sheet1 --format compact --page-size 200
 
 # Profile column types and cardinality
-agent-spreadsheet table-profile data.xlsx --sheet "Sheet1"
+asp table-profile data.xlsx --sheet "Sheet1"
 
 # Value search
-agent-spreadsheet find-value data.xlsx "Revenue" --mode value
+asp find-value data.xlsx "Revenue" --mode value
 
 # Label lookup: match label cell and return adjacent value
-agent-spreadsheet find-value data.xlsx "Net Income" --mode label --label-direction below
+asp find-value data.xlsx "Net Income" --mode label --label-direction below
 
 # Stateless transform dry-run
-agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run
+asp transform-batch data.xlsx --ops @ops.json --dry-run
 
 # Edit → diff workflow
-agent-spreadsheet copy data.xlsx /tmp/draft.xlsx
-agent-spreadsheet edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
-agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
+asp copy data.xlsx /tmp/draft.xlsx
+asp edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
+asp diff data.xlsx /tmp/draft.xlsx
 ```
 
 All commands output JSON to stdout.
@@ -118,7 +120,7 @@ curl -I https://github.com/PSU3D0/spreadsheet-mcp/releases/latest
 The install script supports Linux x64, macOS x64/arm64, and Windows x64. For other platforms, build from source:
 
 ```bash
-cargo install agent-spreadsheet
+cargo install spreadsheet-kit --features recalc --bin asp --bin agent-spreadsheet
 ```
 
 ### Using a local binary

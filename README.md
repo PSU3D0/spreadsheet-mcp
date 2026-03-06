@@ -26,16 +26,17 @@ Both share the same core engine and support `.xlsx` / `.xlsm` (read + write) and
 
 ```bash
 npm i -g agent-spreadsheet
-agent-spreadsheet --help
+asp --help
 ```
 
+Installs both `asp` (primary command) and `agent-spreadsheet` (compatibility alias).
 Downloads a prebuilt native binary for your platform. No Rust toolchain required.
 
 ### Cargo
 
 ```bash
 # CLI
-cargo install agent-spreadsheet
+cargo install spreadsheet-kit --features recalc --bin asp --bin agent-spreadsheet
 
 # MCP server
 cargo install spreadsheet-mcp
@@ -66,37 +67,37 @@ The CLI is the fastest path to working with spreadsheets from code. Every comman
 
 ```bash
 # List sheets
-agent-spreadsheet list-sheets data.xlsx
+asp list-sheets data.xlsx
 
 # Profile structure and detected regions
-agent-spreadsheet sheet-overview data.xlsx "Sheet1"
+asp sheet-overview data.xlsx "Sheet1"
 
 # Read a table as structured data
-agent-spreadsheet read-table data.xlsx --sheet "Sheet1"
+asp read-table data.xlsx --sheet "Sheet1"
 
 # Read one or more raw ranges
-agent-spreadsheet range-values data.xlsx Sheet1 A1:C20
+asp range-values data.xlsx Sheet1 A1:C20
 
 # Search values directly (default mode is value)
-agent-spreadsheet find-value data.xlsx "Revenue" --mode value
+asp find-value data.xlsx "Revenue" --mode value
 
 # Label lookup: match a label cell, then read an adjacent value
-agent-spreadsheet find-value data.xlsx "Net Income" --mode label --label-direction below
+asp find-value data.xlsx "Net Income" --mode label --label-direction below
 
 # Describe workbook metadata
-agent-spreadsheet describe data.xlsx
+asp describe data.xlsx
 ```
 
 ### Deterministic pagination loops
 
 ```bash
 # sheet-page continuation
-agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200
-agent-spreadsheet sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201
+asp sheet-page data.xlsx Sheet1 --format compact --page-size 200
+asp sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201
 
 # read-table continuation
-agent-spreadsheet read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 0
-agent-spreadsheet read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
+asp read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 0
+asp read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
 ```
 
 ### Edit → recalculate → diff
@@ -111,8 +112,8 @@ agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 ### Stateless batch writes (`--ops @...`)
 
 ```bash
-agent-spreadsheet transform-batch data.xlsx --ops @ops.json --dry-run
-agent-spreadsheet style-batch data.xlsx --ops @style_ops.json --dry-run
+asp transform-batch data.xlsx --ops @ops.json --dry-run
+asp style-batch data.xlsx --ops @style_ops.json --dry-run
 agent-spreadsheet apply-formula-pattern data.xlsx --ops @formula_ops.json --in-place
 agent-spreadsheet structure-batch data.xlsx --ops @structure_ops.json --dry-run
 agent-spreadsheet column-size-batch data.xlsx --ops @column_size_ops.json --output resized.xlsx
@@ -385,7 +386,7 @@ spreadsheet-mcp --workspace-root /path/to/workbooks
 
 | You want to… | Use |
 | --- | --- |
-| One-shot reads from scripts or pipelines | **CLI** (`agent-spreadsheet`) |
+| One-shot reads from scripts or pipelines | **CLI** (`asp`, alias: `agent-spreadsheet`) |
 | Agent sessions with caching across calls | **MCP** (`spreadsheet-mcp`) |
 | Fork → edit → recalc → diff workflows | **MCP** (fork lifecycle + recalc backend) |
 | Embed in an LLM tool-use loop | **MCP** (designed for multi-turn agent use) |

@@ -4583,6 +4583,7 @@ pub async fn find_value(
 
     Ok(FindValueResponse {
         workbook_id: workbook.id.clone(),
+        match_count: matches.len() as u32,
         matches,
         next_offset,
     })

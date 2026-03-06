@@ -13,7 +13,7 @@ if (!fs.existsSync(binPath)) {
     JSON.stringify({
       code: "BINARY_NOT_INSTALLED",
       message: "agent-spreadsheet binary not found; reinstall package to fetch platform binary",
-      try_this: "npm i -g agent-spreadsheet"
+      try_this: "npm i -g agent-spreadsheet && asp --help"
     })
   )
   process.exit(1)
