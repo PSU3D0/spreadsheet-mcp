@@ -1672,7 +1672,7 @@ Formula parse policy:
     },
     #[command(
         about = "Recalculate workbook formulas",
-        after_long_help = "Examples:\n  agent-spreadsheet recalculate data.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx\n  agent-spreadsheet recalculate data.xlsx --output /tmp/recalced.xlsx --force\n\nDefault (no flags): recalculate the file in-place.\n--output <PATH>: copy source to output, recalculate the copy, leave source unchanged.\n--force: allow overwriting an existing --output file."
+        after_long_help = "Examples:\n  asp recalculate data.xlsx\n  asp recalculate data.xlsx --output /tmp/recalced.xlsx\n  asp recalculate data.xlsx --output /tmp/recalced.xlsx --force\n\nDefault (no flags): recalculate the file in-place.\n--output <PATH>: copy source to output, recalculate the copy, leave source unchanged.\n--force: allow overwriting an existing --output file."
     )]
     Recalculate {
         #[arg(value_name = "FILE", help = "Workbook path to recalculate")]
@@ -1722,7 +1722,7 @@ Formula parse policy:
     },
     #[command(
         about = "Diff two workbook versions with summary-first, paged details",
-        after_long_help = "Examples:\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200"
+        after_long_help = "Examples:\n  asp diff baseline.xlsx candidate.xlsx\n  asp diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  asp diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200"
     )]
     Diff {
         #[arg(value_name = "ORIGINAL", help = "Baseline workbook path")]

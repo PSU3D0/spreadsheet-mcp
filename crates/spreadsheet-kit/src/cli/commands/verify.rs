@@ -192,7 +192,32 @@ fn parse_sheet_cell_ref(raw: &str) -> Result<(String, String)> {
             raw
         );
     }
-    Ok((sheet_name.to_string(), cell_ref.to_string()))
+
+    let sheet_name = extract_sheet_name(sheet_name);
+    let cell_ref = parse_target_cell_ref(raw, cell_ref)?;
+    Ok((sheet_name, cell_ref))
+}
+
+fn extract_sheet_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(stripped) = trimmed.strip_prefix('\'')
+        && let Some(inner) = stripped.strip_suffix('\'')
+    {
+        return inner.replace("''", "'");
+    }
+    trimmed.to_string()
+}
+
+fn parse_target_cell_ref(target: &str, raw_cell_ref: &str) -> Result<String> {
+    let cell_ref = raw_cell_ref.trim();
+    let (col, row, _, _) = umya_spreadsheet::helper::coordinate::index_from_coordinate(cell_ref);
+    match (col, row) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Ok(cell_ref.to_string()),
+        _ => bail!(
+            "invalid argument: target '{}' must use Sheet!A1 notation with a single A1 cell reference",
+            target
+        ),
+    }
 }
 
 fn read_target_cell(

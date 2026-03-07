@@ -34,6 +34,15 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
         };
     }
 
+    if let Some(requested) = parse_sheet_not_found(&message) {
+        return ErrorEnvelope {
+            code: "SHEET_NOT_FOUND".to_string(),
+            message: format!("sheet '{}' was not found", requested),
+            did_you_mean: None,
+            try_this: Some("run `asp list-sheets <file>` to inspect valid names".to_string()),
+        };
+    }
+
     if let Some(detail) = message.strip_prefix("invalid argument: ") {
         let try_this = if detail.contains("session payload kind") {
             "run `asp example session-op transform.write_matrix` or `asp schema session-op transform.write_matrix` to inspect supported kinds and canonical payloads".to_string()
@@ -167,4 +176,17 @@ fn parse_sheet_suggestion(message: &str) -> Option<(String, String)> {
     let suggestion_end = suggestion_rest.find(suffix)?;
     let suggested = &suggestion_rest[..suggestion_end];
     Some((requested.to_string(), suggested.to_string()))
+}
+
+fn parse_sheet_not_found(message: &str) -> Option<String> {
+    let rest = message.strip_prefix("sheet ")?;
+    if rest.contains(" not found; did you mean ") {
+        return None;
+    }
+    if let Some(stripped) = rest.strip_prefix('\'')
+        && let Some(requested) = stripped.strip_suffix("' not found")
+    {
+        return Some(requested.to_string());
+    }
+    rest.strip_suffix(" not found").map(str::to_string)
 }

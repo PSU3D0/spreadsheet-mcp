@@ -469,7 +469,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let diff = parse_stdout_text(&diff_help);
     assert!(diff.contains("Diff two workbook versions with summary-first, paged details"));
     assert!(diff.contains("Examples:"));
-    assert!(diff.contains("diff baseline.xlsx candidate.xlsx"));
+    assert!(diff.contains("asp diff baseline.xlsx candidate.xlsx"));
 
     let create_help = run_cli(&["create-workbook", "--help"]);
     assert!(
@@ -989,6 +989,78 @@ fn cli_find_value_no_match_returns_explicit_empty_matches_and_count() {
     assert_eq!(payload["match_count"], 0);
     assert_eq!(payload["matches"], serde_json::json!([]));
     assert!(payload.get("workbook_id").is_some());
+}
+
+#[test]
+fn cli_verify_accepts_quoted_sheet_targets() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("verify-quoted-sheet.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    workbook.new_sheet("Q1 Actuals").expect("sheet");
+    workbook
+        .get_sheet_by_name_mut("Q1 Actuals")
+        .expect("q1 actuals exists")
+        .get_cell_mut("B1")
+        .set_value("Ready");
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let file = workbook_path.to_str().expect("utf8 path");
+    let output = run_cli(&["verify", file, file, "--targets", "'Q1 Actuals'!B1"]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["summary"]["target_count"], 1);
+    assert_eq!(payload["target_deltas"][0]["address"], "'Q1 Actuals'!B1");
+    assert_eq!(payload["target_deltas"][0]["before"]["value"], "Ready");
+    assert_eq!(payload["target_deltas"][0]["changed"], false);
+}
+
+#[test]
+fn cli_verify_rejects_malformed_targets_with_invalid_argument() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("verify-invalid-target.xlsx");
+    write_fixture(&workbook_path);
+
+    let file = workbook_path.to_str().expect("utf8 path");
+    let output = run_cli(&["verify", file, file, "--targets", "Sheet1!not-a-cell"]);
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "INVALID_ARGUMENT");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Sheet1!not-a-cell")
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("single A1 cell reference")
+    );
+}
+
+#[test]
+fn cli_verify_missing_sheet_uses_normalized_error_envelope() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("verify-missing-sheet.xlsx");
+    write_fixture(&workbook_path);
+
+    let file = workbook_path.to_str().expect("utf8 path");
+    let output = run_cli(&["verify", file, file, "--targets", "Missing!A1"]);
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "SHEET_NOT_FOUND");
+    assert_eq!(err["message"], "sheet 'Missing' was not found");
+    assert_eq!(
+        err["try_this"],
+        "run `asp list-sheets <file>` to inspect valid names"
+    );
 }
 
 #[test]
@@ -6373,13 +6445,12 @@ fn cli_edit_dry_run_preflight_fails_for_missing_sheet() {
 
     let err = assert_error_code(
         &["edit", file, "NoSuchSheet", "--dry-run", "A1=1"],
-        "COMMAND_FAILED",
+        "SHEET_NOT_FOUND",
     );
-    assert!(
-        err["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("NoSuchSheet")
+    assert_eq!(err["message"], "sheet 'NoSuchSheet' was not found");
+    assert_eq!(
+        err["try_this"],
+        "run `asp list-sheets <file>` to inspect valid names"
     );
 }
 
