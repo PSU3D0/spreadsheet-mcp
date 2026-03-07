@@ -103,10 +103,10 @@ asp read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --of
 ### Edit → recalculate → diff
 
 ```bash
-agent-spreadsheet copy data.xlsx /tmp/draft.xlsx
-agent-spreadsheet edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
-agent-spreadsheet recalculate /tmp/draft.xlsx
-agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
+asp copy data.xlsx /tmp/draft.xlsx
+asp edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
+asp recalculate /tmp/draft.xlsx
+asp diff data.xlsx /tmp/draft.xlsx
 ```
 
 ### Stateless batch writes (`--ops @...`)
@@ -114,11 +114,44 @@ agent-spreadsheet diff data.xlsx /tmp/draft.xlsx
 ```bash
 asp transform-batch data.xlsx --ops @ops.json --dry-run
 asp style-batch data.xlsx --ops @style_ops.json --dry-run
-agent-spreadsheet apply-formula-pattern data.xlsx --ops @formula_ops.json --in-place
-agent-spreadsheet structure-batch data.xlsx --ops @structure_ops.json --dry-run
-agent-spreadsheet column-size-batch data.xlsx --ops @column_size_ops.json --output resized.xlsx
-agent-spreadsheet sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
-agent-spreadsheet rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
+asp apply-formula-pattern data.xlsx --ops @formula_ops.json --in-place
+asp structure-batch data.xlsx --ops @structure_ops.json --dry-run
+asp column-size-batch data.xlsx --ops @column_size_ops.json --output resized.xlsx
+asp sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
+asp rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
+```
+
+#### Discover payload contracts
+
+When you are unsure of the exact JSON shape, ask the CLI directly:
+
+```bash
+asp schema transform-batch
+asp example transform-batch
+asp schema session-op transform.write_matrix
+asp example session-op transform.write_matrix
+```
+
+#### Canonical safe edit workflow
+
+For moderate workbook edits, use this loop:
+
+```bash
+# 1) Explore
+asp named-ranges data.xlsx
+asp formula-trace data.xlsx Sheet1 C2 precedents --depth 2
+
+# 2) Discover the exact payload you need
+asp example session-op transform.write_matrix
+
+# 3) Stage and inspect dry-run impact
+asp session start --base data.xlsx --workspace .
+asp session op --session <id> --ops @edit.json --workspace .
+
+# 4) Apply, verify, materialize
+asp session apply --session <id> <staged_id> --workspace .
+asp session materialize --session <id> --output result.xlsx --workspace .
+asp diff data.xlsx result.xlsx --details --limit 50
 ```
 
 #### Batch payload examples (JSON body passed via `--ops @file.json`)
@@ -230,6 +263,10 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `range-values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]` | Raw cell values in dense JSON encoding by default, optionally with sparse formula metadata |
 | `inspect-cells <file> <sheet> <target> [target...] [--include-empty]` | Detail-view per-cell formula/value/cached/style snapshots (max 25 cells per request) |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
+| `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
+| `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
+| `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |
+| `example session-op <kind>` | Print a copy-pastable canonical session payload example |
 | `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
 | `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
 | `scan-volatiles <file> [--sheet S] [--limit N] [--offset N] [--formula-parse-policy P]` | Scan formulas for volatile functions |

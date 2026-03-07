@@ -282,12 +282,38 @@ pub enum SessionCommands {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum DiscoverabilityCommands {
+    #[command(about = "Schema/example target for transform-batch payloads")]
+    TransformBatch,
+    #[command(about = "Schema/example target for style-batch payloads")]
+    StyleBatch,
+    #[command(about = "Schema/example target for apply-formula-pattern payloads")]
+    ApplyFormulaPattern,
+    #[command(about = "Schema/example target for structure-batch payloads")]
+    StructureBatch,
+    #[command(about = "Schema/example target for column-size-batch payloads")]
+    ColumnSizeBatch,
+    #[command(about = "Schema/example target for sheet-layout-batch payloads")]
+    SheetLayoutBatch,
+    #[command(about = "Schema/example target for rules-batch payloads")]
+    RulesBatch,
+    #[command(about = "Schema/example target for event-sourced session op payloads")]
+    SessionOp {
+        #[arg(
+            value_name = "KIND",
+            help = "Exact session op kind, e.g. transform.write_matrix"
+        )]
+        kind: String,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "asp",
     version,
     about = "Stateless spreadsheet CLI for reads, edits, and diffs",
-    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nPrimary command: asp\nCompatibility alias: agent-spreadsheet\n\nVerify install:\n  asp --version\n  asp --help\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nPrimary command: asp\nCompatibility alias: agent-spreadsheet\n\nVerify install:\n  asp --version\n  asp --help\n\nCommon workflows:\n  • Inspect a workbook: list-sheets → sheet-overview → table-profile\n  • Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)\n  • Find labels or values: find-value --mode label|value\n  • Discover payload contracts: schema <target> / example <target>\n  • Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)\n  • Copy → edit → recalculate → diff for safe what-if changes\n  • SheetPort manifest loop: sheetport manifest candidates → draft/edit YAML → sheetport manifest validate → sheetport bind-check → sheetport run\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as read-table --table-format csv."
 )]
 pub struct Cli {
     #[arg(
@@ -1178,6 +1204,7 @@ Diagnostics note:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1233,6 +1260,7 @@ Required envelope:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1291,6 +1319,7 @@ Diagnostics note:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1346,6 +1375,7 @@ Cache note:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1445,6 +1475,7 @@ Required envelope:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1496,6 +1527,7 @@ Required envelope:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1548,6 +1580,7 @@ Note:
         force: bool,
         #[arg(
             long = "print-schema",
+            hide = true,
             help = "Print the full JSON schema for the --ops payload and exit"
         )]
         print_schema: bool,
@@ -1704,9 +1737,25 @@ Formula parse policy:
         offset: u32,
     },
     #[command(
+        about = "Print canonical JSON schema for a command or payload target",
+        after_long_help = "Examples:\n  asp schema transform-batch\n  asp schema structure-batch\n  asp schema session-op transform.write_matrix"
+    )]
+    Schema {
+        #[command(subcommand)]
+        command: DiscoverabilityCommands,
+    },
+    #[command(
+        about = "Print a copy-pastable canonical example for a command or payload target",
+        after_long_help = "Examples:\n  asp example transform-batch\n  asp example rules-batch\n  asp example session-op structure.clone_row"
+    )]
+    Example {
+        #[command(subcommand)]
+        command: DiscoverabilityCommands,
+    },
+    #[command(
         about = "Event-sourced session management (start, navigate, stage, apply, materialize)",
         subcommand,
-        after_long_help = "Session commands provide event-sourced workbook editing with undo/redo, branching, and staged apply.\n\nWorkflow:\n  1. asp session start --base model.xlsx\n  2. asp session op --session <id> --ops @edits.json\n  3. asp session apply --session <id> <staged_id>\n  4. asp session materialize --session <id> --output result.xlsx"
+        after_long_help = "Session commands provide event-sourced workbook editing with undo/redo, branching, staged apply, and payload discovery.\n\nWorkflow:\n  1. asp session start --base model.xlsx\n  2. asp example session-op transform.write_matrix\n  3. asp session op --session <id> --ops @edits.json\n  4. asp session apply --session <id> <staged_id>\n  5. asp session materialize --session <id> --output result.xlsx\n\nDiscoverability:\n  • asp schema session-op transform.write_matrix\n  • asp example session-op transform.write_matrix"
     )]
     Session(Box<SessionCommands>),
     #[command(
@@ -2378,6 +2427,8 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
+        Commands::Schema { command } => run_schema_command(command),
+        Commands::Example { command } => run_example_command(command),
         Commands::Session(command) => match *command {
             SessionCommands::Start {
                 base,
@@ -2442,6 +2493,64 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             rng_seed,
             freeze_volatile,
         } => commands::read::sheetport_run(file, manifest, inputs, rng_seed, freeze_volatile).await,
+    }
+}
+
+fn run_schema_command(command: DiscoverabilityCommands) -> Result<Value> {
+    match command {
+        DiscoverabilityCommands::TransformBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Transform)
+        }
+        DiscoverabilityCommands::StyleBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Style)
+        }
+        DiscoverabilityCommands::ApplyFormulaPattern => commands::write::batch_payload_schema(
+            commands::write::BatchSchemaCommand::ApplyFormulaPattern,
+        ),
+        DiscoverabilityCommands::StructureBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Structure)
+        }
+        DiscoverabilityCommands::ColumnSizeBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::ColumnSize)
+        }
+        DiscoverabilityCommands::SheetLayoutBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::SheetLayout)
+        }
+        DiscoverabilityCommands::RulesBatch => {
+            commands::write::batch_payload_schema(commands::write::BatchSchemaCommand::Rules)
+        }
+        DiscoverabilityCommands::SessionOp { kind } => {
+            commands::session::session_payload_schema(kind)
+        }
+    }
+}
+
+fn run_example_command(command: DiscoverabilityCommands) -> Result<Value> {
+    match command {
+        DiscoverabilityCommands::TransformBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::Transform)
+        }
+        DiscoverabilityCommands::StyleBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::Style)
+        }
+        DiscoverabilityCommands::ApplyFormulaPattern => commands::write::batch_payload_example(
+            commands::write::BatchSchemaCommand::ApplyFormulaPattern,
+        ),
+        DiscoverabilityCommands::StructureBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::Structure)
+        }
+        DiscoverabilityCommands::ColumnSizeBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::ColumnSize)
+        }
+        DiscoverabilityCommands::SheetLayoutBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::SheetLayout)
+        }
+        DiscoverabilityCommands::RulesBatch => {
+            commands::write::batch_payload_example(commands::write::BatchSchemaCommand::Rules)
+        }
+        DiscoverabilityCommands::SessionOp { kind } => {
+            commands::session::session_payload_example(kind)
+        }
     }
 }
 
@@ -3273,123 +3382,45 @@ mod tests {
     }
 
     #[test]
-    fn parses_batch_print_schema_flags_without_file_or_ops() {
-        let transform =
-            Cli::try_parse_from(["agent-spreadsheet", "transform-batch", "--print-schema"])
-                .expect("parse transform-batch --print-schema");
+    fn parses_global_schema_and_example_commands() {
+        let transform = Cli::try_parse_from(["asp", "schema", "transform-batch"])
+            .expect("parse schema transform-batch");
         match transform.command {
-            Commands::TransformBatch {
-                file,
-                ops,
-                print_schema,
-                ..
-            } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
-            }
+            Commands::Schema {
+                command: DiscoverabilityCommands::TransformBatch,
+            } => {}
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let style = Cli::try_parse_from(["agent-spreadsheet", "style-batch", "--print-schema"])
-            .expect("parse style-batch --print-schema");
+        let style = Cli::try_parse_from(["asp", "example", "style-batch"])
+            .expect("parse example style-batch");
         match style.command {
-            Commands::StyleBatch {
-                file,
-                ops,
-                print_schema,
-                ..
+            Commands::Example {
+                command: DiscoverabilityCommands::StyleBatch,
+            } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let session_schema =
+            Cli::try_parse_from(["asp", "schema", "session-op", "transform.write_matrix"])
+                .expect("parse schema session-op");
+        match session_schema.command {
+            Commands::Schema {
+                command: DiscoverabilityCommands::SessionOp { kind },
             } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
+                assert_eq!(kind, "transform.write_matrix");
             }
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let formula = Cli::try_parse_from([
-            "agent-spreadsheet",
-            "apply-formula-pattern",
-            "--print-schema",
-        ])
-        .expect("parse apply-formula-pattern --print-schema");
-        match formula.command {
-            Commands::ApplyFormulaPattern {
-                file,
-                ops,
-                print_schema,
-                ..
+        let session_example =
+            Cli::try_parse_from(["asp", "example", "session-op", "structure.insert_rows"])
+                .expect("parse example session-op");
+        match session_example.command {
+            Commands::Example {
+                command: DiscoverabilityCommands::SessionOp { kind },
             } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let structure =
-            Cli::try_parse_from(["agent-spreadsheet", "structure-batch", "--print-schema"])
-                .expect("parse structure-batch --print-schema");
-        match structure.command {
-            Commands::StructureBatch {
-                file,
-                ops,
-                print_schema,
-                ..
-            } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let column =
-            Cli::try_parse_from(["agent-spreadsheet", "column-size-batch", "--print-schema"])
-                .expect("parse column-size-batch --print-schema");
-        match column.command {
-            Commands::ColumnSizeBatch {
-                file,
-                ops,
-                print_schema,
-                ..
-            } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let layout =
-            Cli::try_parse_from(["agent-spreadsheet", "sheet-layout-batch", "--print-schema"])
-                .expect("parse sheet-layout-batch --print-schema");
-        match layout.command {
-            Commands::SheetLayoutBatch {
-                file,
-                ops,
-                print_schema,
-                ..
-            } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let rules = Cli::try_parse_from(["agent-spreadsheet", "rules-batch", "--print-schema"])
-            .expect("parse rules-batch --print-schema");
-        match rules.command {
-            Commands::RulesBatch {
-                file,
-                ops,
-                print_schema,
-                ..
-            } => {
-                assert!(file.is_none());
-                assert!(ops.is_none());
-                assert!(print_schema);
+                assert_eq!(kind, "structure.insert_rows");
             }
             other => panic!("unexpected command: {other:?}"),
         }

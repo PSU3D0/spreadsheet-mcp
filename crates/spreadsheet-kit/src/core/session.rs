@@ -10,6 +10,7 @@ use crate::model::{
 use crate::styles::descriptor_from_style;
 use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Context, Result, anyhow};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -1189,7 +1190,7 @@ impl<const N: usize> From<[&str; N]> for SessionRangeSelection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub enum SessionMatrixCell {
     #[serde(rename = "v")]
     Value(serde_json::Value),

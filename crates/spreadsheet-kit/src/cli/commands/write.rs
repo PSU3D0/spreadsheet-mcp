@@ -210,6 +210,69 @@ pub fn batch_payload_schema(command: BatchSchemaCommand) -> Result<Value> {
     }))
 }
 
+pub fn batch_payload_example(command: BatchSchemaCommand) -> Result<Value> {
+    let example = match command {
+        BatchSchemaCommand::Transform => serde_json::json!({
+            "ops": [{
+                "kind": "fill_range",
+                "sheet_name": "Sheet1",
+                "target": {"kind": "range", "range": "B2:B4"},
+                "value": "0"
+            }]
+        }),
+        BatchSchemaCommand::Style => serde_json::json!({
+            "ops": [{
+                "sheet_name": "Sheet1",
+                "target": {"kind": "range", "range": "B2:B2"},
+                "patch": {"font": {"bold": true}}
+            }]
+        }),
+        BatchSchemaCommand::ApplyFormulaPattern => serde_json::json!({
+            "ops": [{
+                "sheet_name": "Sheet1",
+                "target_range": "C2:C4",
+                "anchor_cell": "C2",
+                "base_formula": "B2*2"
+            }]
+        }),
+        BatchSchemaCommand::Structure => serde_json::json!({
+            "ops": [{
+                "kind": "rename_sheet",
+                "old_name": "Summary",
+                "new_name": "Dashboard"
+            }]
+        }),
+        BatchSchemaCommand::ColumnSize => serde_json::json!({
+            "sheet_name": "Sheet1",
+            "ops": [{
+                "target": {"kind": "columns", "range": "A:A"},
+                "size": {"kind": "width", "width_chars": 12.0}
+            }]
+        }),
+        BatchSchemaCommand::SheetLayout => serde_json::json!({
+            "ops": [{
+                "kind": "freeze_panes",
+                "sheet_name": "Sheet1",
+                "freeze_rows": 1,
+                "freeze_cols": 1
+            }]
+        }),
+        BatchSchemaCommand::Rules => serde_json::json!({
+            "ops": [{
+                "kind": "set_data_validation",
+                "sheet_name": "Sheet1",
+                "target_range": "B2:B4",
+                "validation": {"kind": "list", "formula1": "\"A,B,C\""}
+            }]
+        }),
+    };
+
+    Ok(serde_json::json!({
+        "example_kind": "ops_payload",
+        "example": example,
+    }))
+}
+
 #[derive(Debug)]
 enum EditMutationMode {
     DryRun,

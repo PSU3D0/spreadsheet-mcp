@@ -252,7 +252,7 @@ fn assert_batch_mode_matrix(command: &str, file: &str, ops_ref: &str) {
 }
 
 #[test]
-fn batch_commands_support_print_schema() {
+fn schema_and_example_commands_support_batch_and_session_discovery() {
     for command in [
         "transform-batch",
         "style-batch",
@@ -262,20 +262,75 @@ fn batch_commands_support_print_schema() {
         "sheet-layout-batch",
         "rules-batch",
     ] {
-        let output = run_cli(&[command, "--print-schema"]);
+        let schema = run_cli(&["schema", command]);
         assert!(
-            output.status.success(),
-            "{command} --print-schema failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            schema.status.success(),
+            "schema {command} failed: {}",
+            String::from_utf8_lossy(&schema.stderr)
+        );
+        let schema_payload = parse_stdout_json(&schema);
+        assert_eq!(
+            schema_payload["schema_kind"], "ops_payload",
+            "payload={schema_payload}"
+        );
+        assert!(
+            schema_payload["schema"].is_object(),
+            "expected schema object for {command}, payload={schema_payload}"
         );
 
-        let payload = parse_stdout_json(&output);
-        assert_eq!(payload["schema_kind"], "ops_payload", "payload={payload}");
+        let example = run_cli(&["example", command]);
         assert!(
-            payload["schema"].is_object(),
-            "expected schema object for {command}, payload={payload}"
+            example.status.success(),
+            "example {command} failed: {}",
+            String::from_utf8_lossy(&example.stderr)
+        );
+        let example_payload = parse_stdout_json(&example);
+        assert_eq!(
+            example_payload["example_kind"], "ops_payload",
+            "payload={example_payload}"
+        );
+        assert!(
+            example_payload["example"].is_object(),
+            "payload={example_payload}"
         );
     }
+
+    let schema = run_cli(&["schema", "session-op", "transform.write_matrix"]);
+    assert!(schema.status.success(), "stderr: {:?}", schema.stderr);
+    let schema_payload = parse_stdout_json(&schema);
+    assert_eq!(schema_payload["schema_kind"], "session_ops_payload");
+    assert_eq!(schema_payload["op_kind"], "transform.write_matrix");
+    assert!(
+        schema_payload["schema"].is_object(),
+        "payload={schema_payload}"
+    );
+    assert_eq!(
+        schema_payload["schema"]["properties"]["kind"]["const"],
+        "transform.write_matrix"
+    );
+
+    let example = run_cli(&["example", "session-op", "structure.insert_rows"]);
+    assert!(example.status.success(), "stderr: {:?}", example.stderr);
+    let example_payload = parse_stdout_json(&example);
+    assert_eq!(example_payload["example_kind"], "session_ops_payload");
+    assert_eq!(example_payload["op_kind"], "structure.insert_rows");
+    assert_eq!(example_payload["example"]["kind"], "structure.insert_rows");
+    assert!(example_payload["example"]["ops"].is_array());
+}
+
+#[test]
+fn session_schema_rejects_unknown_kind_with_guidance() {
+    let output = run_cli(&["schema", "session-op", "totally.unknown"]);
+    assert!(!output.status.success(), "command unexpectedly succeeded");
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "INVALID_ARGUMENT");
+    assert!(
+        err["try_this"]
+            .as_str()
+            .unwrap_or("")
+            .contains("example session-op transform.write_matrix"),
+        "err={err}"
+    );
 }
 
 #[test]

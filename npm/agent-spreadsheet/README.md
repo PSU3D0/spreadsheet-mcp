@@ -40,6 +40,12 @@ asp find-value data.xlsx "Net Income" --mode label --label-direction below
 # Stateless transform dry-run
 asp transform-batch data.xlsx --ops @ops.json --dry-run
 
+# Discover payload contracts
+asp schema transform-batch
+asp example transform-batch
+asp schema session-op transform.write_matrix
+asp example session-op transform.write_matrix
+
 # Edit → diff workflow
 asp copy data.xlsx /tmp/draft.xlsx
 asp edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
@@ -75,6 +81,10 @@ Commands that tokenize or validate formulas accept `--formula-parse-policy <fail
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic sheet paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
+| `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
+| `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
+| `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |
+| `example session-op <kind>` | Print a copy-pastable canonical session payload example |
 | `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless batch writes |
 | `style-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH)` | Stateless style operations |
 | `apply-formula-pattern <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH)` | Stateless formula fill/pattern operations (clears touched caches) |
