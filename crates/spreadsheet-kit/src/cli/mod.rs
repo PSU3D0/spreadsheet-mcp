@@ -1699,6 +1699,28 @@ Formula parse policy:
         changed_cells: bool,
     },
     #[command(
+        about = "Compare two workbook states and verify target deltas plus error provenance",
+        after_long_help = "Examples:\n  asp verify baseline.xlsx candidate.xlsx --targets Summary!B2\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --named-ranges\n\nBehavior:\n  - target_deltas compares the exact Sheet!A1 cells you request\n  - new_errors reports error cells present only in the current workbook\n  - preexisting_errors reports error cells that existed in both baseline and current\n  - --named-ranges adds added/removed/changed named range deltas"
+    )]
+    Verify {
+        #[arg(value_name = "BASELINE", help = "Baseline workbook path")]
+        baseline: PathBuf,
+        #[arg(value_name = "CURRENT", help = "Current workbook path")]
+        current: PathBuf,
+        #[arg(
+            long = "targets",
+            value_name = "SHEET!CELL",
+            value_delimiter = ',',
+            help = "One or more Sheet!A1 targets to compare (comma-separated)"
+        )]
+        targets: Option<Vec<String>>,
+        #[arg(
+            long = "named-ranges",
+            help = "Include added/removed/changed named range deltas"
+        )]
+        named_ranges: bool,
+    },
+    #[command(
         about = "Diff two workbook versions with summary-first, paged details",
         after_long_help = "Examples:\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  agent-spreadsheet diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200"
     )]
@@ -2412,6 +2434,12 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             ignore_sheets,
             changed_cells,
         } => commands::recalc::recalculate(file, output, force, ignore_sheets, changed_cells).await,
+        Commands::Verify {
+            baseline,
+            current,
+            targets,
+            named_ranges,
+        } => commands::verify::verify(baseline, current, targets, named_ranges).await,
         Commands::Diff {
             original,
             modified,

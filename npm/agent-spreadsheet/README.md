@@ -81,6 +81,7 @@ Commands that tokenize or validate formulas accept `--formula-parse-policy <fail
 | `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic sheet paging with `next_start_row` continuation |
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
+| `verify <baseline> <current> [--targets Sheet!A1,...] [--named-ranges]` | Compare two workbook states and report target deltas, new errors, pre-existing errors, and optional named-range deltas |
 | `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
 | `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
 | `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |

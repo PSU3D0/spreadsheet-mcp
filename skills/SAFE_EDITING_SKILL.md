@@ -40,6 +40,7 @@ asp session apply --session <session_id> <staged_id> --workspace <dir>
 asp inspect-cells <workbook.xlsx> <Sheet> <targets> \
   --session <session_id> --session-workspace <dir>
 asp session materialize --session <session_id> --output <temp.xlsx> --workspace <dir>
+asp verify <base.xlsx> <temp.xlsx> --targets <Sheet!A1,...>
 asp diff <base.xlsx> <temp.xlsx> --details --limit 50
 
 # 7) Finalize

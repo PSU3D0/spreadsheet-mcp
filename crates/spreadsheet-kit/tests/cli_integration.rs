@@ -360,6 +360,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     );
     assert!(root.contains("global --output-format csv is currently unsupported"));
     assert!(root.contains("find-value"));
+    assert!(root.contains("verify"));
     assert!(root.contains("named-ranges"));
     assert!(root.contains("find-formula"));
     assert!(root.contains("scan-volatiles"));
@@ -988,6 +989,105 @@ fn cli_find_value_no_match_returns_explicit_empty_matches_and_count() {
     assert_eq!(payload["match_count"], 0);
     assert_eq!(payload["matches"], serde_json::json!([]));
     assert!(payload.get("workbook_id").is_some());
+}
+
+#[test]
+fn cli_verify_reports_target_deltas_error_provenance_and_named_range_deltas() {
+    let tmp = tempdir().expect("tempdir");
+    let baseline_path = tmp.path().join("verify-baseline.xlsx");
+    let current_path = tmp.path().join("verify-current.xlsx");
+
+    let mut baseline = umya_spreadsheet::new_file();
+    {
+        let sheet = baseline
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("sheet1 exists");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        let preexisting = sheet.get_cell_mut("D2");
+        preexisting.set_formula("1/0");
+        preexisting.set_formula_result_default("#DIV/0!");
+    }
+    baseline.new_sheet("Summary").expect("summary");
+    {
+        let summary = baseline
+            .get_sheet_by_name_mut("Summary")
+            .expect("summary exists");
+        summary.get_cell_mut("A1").set_value("Flag");
+        summary.get_cell_mut("B1").set_value("Ready");
+    }
+    umya_spreadsheet::writer::xlsx::write(&baseline, &baseline_path).expect("write baseline");
+
+    let mut current = baseline.clone();
+    {
+        let summary = current
+            .get_sheet_by_name_mut("Summary")
+            .expect("summary exists");
+        summary.get_cell_mut("B1").set_value("Done");
+    }
+    {
+        let sheet = current
+            .get_sheet_by_name_mut("Sheet1")
+            .expect("sheet1 exists");
+        let new_error = sheet.get_cell_mut("D3");
+        new_error.set_formula("UNKNOWN_FN(1)");
+        new_error.set_formula_result_default("#NAME?");
+        sheet
+            .add_defined_name("AmountRef", "Sheet1!$B$3")
+            .expect("add defined name");
+    }
+    umya_spreadsheet::writer::xlsx::write(&current, &current_path).expect("write current");
+
+    let baseline_str = baseline_path.to_str().expect("baseline utf8");
+    let current_str = current_path.to_str().expect("current utf8");
+    let output = run_cli(&[
+        "verify",
+        baseline_str,
+        current_str,
+        "--targets",
+        "Summary!B1",
+        "--named-ranges",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["summary"]["target_count"], 1);
+    assert_eq!(payload["summary"]["changed_targets"], 1);
+    assert_eq!(payload["summary"]["new_error_count"], 1);
+    assert_eq!(payload["summary"]["preexisting_error_count"], 1);
+    assert_eq!(payload["summary"]["named_range_delta_count"], 1);
+
+    let target = payload["target_deltas"].as_array().expect("target_deltas");
+    assert_eq!(target.len(), 1);
+    assert_eq!(target[0]["address"], "Summary!B1");
+    assert_eq!(target[0]["before"]["kind"], "Text");
+    assert_eq!(target[0]["before"]["value"], "Ready");
+    assert_eq!(target[0]["after"]["value"], "Done");
+    assert_eq!(target[0]["changed"], true);
+
+    let new_errors = payload["new_errors"].as_array().expect("new_errors");
+    assert_eq!(new_errors.len(), 1);
+    assert_eq!(new_errors[0]["address"], "Sheet1!D3");
+    assert_eq!(new_errors[0]["after_error"], "#NAME?");
+
+    let preexisting = payload["preexisting_errors"]
+        .as_array()
+        .expect("preexisting_errors");
+    assert_eq!(preexisting.len(), 1);
+    assert_eq!(preexisting[0]["address"], "Sheet1!D2");
+    assert_eq!(preexisting[0]["before_error"], "#DIV/0!");
+    assert_eq!(preexisting[0]["after_error"], "#DIV/0!");
+
+    let named = payload["named_range_deltas"]
+        .as_array()
+        .expect("named_range_deltas");
+    assert_eq!(named.len(), 1);
+    assert_eq!(named[0]["name"], "AmountRef");
+    assert_eq!(named[0]["change"], "added");
+    assert!(named[0].get("before_refers_to").is_none() || named[0]["before_refers_to"].is_null());
+    assert_eq!(named[0]["after_refers_to"], "'Sheet1'!$B$3");
 }
 
 #[test]

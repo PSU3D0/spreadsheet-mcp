@@ -117,9 +117,10 @@ Preferred canonical form includes top-level `sheet_name`:
 ## Post-write checklist
 
 1. Run `asp recalculate` if formulas changed
-2. Run `asp diff` to confirm intent
-3. Use `asp inspect-cells` on critical cells/ranges
-4. Use `asp recalculate --changed-cells` for a change summary
+2. Run `asp verify <baseline> <current> --targets <Sheet!A1,...>` for explicit proof
+3. Run `asp diff` to confirm intent
+4. Use `asp inspect-cells` on critical cells/ranges
+5. Use `asp recalculate --changed-cells` for a change summary
 
 ## Session integration
 
