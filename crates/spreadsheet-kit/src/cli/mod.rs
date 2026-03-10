@@ -1715,7 +1715,7 @@ Formula parse policy:
         )]
         targets: Option<Vec<String>>,
         #[arg(
-            long,
+            long = "sheet",
             value_name = "SHEET",
             help = "Limit error and named-range scanning to one sheet"
         )]

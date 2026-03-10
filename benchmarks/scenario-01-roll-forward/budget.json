@@ -1,0 +1,65 @@
+{
+  "scenario_id": "scenario-01-roll-forward",
+  "budgets": {
+    "max_tool_calls": 3,
+    "max_manual_verification_loops": 1,
+    "max_wall_time_ms": 1500,
+    "max_total_output_bytes": 4096
+  },
+  "correctness": {
+    "expected_changed_targets": 2,
+    "expected_new_error_count": 0,
+    "expected_resolved_error_count": 0,
+    "expected_preexisting_error_count": 0,
+    "expected_targets": [
+      {
+        "address": "Summary!B1",
+        "classification": "recalc_result",
+        "after_number": 480.0
+      },
+      {
+        "address": "Summary!B2",
+        "classification": "recalc_result",
+        "after_number": 48.0
+      }
+    ]
+  },
+  "observed_example": {
+    "tool_calls": 3,
+    "manual_verification_loops": 1,
+    "wall_time_ms": 76,
+    "total_output_bytes": 1569,
+    "steps": [
+      {
+        "name": "edit",
+        "wall_time_ms": 26,
+        "output_bytes": 424
+      },
+      {
+        "name": "recalculate",
+        "wall_time_ms": 29,
+        "output_bytes": 238
+      },
+      {
+        "name": "verify",
+        "wall_time_ms": 20,
+        "output_bytes": 907
+      }
+    ],
+    "verify_summary": {
+      "target_count": 2,
+      "changed_targets": 2,
+      "new_error_count": 0,
+      "resolved_error_count": 0,
+      "preexisting_error_count": 0,
+      "named_range_delta_count": 0,
+      "target_classification_counts": {
+        "direct_edit": 0,
+        "formula_shift": 0,
+        "new_error": 0,
+        "recalc_result": 2,
+        "unchanged": 0
+      }
+    }
+  }
+}
