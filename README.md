@@ -155,6 +155,8 @@ asp verify data.xlsx result.xlsx --targets Summary!B2 --named-ranges
 asp diff data.xlsx result.xlsx --details --limit 50
 ```
 
+`asp verify` reports target classifications plus new/resolved/preexisting errors so you can prove the edit outcome before drilling into a full diff.
+
 #### Batch payload examples (JSON body passed via `--ops @file.json`)
 
 All batch payloads use a top-level envelope object. Most commands require `{"ops":[...]}`; `column-size-batch` prefers `{"sheet_name":"...","ops":[...]}` and also accepts per-op `sheet_name` inside `{"ops":[...]}`.

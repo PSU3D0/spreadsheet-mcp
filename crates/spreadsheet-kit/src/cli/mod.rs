@@ -1700,7 +1700,7 @@ Formula parse policy:
     },
     #[command(
         about = "Compare two workbook states and verify target deltas plus error provenance",
-        after_long_help = "Examples:\n  asp verify baseline.xlsx candidate.xlsx --targets Summary!B2\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --named-ranges\n\nBehavior:\n  - target_deltas compares the exact Sheet!A1 cells you request\n  - new_errors reports error cells present only in the current workbook\n  - preexisting_errors reports error cells that existed in both baseline and current\n  - --named-ranges adds added/removed/changed named range deltas"
+        after_long_help = "Examples:\n  asp verify baseline.xlsx candidate.xlsx --targets Summary!B2\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --named-ranges\n\nBehavior:\n  - target_deltas compares the exact Sheet!A1 cells you request\n  - each target delta includes a classification such as unchanged, direct_edit, recalc_result, formula_shift, or new_error\n  - new_errors reports error cells present only in the current workbook\n  - resolved_errors reports baseline error cells that no longer error in the current workbook\n  - preexisting_errors reports error cells that existed in both baseline and current\n  - --named-ranges adds added/removed/changed named range deltas"
     )]
     Verify {
         #[arg(value_name = "BASELINE", help = "Baseline workbook path")]

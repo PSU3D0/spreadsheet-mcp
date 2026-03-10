@@ -1078,9 +1078,18 @@ fn cli_verify_reports_target_deltas_error_provenance_and_named_range_deltas() {
         sheet.get_cell_mut("B1").set_value("Amount");
         sheet.get_cell_mut("A2").set_value("Alice");
         sheet.get_cell_mut("B2").set_value_number(10.0);
+        let c2 = sheet.get_cell_mut("C2");
+        c2.set_formula("B2*2");
+        c2.get_cell_value_mut().set_formula_result_default("20");
         let preexisting = sheet.get_cell_mut("D2");
         preexisting.set_formula("1/0");
         preexisting.set_formula_result_default("#DIV/0!");
+        let resolved = sheet.get_cell_mut("D4");
+        resolved.set_formula("2/0");
+        resolved.set_formula_result_default("#DIV/0!");
+        let f1 = sheet.get_cell_mut("F1");
+        f1.set_formula("1+1");
+        f1.get_cell_value_mut().set_formula_result_default("2");
     }
     baseline.new_sheet("Summary").expect("summary");
     {
@@ -1103,9 +1112,17 @@ fn cli_verify_reports_target_deltas_error_provenance_and_named_range_deltas() {
         let sheet = current
             .get_sheet_by_name_mut("Sheet1")
             .expect("sheet1 exists");
+        sheet.get_cell_mut("B2").set_value_number(11.0);
+        let c2 = sheet.get_cell_mut("C2");
+        c2.set_formula("B2*2");
+        c2.get_cell_value_mut().set_formula_result_default("22");
         let new_error = sheet.get_cell_mut("D3");
         new_error.set_formula("UNKNOWN_FN(1)");
         new_error.set_formula_result_default("#NAME?");
+        sheet.get_cell_mut("D4").set_value("Recovered");
+        let f1 = sheet.get_cell_mut("F1");
+        f1.set_formula("1+2");
+        f1.get_cell_value_mut().set_formula_result_default("3");
         sheet
             .add_defined_name("AmountRef", "Sheet1!$B$3")
             .expect("add defined name");
@@ -1119,30 +1136,54 @@ fn cli_verify_reports_target_deltas_error_provenance_and_named_range_deltas() {
         baseline_str,
         current_str,
         "--targets",
-        "Summary!B1",
+        "Summary!B1,Sheet1!C2,Sheet1!F1",
         "--named-ranges",
     ]);
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
 
     let payload = parse_stdout_json(&output);
-    assert_eq!(payload["summary"]["target_count"], 1);
-    assert_eq!(payload["summary"]["changed_targets"], 1);
+    assert_eq!(payload["summary"]["target_count"], 3);
+    assert_eq!(payload["summary"]["changed_targets"], 3);
     assert_eq!(payload["summary"]["new_error_count"], 1);
+    assert_eq!(payload["summary"]["resolved_error_count"], 1);
     assert_eq!(payload["summary"]["preexisting_error_count"], 1);
     assert_eq!(payload["summary"]["named_range_delta_count"], 1);
 
     let target = payload["target_deltas"].as_array().expect("target_deltas");
-    assert_eq!(target.len(), 1);
+    assert_eq!(target.len(), 3);
     assert_eq!(target[0]["address"], "Summary!B1");
     assert_eq!(target[0]["before"]["kind"], "Text");
     assert_eq!(target[0]["before"]["value"], "Ready");
     assert_eq!(target[0]["after"]["value"], "Done");
+    assert_eq!(target[0]["classification"], "direct_edit");
     assert_eq!(target[0]["changed"], true);
+
+    assert_eq!(target[1]["address"], "Sheet1!C2");
+    assert_eq!(target[1]["before"]["value"], 20.0);
+    assert_eq!(target[1]["after"]["value"], 22.0);
+    assert_eq!(target[1]["before_formula"], "B2*2");
+    assert_eq!(target[1]["after_formula"], "B2*2");
+    assert_eq!(target[1]["classification"], "recalc_result");
+    assert_eq!(target[1]["changed"], true);
+
+    assert_eq!(target[2]["address"], "Sheet1!F1");
+    assert_eq!(target[2]["before_formula"], "1+1");
+    assert_eq!(target[2]["after_formula"], "1+2");
+    assert_eq!(target[2]["classification"], "formula_shift");
+    assert_eq!(target[2]["changed"], true);
 
     let new_errors = payload["new_errors"].as_array().expect("new_errors");
     assert_eq!(new_errors.len(), 1);
     assert_eq!(new_errors[0]["address"], "Sheet1!D3");
     assert_eq!(new_errors[0]["after_error"], "#NAME?");
+
+    let resolved = payload["resolved_errors"]
+        .as_array()
+        .expect("resolved_errors");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0]["address"], "Sheet1!D4");
+    assert_eq!(resolved[0]["before_error"], "#DIV/0!");
+    assert!(resolved[0]["after_error"].is_null());
 
     let preexisting = payload["preexisting_errors"]
         .as_array()

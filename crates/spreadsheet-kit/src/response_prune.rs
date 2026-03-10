@@ -43,6 +43,7 @@ fn preserve_empty_array_for_key(key: &str) -> bool {
             | "target_deltas"
             | "changed_targets"
             | "new_errors"
+            | "resolved_errors"
             | "preexisting_errors"
             | "named_range_deltas"
     )

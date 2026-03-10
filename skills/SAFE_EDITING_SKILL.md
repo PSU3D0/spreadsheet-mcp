@@ -43,6 +43,8 @@ asp session materialize --session <session_id> --output <temp.xlsx> --workspace 
 asp verify <base.xlsx> <temp.xlsx> --targets <Sheet!A1,...>
 asp diff <base.xlsx> <temp.xlsx> --details --limit 50
 
+`asp verify` is the summary-first proof step: check target classifications plus new/resolved/preexisting errors, then use `asp diff` when you need deeper detail.
+
 # 7) Finalize
 asp session materialize --session <session_id> --output final_result.xlsx --workspace <dir>
 ```

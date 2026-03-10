@@ -13,6 +13,7 @@ struct VerifySummary {
     target_count: u32,
     changed_targets: u32,
     new_error_count: u32,
+    resolved_error_count: u32,
     preexisting_error_count: u32,
     named_range_delta_count: u32,
 }
@@ -28,6 +29,7 @@ struct TargetDelta {
     before_formula: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     after_formula: Option<String>,
+    classification: String,
     changed: bool,
 }
 
@@ -68,8 +70,8 @@ struct VerifyResponse {
     current: String,
     target_deltas: Vec<TargetDelta>,
     new_errors: Vec<ErrorDelta>,
+    resolved_errors: Vec<ErrorDelta>,
     preexisting_errors: Vec<ErrorDelta>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     named_range_deltas: Vec<NamedRangeDelta>,
     summary: VerifySummary,
 }
@@ -110,7 +112,8 @@ pub async fn verify(
 
     let baseline_errors = collect_error_cells(&baseline_workbook)?;
     let current_errors = collect_error_cells(&current_workbook)?;
-    let (new_errors, preexisting_errors) = compare_error_maps(&baseline_errors, &current_errors);
+    let (new_errors, resolved_errors, preexisting_errors) =
+        compare_error_maps(&baseline_errors, &current_errors);
 
     let named_range_deltas = if named_ranges {
         let baseline_named = tools::named_ranges(
@@ -143,11 +146,13 @@ pub async fn verify(
             target_count: target_deltas.len() as u32,
             changed_targets: target_deltas.iter().filter(|d| d.changed).count() as u32,
             new_error_count: new_errors.len() as u32,
+            resolved_error_count: resolved_errors.len() as u32,
             preexisting_error_count: preexisting_errors.len() as u32,
             named_range_delta_count: named_range_deltas.len() as u32,
         },
         target_deltas,
         new_errors,
+        resolved_errors,
         preexisting_errors,
         named_range_deltas,
     };
@@ -167,12 +172,14 @@ fn collect_target_deltas(
         let after = read_target_cell(current, &sheet_name, &cell_ref)?;
         let changed = !cell_values_equal(before.value.as_ref(), after.value.as_ref())
             || before.formula != after.formula;
+        let classification = classify_target_delta(&before, &after, changed).to_string();
         deltas.push(TargetDelta {
             address: target,
             before: before.value,
             after: after.value,
             before_formula: before.formula,
             after_formula: after.formula,
+            classification,
             changed,
         });
     }
@@ -272,8 +279,9 @@ fn collect_error_cells(workbook: &WorkbookContext) -> Result<BTreeMap<String, Er
 fn compare_error_maps(
     baseline: &BTreeMap<String, ErrorCellSnapshot>,
     current: &BTreeMap<String, ErrorCellSnapshot>,
-) -> (Vec<ErrorDelta>, Vec<ErrorDelta>) {
+) -> (Vec<ErrorDelta>, Vec<ErrorDelta>, Vec<ErrorDelta>) {
     let mut new_errors = Vec::new();
+    let mut resolved_errors = Vec::new();
     let mut preexisting_errors = Vec::new();
 
     for (address, after) in current {
@@ -296,7 +304,19 @@ fn compare_error_maps(
         }
     }
 
-    (new_errors, preexisting_errors)
+    for (address, before) in baseline {
+        if !current.contains_key(address) {
+            resolved_errors.push(ErrorDelta {
+                address: address.clone(),
+                before_error: Some(before.error.clone()),
+                after_error: None,
+                before_formula: before.formula.clone(),
+                after_formula: None,
+            });
+        }
+    }
+
+    (new_errors, resolved_errors, preexisting_errors)
 }
 
 fn compare_named_ranges(
@@ -374,6 +394,41 @@ fn named_range_key(item: &NamedRangeDescriptor) -> String {
         item.scope_sheet_name.as_deref().unwrap_or(""),
         item.kind
     )
+}
+
+fn classify_target_delta(
+    before: &TargetCellSnapshot,
+    after: &TargetCellSnapshot,
+    changed: bool,
+) -> &'static str {
+    if !changed {
+        return "unchanged";
+    }
+    if is_error_value(after.value.as_ref()) && !is_error_value(before.value.as_ref()) {
+        return "new_error";
+    }
+    if before.formula != after.formula {
+        return "formula_shift";
+    }
+    if before.formula.is_none() && after.formula.is_none() {
+        return "direct_edit";
+    }
+    "recalc_result"
+}
+
+fn is_error_value(value: Option<&CellValue>) -> bool {
+    match value {
+        Some(CellValue::Error(_)) => true,
+        Some(other) => serde_json::to_value(other)
+            .ok()
+            .and_then(|json| {
+                json.get("value")
+                    .and_then(|v| v.as_str())
+                    .map(is_error_text)
+            })
+            .unwrap_or(false),
+        None => false,
+    }
 }
 
 fn cell_values_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool {
