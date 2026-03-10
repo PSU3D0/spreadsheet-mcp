@@ -79,6 +79,10 @@ async function sharedReadFlow(backend, ctx) {
 
 - `transformBatch(input)`
 
+### Verification / workflow helpers
+
+- MCP-today verification helpers: `verifyWorkbook(input)`, `verifyTargets(input)`, `verifyErrors(input)`
+
 ### Lifecycle / backend-specific
 
 - MCP-only fork lifecycle: `createFork`, `listForks`, `saveFork`, `discardFork`, staged-change methods
@@ -95,6 +99,9 @@ const caps = backend.getCapabilities()
 
 if (caps.supportsForkLifecycle) {
   // MCP path
+}
+if (caps.supportsVerification) {
+  // verifyWorkbook / verifyTargets / verifyErrors available
 }
 if (caps.supportsSessionLifecycle) {
   // WASM path

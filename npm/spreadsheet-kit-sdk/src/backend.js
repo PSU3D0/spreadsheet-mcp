@@ -274,6 +274,103 @@ function normalizeReplaceInFormulasResult(result) {
   }
 }
 
+/**
+ * @param {unknown} result
+ * @param {string | undefined} fallbackBaseline
+ * @param {string | undefined} fallbackCurrent
+ */
+function normalizeVerifyWorkbookResult(result, fallbackBaseline, fallbackCurrent) {
+  if (!result || typeof result !== "object") {
+    throw new SpreadsheetSdkError("invalid verifyWorkbook response", {
+      code: "INVALID_RESPONSE"
+    })
+  }
+
+  const targetClassificationCounts = result.summary?.targetClassificationCounts
+    ?? result.summary?.target_classification_counts
+    ?? {}
+
+  return {
+    baselineRef: result.baselineRef ?? result.baseline_ref ?? result.baseline ?? fallbackBaseline,
+    currentRef: result.currentRef ?? result.current_ref ?? result.current ?? fallbackCurrent,
+    targetDeltas: Array.isArray(result.targetDeltas)
+      ? result.targetDeltas
+      : Array.isArray(result.target_deltas)
+        ? result.target_deltas.map((item) => ({
+            address: item.address,
+            before: item.before,
+            after: item.after,
+            beforeFormula: item.beforeFormula ?? item.before_formula,
+            afterFormula: item.afterFormula ?? item.after_formula,
+            classification: item.classification,
+            changed: item.changed
+          }))
+        : [],
+    newErrors: Array.isArray(result.newErrors)
+      ? result.newErrors
+      : Array.isArray(result.new_errors)
+        ? result.new_errors.map((item) => ({
+            address: item.address,
+            beforeError: item.beforeError ?? item.before_error,
+            afterError: item.afterError ?? item.after_error,
+            beforeFormula: item.beforeFormula ?? item.before_formula,
+            afterFormula: item.afterFormula ?? item.after_formula
+          }))
+        : [],
+    resolvedErrors: Array.isArray(result.resolvedErrors)
+      ? result.resolvedErrors
+      : Array.isArray(result.resolved_errors)
+        ? result.resolved_errors.map((item) => ({
+            address: item.address,
+            beforeError: item.beforeError ?? item.before_error,
+            afterError: item.afterError ?? item.after_error,
+            beforeFormula: item.beforeFormula ?? item.before_formula,
+            afterFormula: item.afterFormula ?? item.after_formula
+          }))
+        : [],
+    preexistingErrors: Array.isArray(result.preexistingErrors)
+      ? result.preexistingErrors
+      : Array.isArray(result.preexisting_errors)
+        ? result.preexisting_errors.map((item) => ({
+            address: item.address,
+            beforeError: item.beforeError ?? item.before_error,
+            afterError: item.afterError ?? item.after_error,
+            beforeFormula: item.beforeFormula ?? item.before_formula,
+            afterFormula: item.afterFormula ?? item.after_formula
+          }))
+        : [],
+    namedRangeDeltas: Array.isArray(result.namedRangeDeltas)
+      ? result.namedRangeDeltas
+      : Array.isArray(result.named_range_deltas)
+        ? result.named_range_deltas.map((item) => ({
+            name: item.name,
+            scopeKind: item.scopeKind ?? item.scope_kind,
+            scopeSheetName: item.scopeSheetName ?? item.scope_sheet_name,
+            change: item.change,
+            beforeRefersTo: item.beforeRefersTo ?? item.before_refers_to,
+            afterRefersTo: item.afterRefersTo ?? item.after_refers_to,
+            beforeKind: item.beforeKind ?? item.before_kind,
+            afterKind: item.afterKind ?? item.after_kind
+          }))
+        : [],
+    summary: {
+      targetCount: result.summary?.targetCount ?? result.summary?.target_count ?? 0,
+      changedTargets: result.summary?.changedTargets ?? result.summary?.changed_targets ?? 0,
+      newErrorCount: result.summary?.newErrorCount ?? result.summary?.new_error_count ?? 0,
+      resolvedErrorCount: result.summary?.resolvedErrorCount ?? result.summary?.resolved_error_count ?? 0,
+      preexistingErrorCount: result.summary?.preexistingErrorCount ?? result.summary?.preexisting_error_count ?? 0,
+      namedRangeDeltaCount: result.summary?.namedRangeDeltaCount ?? result.summary?.named_range_delta_count ?? 0,
+      targetClassificationCounts: {
+        unchanged: targetClassificationCounts.unchanged ?? 0,
+        directEdit: targetClassificationCounts.directEdit ?? targetClassificationCounts.direct_edit ?? 0,
+        recalcResult: targetClassificationCounts.recalcResult ?? targetClassificationCounts.recalc_result ?? 0,
+        formulaShift: targetClassificationCounts.formulaShift ?? targetClassificationCounts.formula_shift ?? 0,
+        newError: targetClassificationCounts.newError ?? targetClassificationCounts.new_error ?? 0
+      }
+    }
+  }
+}
+
 module.exports = {
   requireCapability,
   requiredString,
@@ -282,6 +379,7 @@ module.exports = {
   normalizeTransformBatchResult,
   normalizeStructureBatchResult,
   normalizeReplaceInFormulasResult,
+  normalizeVerifyWorkbookResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,

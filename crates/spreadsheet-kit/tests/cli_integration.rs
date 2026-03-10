@@ -1064,6 +1064,79 @@ fn cli_verify_missing_sheet_uses_normalized_error_envelope() {
 }
 
 #[test]
+fn cli_verify_targets_only_preserves_explicit_empty_error_arrays() {
+    let tmp = tempdir().expect("tempdir");
+    let baseline_path = tmp.path().join("verify-targets-only-baseline.xlsx");
+    let current_path = tmp.path().join("verify-targets-only-current.xlsx");
+
+    let mut baseline = umya_spreadsheet::new_file();
+    baseline
+        .get_sheet_by_name_mut("Sheet1")
+        .expect("sheet1 exists")
+        .get_cell_mut("B1")
+        .set_value("Ready");
+    umya_spreadsheet::writer::xlsx::write(&baseline, &baseline_path).expect("write baseline");
+
+    let mut current = baseline.clone();
+    current
+        .get_sheet_by_name_mut("Sheet1")
+        .expect("sheet1 exists")
+        .get_cell_mut("B1")
+        .set_value("Done");
+    umya_spreadsheet::writer::xlsx::write(&current, &current_path).expect("write current");
+
+    let baseline_str = baseline_path.to_str().expect("baseline utf8");
+    let current_str = current_path.to_str().expect("current utf8");
+    let output = run_cli(&[
+        "verify",
+        baseline_str,
+        current_str,
+        "--targets",
+        "Sheet1!B1",
+        "--targets-only",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["summary"]["target_count"], 1);
+    assert_eq!(payload["summary"]["new_error_count"], 0);
+    assert_eq!(payload["summary"]["resolved_error_count"], 0);
+    assert_eq!(payload["summary"]["preexisting_error_count"], 0);
+    assert_eq!(payload["target_deltas"].as_array().map(Vec::len), Some(1));
+    assert_eq!(payload["new_errors"], serde_json::json!([]));
+    assert_eq!(payload["resolved_errors"], serde_json::json!([]));
+    assert_eq!(payload["preexisting_errors"], serde_json::json!([]));
+    assert_eq!(payload["named_range_deltas"], serde_json::json!([]));
+}
+
+#[test]
+fn cli_verify_rejects_conflicting_scope_flags_with_guidance() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("verify-conflicting-scope.xlsx");
+    write_fixture(&workbook_path);
+
+    let file = workbook_path.to_str().expect("utf8 path");
+    let output = run_cli(&[
+        "verify",
+        file,
+        file,
+        "--targets",
+        "Sheet1!A1",
+        "--errors-only",
+    ]);
+    assert!(!output.status.success());
+
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "INVALID_ARGUMENT");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--errors-only cannot be combined with explicit --targets")
+    );
+}
+
+#[test]
 fn cli_verify_reports_target_deltas_error_provenance_and_named_range_deltas() {
     let tmp = tempdir().expect("tempdir");
     let baseline_path = tmp.path().join("verify-baseline.xlsx");

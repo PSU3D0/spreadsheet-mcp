@@ -346,6 +346,153 @@ test("mcp transformBatch normalizes context id to fork_id", async () => {
   assert.equal(result.opsApplied, 1)
 })
 
+test("mcp verifyWorkbook sends correct params and normalizes response", async () => {
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        assert.equal(operation, "verify_workbook")
+        assert.equal(params.baseline_workbook_or_fork_id, "fork-base")
+        assert.equal(params.current_workbook_or_fork_id, "fork-current")
+        assert.deepEqual(params.targets, ["Summary!B2", "Sheet1!C2"])
+        assert.equal(params.sheet_name, "Sheet1")
+        assert.equal(params.include_named_range_deltas, true)
+        assert.equal(params.errors_only, false)
+        assert.equal(params.targets_only, false)
+        return {
+          baseline: "fork-base",
+          current: "fork-current",
+          target_deltas: [
+            {
+              address: "Summary!B2",
+              before: { kind: "Text", value: "Ready" },
+              after: { kind: "Text", value: "Done" },
+              before_formula: null,
+              after_formula: null,
+              classification: "direct_edit",
+              changed: true
+            }
+          ],
+          new_errors: [{ address: "Sheet1!D3", after_error: "#NAME?" }],
+          resolved_errors: [{ address: "Sheet1!D4", before_error: "#DIV/0!" }],
+          preexisting_errors: [{ address: "Sheet1!D2", before_error: "#DIV/0!", after_error: "#DIV/0!" }],
+          named_range_deltas: [{ name: "AmountRef", change: "added", after_refers_to: "'Sheet1'!$B$3" }],
+          summary: {
+            target_count: 2,
+            changed_targets: 1,
+            new_error_count: 1,
+            resolved_error_count: 1,
+            preexisting_error_count: 1,
+            named_range_delta_count: 1,
+            target_classification_counts: {
+              unchanged: 0,
+              direct_edit: 1,
+              recalc_result: 0,
+              formula_shift: 0,
+              new_error: 0
+            }
+          }
+        }
+      }
+    }
+  })
+
+  const result = await mcp.verifyWorkbook({
+    baselineWorkbookOrForkId: "fork-base",
+    currentWorkbookOrForkId: "fork-current",
+    targets: ["Summary!B2", "Sheet1!C2"],
+    sheetName: "Sheet1",
+    includeNamedRangeDeltas: true
+  })
+
+  assert.equal(result.baselineRef, "fork-base")
+  assert.equal(result.currentRef, "fork-current")
+  assert.equal(result.targetDeltas.length, 1)
+  assert.equal(result.targetDeltas[0].classification, "direct_edit")
+  assert.equal(result.targetDeltas[0].beforeFormula, null)
+  assert.equal(result.newErrors.length, 1)
+  assert.equal(result.resolvedErrors.length, 1)
+  assert.equal(result.preexistingErrors.length, 1)
+  assert.equal(result.namedRangeDeltas.length, 1)
+  assert.equal(result.summary.targetCount, 2)
+  assert.equal(result.summary.resolvedErrorCount, 1)
+  assert.equal(result.summary.targetClassificationCounts.directEdit, 1)
+})
+
+test("mcp verifyTargets and verifyErrors set scope flags", async () => {
+  const seen = []
+  const mcp = new McpBackend({
+    transport: {
+      async invoke(operation, params) {
+        seen.push({ operation, params })
+        return {
+          baseline: params.baseline_workbook_or_fork_id,
+          current: params.current_workbook_or_fork_id,
+          target_deltas: [],
+          new_errors: [],
+          resolved_errors: [],
+          preexisting_errors: [],
+          named_range_deltas: [],
+          summary: {
+            target_count: 0,
+            changed_targets: 0,
+            new_error_count: 0,
+            resolved_error_count: 0,
+            preexisting_error_count: 0,
+            named_range_delta_count: 0,
+            target_classification_counts: {
+              unchanged: 0,
+              direct_edit: 0,
+              recalc_result: 0,
+              formula_shift: 0,
+              new_error: 0
+            }
+          }
+        }
+      }
+    }
+  })
+
+  await mcp.verifyTargets({
+    baselineId: "base-1",
+    currentId: "cur-1",
+    targets: ["Sheet1!A1"]
+  })
+  await mcp.verifyErrors({
+    baselineId: "base-2",
+    currentId: "cur-2",
+    sheetName: "Sheet1"
+  })
+
+  assert.equal(seen[0].operation, "verify_workbook")
+  assert.equal(seen[0].params.targets_only, true)
+  assert.equal(seen[1].operation, "verify_workbook")
+  assert.equal(seen[1].params.errors_only, true)
+})
+
+test("wasm verify helpers throw unsupported error", async () => {
+  const wasm = new WasmBackend({ bindings: {} })
+
+  await assert.rejects(
+    () => wasm.verifyWorkbook({ sessionId: "session-1" }),
+    (error) => {
+      assert.ok(error instanceof CapabilityError)
+      assert.equal(error.code, "UNSUPPORTED_CAPABILITY")
+      assert.equal(error.backend, "wasm")
+      assert.equal(error.capability, "supportsVerification")
+      return true
+    }
+  )
+
+  await assert.rejects(
+    () => wasm.verifyTargets({ sessionId: "session-1", targets: ["Sheet1!A1"] }),
+    (error) => {
+      assert.ok(error instanceof CapabilityError)
+      assert.equal(error.capability, "supportsVerification")
+      return true
+    }
+  )
+})
+
 test("mcp replaceInFormulas sends correct params and normalizes response", async () => {
   const mcp = new McpBackend({
     transport: {

@@ -25,5 +25,6 @@ pub mod styles;
 pub mod tools;
 pub mod types;
 pub mod utils;
+pub mod verification;
 pub mod workbook;
 pub mod write;

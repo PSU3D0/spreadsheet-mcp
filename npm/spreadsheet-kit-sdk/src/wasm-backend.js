@@ -118,6 +118,21 @@ class WasmBackend {
     return normalizeNamedRangesResult(result, sessionId)
   }
 
+  async verifyWorkbook(input = {}) {
+    requireCapability(this, "supportsVerification", "verifyWorkbook")
+    return input
+  }
+
+  async verifyTargets(input = {}) {
+    requireCapability(this, "supportsVerification", "verifyTargets")
+    return input
+  }
+
+  async verifyErrors(input = {}) {
+    requireCapability(this, "supportsVerification", "verifyErrors")
+    return input
+  }
+
   async defineName(input = {}) {
     requireCapability(this, "supportsNamedRangeMutations", "defineName")
     const sessionId = requiredString(input.sessionId || input.session_id || input.contextId, "sessionId")

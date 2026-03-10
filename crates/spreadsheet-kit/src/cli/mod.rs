@@ -1700,7 +1700,7 @@ Formula parse policy:
     },
     #[command(
         about = "Compare two workbook states and verify target deltas plus error provenance",
-        after_long_help = "Examples:\n  asp verify baseline.xlsx candidate.xlsx --targets Summary!B2\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --named-ranges\n\nBehavior:\n  - target_deltas compares the exact Sheet!A1 cells you request\n  - each target delta includes a classification such as unchanged, direct_edit, recalc_result, formula_shift, or new_error\n  - new_errors reports error cells present only in the current workbook\n  - resolved_errors reports baseline error cells that no longer error in the current workbook\n  - preexisting_errors reports error cells that existed in both baseline and current\n  - --named-ranges adds added/removed/changed named range deltas"
+        after_long_help = "Examples:\n  asp verify baseline.xlsx candidate.xlsx --targets Summary!B2\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --named-ranges\n  asp verify baseline.xlsx candidate.xlsx --sheet Summary --errors-only\n  asp verify baseline.xlsx candidate.xlsx --targets Sheet1!C2,Summary!B2 --targets-only\n\nBehavior:\n  - target_deltas compares the exact Sheet!A1 cells you request\n  - each target delta includes a classification such as unchanged, direct_edit, recalc_result, formula_shift, or new_error\n  - new_errors reports error cells present only in the current workbook\n  - resolved_errors reports baseline error cells that no longer error in the current workbook\n  - preexisting_errors reports error cells that existed in both baseline and current\n  - --sheet scopes error and named-range scans to one sheet; explicit --targets remain exact\n  - --errors-only returns only error provenance output\n  - --targets-only returns only target proof output\n  - --named-ranges adds added/removed/changed named range deltas in default verify mode"
     )]
     Verify {
         #[arg(value_name = "BASELINE", help = "Baseline workbook path")]
@@ -1715,10 +1715,23 @@ Formula parse policy:
         )]
         targets: Option<Vec<String>>,
         #[arg(
+            long,
+            value_name = "SHEET",
+            help = "Limit error and named-range scanning to one sheet"
+        )]
+        sheet_name: Option<String>,
+        #[arg(
             long = "named-ranges",
             help = "Include added/removed/changed named range deltas"
         )]
         named_ranges: bool,
+        #[arg(
+            long,
+            help = "Return only error provenance output (no target or named-range deltas)"
+        )]
+        errors_only: bool,
+        #[arg(long, help = "Return only target proof output (requires --targets)")]
+        targets_only: bool,
     },
     #[command(
         about = "Diff two workbook versions with summary-first, paged details",
@@ -2438,8 +2451,22 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             baseline,
             current,
             targets,
+            sheet_name,
             named_ranges,
-        } => commands::verify::verify(baseline, current, targets, named_ranges).await,
+            errors_only,
+            targets_only,
+        } => {
+            commands::verify::verify(
+                baseline,
+                current,
+                targets,
+                sheet_name,
+                named_ranges,
+                errors_only,
+                targets_only,
+            )
+            .await
+        }
         Commands::Diff {
             original,
             modified,

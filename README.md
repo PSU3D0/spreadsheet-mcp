@@ -152,10 +152,12 @@ asp session op --session <id> --ops @edit.json --workspace .
 asp session apply --session <id> <staged_id> --workspace .
 asp session materialize --session <id> --output result.xlsx --workspace .
 asp verify data.xlsx result.xlsx --targets Summary!B2 --named-ranges
+asp verify data.xlsx result.xlsx --sheet Summary --errors-only
 asp diff data.xlsx result.xlsx --details --limit 50
 ```
 
 `asp verify` reports target classifications plus new/resolved/preexisting errors so you can prove the edit outcome before drilling into a full diff.
+Use `--errors-only` for a sheet-scoped QA gate or `--targets-only` when you only want explicit target proof.
 
 #### Batch payload examples (JSON body passed via `--ops @file.json`)
 
@@ -280,7 +282,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
 | `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
-| `verify <baseline> <current> [--targets Sheet!A1,...] [--named-ranges]` | Compare two workbook states and report target deltas, new errors, pre-existing errors, and optional named-range deltas |
+| `verify <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
 | `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
 | `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |

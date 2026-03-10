@@ -17,6 +17,7 @@ use crate::config::OutputProfile;
 use crate::model::*;
 use crate::state::AppState;
 use crate::utils::column_number_to_name;
+use crate::verification::{VerifyOptions, VerifyResponse, compare_workbooks};
 use crate::workbook::{WorkbookContext, cell_to_value};
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
@@ -1243,6 +1244,85 @@ pub async fn named_ranges(
         items,
     };
     Ok(response)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct VerifyWorkbookParams {
+    #[serde(alias = "baseline_id")]
+    pub baseline_workbook_or_fork_id: WorkbookId,
+    #[serde(alias = "current_id")]
+    pub current_workbook_or_fork_id: WorkbookId,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    pub sheet_name: Option<String>,
+    #[serde(default)]
+    pub include_named_range_deltas: bool,
+    #[serde(default)]
+    pub errors_only: bool,
+    #[serde(default)]
+    pub targets_only: bool,
+}
+
+pub async fn verify_workbook(
+    state: Arc<AppState>,
+    params: VerifyWorkbookParams,
+) -> Result<VerifyResponse> {
+    let options = VerifyOptions {
+        targets: params.targets.clone(),
+        sheet_filter: params.sheet_name.clone(),
+        include_named_range_deltas: params.include_named_range_deltas,
+        errors_only: params.errors_only,
+        targets_only: params.targets_only,
+    };
+    options.validate()?;
+
+    let baseline_workbook = state
+        .open_workbook(&params.baseline_workbook_or_fork_id)
+        .await?;
+    let current_workbook = state
+        .open_workbook(&params.current_workbook_or_fork_id)
+        .await?;
+
+    let baseline_named = if params.include_named_range_deltas {
+        Some(
+            named_ranges(
+                state.clone(),
+                NamedRangesParams {
+                    workbook_or_fork_id: params.baseline_workbook_or_fork_id.clone(),
+                    sheet_name: params.sheet_name.clone(),
+                    name_prefix: None,
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let current_named = if params.include_named_range_deltas {
+        Some(
+            named_ranges(
+                state.clone(),
+                NamedRangesParams {
+                    workbook_or_fork_id: params.current_workbook_or_fork_id.clone(),
+                    sheet_name: params.sheet_name.clone(),
+                    name_prefix: None,
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    compare_workbooks(
+        params.baseline_workbook_or_fork_id.as_str().to_string(),
+        params.current_workbook_or_fork_id.as_str().to_string(),
+        &baseline_workbook,
+        &current_workbook,
+        &options,
+        baseline_named.as_ref().map(|r| r.items.as_slice()),
+        current_named.as_ref().map(|r| r.items.as_slice()),
+    )
 }
 
 // ── Named Range CRUD ─────────────────────────────────────────────────────────

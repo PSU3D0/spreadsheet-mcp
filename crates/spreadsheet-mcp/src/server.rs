@@ -116,10 +116,11 @@ WORKFLOW:
 2) Optional: checkpoint_fork before large edits.
 3) edit_batch/transform_batch/style_batch/structure_batch/apply_formula_pattern/sheet_layout_batch/rules_batch/column_size_batch/replace_in_formulas: Apply edits to the fork.
 4) recalculate: Trigger the configured recalc backend to recompute all formulas.
-5) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
+5) verify_workbook: Compare baseline/current workbook_or_fork ids for target proof plus new/resolved/preexisting errors.
+6) get_changeset: Diff fork against original. Use filters/limit/offset to keep it small.
    Optional: screenshot_sheet to capture a visual view of a range (original or fork).
-6) save_fork: Write changes to file.
-7) discard_fork: Delete fork without saving.
+7) save_fork: Write changes to file.
+8) discard_fork: Delete fork without saving.
 
 SAFETY:
 - checkpoint_fork before large/structural edits; restore_checkpoint to rollback if needed.
@@ -133,6 +134,9 @@ Leading '=' in value/formula is accepted and stripped; prefer formula or is_form
 - transform_batch: Range-first clear/fill/replace. Prefer for bulk edits (blank/fill/rename) to avoid per-cell edit_batch bloat.
 - recalculate: Required after edit_batch to update formula results. \
 May take several seconds for complex workbooks.
+- verify_workbook: Compare {baseline_workbook_or_fork_id, current_workbook_or_fork_id}. \
+Optional: targets:[Sheet!A1], sheet_name, include_named_range_deltas, errors_only, targets_only. \
+Use this as the summary-first proof step after recalculate.
 - get_changeset: Returns a paged diff + summary. Use limit/offset to page. \
 Use include_types/exclude_types/include_subtypes/exclude_subtypes to filter (e.g. exclude_subtypes=['recalc_result']). \
 Use summary_only=true when you only need counts.
@@ -550,6 +554,25 @@ impl SpreadsheetServer {
         .await
         .map(json)
         .map_err(|e| to_mcp_error_for_tool("named_ranges", e))
+    }
+
+    #[tool(
+        name = "verify_workbook",
+        description = "Compare baseline/current workbook or fork ids and report target proof plus new/resolved/preexisting errors"
+    )]
+    pub async fn verify_workbook(
+        &self,
+        Parameters(params): Parameters<tools::VerifyWorkbookParams>,
+    ) -> Result<Json<spreadsheet_kit::verification::VerifyResponse>, McpError> {
+        self.ensure_tool_enabled("verify_workbook")
+            .map_err(|e| to_mcp_error_for_tool("verify_workbook", e))?;
+        self.run_tool_with_timeout(
+            "verify_workbook",
+            tools::verify_workbook(self.state.clone(), params),
+        )
+        .await
+        .map(json)
+        .map_err(|e| to_mcp_error_for_tool("verify_workbook", e))
     }
 
     #[tool(

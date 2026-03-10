@@ -13,6 +13,7 @@
  * @property {boolean} supportsTransformBatch
  * @property {boolean} supportsStructureBatch
  * @property {boolean} supportsReplaceInFormulas
+ * @property {boolean} supportsVerification
  * @property {boolean} supportsForkLifecycle
  * @property {boolean} supportsStaging
  * @property {boolean} supportsSessionLifecycle
@@ -34,6 +35,7 @@ const MCP_CAPABILITIES = Object.freeze({
   supportsTransformBatch: true,
   supportsStructureBatch: true,
   supportsReplaceInFormulas: true,
+  supportsVerification: true,
   supportsForkLifecycle: true,
   supportsStaging: true,
   supportsSessionLifecycle: false,
@@ -55,6 +57,7 @@ const WASM_CAPABILITIES = Object.freeze({
   supportsTransformBatch: true,
   supportsStructureBatch: false,
   supportsReplaceInFormulas: false,
+  supportsVerification: false,
   supportsForkLifecycle: false,
   supportsStaging: false,
   supportsSessionLifecycle: true,

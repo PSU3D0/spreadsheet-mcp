@@ -7,6 +7,7 @@ const {
   normalizeTransformBatchResult,
   normalizeStructureBatchResult,
   normalizeReplaceInFormulasResult,
+  normalizeVerifyWorkbookResult,
   normalizeDescribeWorkbookResult,
   normalizeNamedRangesResult,
   normalizeSheetOverviewResult,
@@ -117,6 +118,44 @@ class McpBackend {
       workbook_id: workbookId
     })
     return normalizeNamedRangesResult(result, workbookId)
+  }
+
+  async verifyWorkbook(input = {}) {
+    requireCapability(this, "supportsVerification", "verifyWorkbook")
+    const baselineWorkbookOrForkId = requiredString(
+      input.baselineWorkbookOrForkId || input.baseline_workbook_or_fork_id || input.baselineId || input.baseline_id,
+      "baselineWorkbookOrForkId"
+    )
+    const currentWorkbookOrForkId = requiredString(
+      input.currentWorkbookOrForkId || input.current_workbook_or_fork_id || input.currentId || input.current_id,
+      "currentWorkbookOrForkId"
+    )
+    const result = await this._call("verify_workbook", {
+      baseline_workbook_or_fork_id: baselineWorkbookOrForkId,
+      current_workbook_or_fork_id: currentWorkbookOrForkId,
+      targets: Array.isArray(input.targets) ? input.targets : [],
+      sheet_name: input.sheetName || input.sheet_name,
+      include_named_range_deltas: Boolean(input.includeNamedRangeDeltas || input.include_named_range_deltas),
+      errors_only: Boolean(input.errorsOnly || input.errors_only),
+      targets_only: Boolean(input.targetsOnly || input.targets_only)
+    })
+    return normalizeVerifyWorkbookResult(result, baselineWorkbookOrForkId, currentWorkbookOrForkId)
+  }
+
+  async verifyTargets(input = {}) {
+    return this.verifyWorkbook({
+      ...input,
+      targetsOnly: true,
+      targets_only: true
+    })
+  }
+
+  async verifyErrors(input = {}) {
+    return this.verifyWorkbook({
+      ...input,
+      errorsOnly: true,
+      errors_only: true
+    })
   }
 
   async defineName(input = {}) {
