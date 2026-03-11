@@ -82,6 +82,7 @@ Commands that tokenize or validate formulas accept `--formula-parse-policy <fail
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
 | `verify <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
+| `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
 | `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
 | `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
 | `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |

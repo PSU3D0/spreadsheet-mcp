@@ -291,7 +291,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
 | `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
 | `recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
-| `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10]` | Summary-first workbook diff with optional paged details and filters |
+| `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
 
 #### Formula write-path provenance (`write_path_provenance`)
 Formula-writing commands emit optional provenance metadata for troubleshooting:

@@ -1735,7 +1735,7 @@ Formula parse policy:
     },
     #[command(
         about = "Diff two workbook versions with summary-first, paged details",
-        after_long_help = "Examples:\n  asp diff baseline.xlsx candidate.xlsx\n  asp diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  asp diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200"
+        after_long_help = "Examples:\n  asp diff baseline.xlsx candidate.xlsx\n  asp diff baseline.xlsx candidate.xlsx --details --limit 200 --offset 0\n  asp diff baseline.xlsx candidate.xlsx --sheet \"GL Data\" --range A1:P200\n  asp diff baseline.xlsx candidate.xlsx --exclude-recalc-result\n\nBehavior:\n  - summary output now includes grouped change buckets and subtype counts\n  - recalc_result changes are counted separately from direct edits\n  - --exclude-recalc-result suppresses cached-value churn so direct edits are easier to review"
     )]
     Diff {
         #[arg(value_name = "ORIGINAL", help = "Baseline workbook path")]
@@ -1762,6 +1762,11 @@ Formula parse policy:
             help = "Include paged change items; default output is summary-only"
         )]
         details: bool,
+        #[arg(
+            long = "exclude-recalc-result",
+            help = "Exclude recalc_result cell changes from summary and details"
+        )]
+        exclude_recalc_result: bool,
         #[arg(
             long,
             default_value_t = 200,
@@ -2476,9 +2481,18 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             details,
             limit,
             offset,
+            exclude_recalc_result,
         } => {
             commands::diff::diff(
-                original, modified, sheet, sheets, range, details, limit, offset,
+                original,
+                modified,
+                sheet,
+                sheets,
+                range,
+                details,
+                limit,
+                offset,
+                exclude_recalc_result,
             )
             .await
         }
@@ -2982,6 +2996,7 @@ mod tests {
                 details,
                 limit,
                 offset,
+                exclude_recalc_result,
             } => {
                 assert_eq!(original, PathBuf::from("baseline.xlsx"));
                 assert_eq!(modified, PathBuf::from("candidate.xlsx"));
@@ -2991,6 +3006,7 @@ mod tests {
                 assert!(details);
                 assert_eq!(limit, 150);
                 assert_eq!(offset, 300);
+                assert!(!exclude_recalc_result);
             }
             other => panic!("unexpected command: {other:?}"),
         }
@@ -3011,11 +3027,35 @@ mod tests {
                 details,
                 limit,
                 offset,
+                exclude_recalc_result,
                 ..
             } => {
                 assert!(!details);
                 assert_eq!(limit, 200);
                 assert_eq!(offset, 0);
+                assert!(!exclude_recalc_result);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_exclude_recalc_result_flag() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "diff",
+            "baseline.xlsx",
+            "candidate.xlsx",
+            "--exclude-recalc-result",
+        ])
+        .expect("parse diff command with exclude recalc flag");
+
+        match cli.command {
+            Commands::Diff {
+                exclude_recalc_result,
+                ..
+            } => {
+                assert!(exclude_recalc_result);
             }
             other => panic!("unexpected command: {other:?}"),
         }

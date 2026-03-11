@@ -1,10 +1,12 @@
 use crate::runtime::stateless::StatelessRuntime;
 use anyhow::{Result, anyhow, bail};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 const DIFF_LIMIT_MAX: u32 = 2_000;
+const GROUP_PREVIEW_LIMIT: usize = 25;
 
 #[derive(Debug, Clone, Copy)]
 struct A1Bounds {
@@ -12,6 +14,37 @@ struct A1Bounds {
     end_col: u32,
     start_row: u32,
     end_row: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DiffGroup {
+    group_id: String,
+    kind: String,
+    group_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sheet: Option<String>,
+    change_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sample_addresses: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sample_items: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DiffGroupBuilder {
+    kind: String,
+    group_type: String,
+    sheet: Option<String>,
+    change_count: u32,
+    min_col: Option<u32>,
+    max_col: Option<u32>,
+    min_row: Option<u32>,
+    max_row: Option<u32>,
+    last_address: Option<String>,
+    sample_addresses: Vec<String>,
+    sample_items: Vec<String>,
 }
 
 pub async fn diff(
@@ -23,6 +56,7 @@ pub async fn diff(
     details: bool,
     limit: u32,
     offset: u32,
+    exclude_recalc_result: bool,
 ) -> Result<Value> {
     if sheet.is_some() && sheets.is_some() {
         bail!("invalid argument: --sheet and --sheets are mutually exclusive");
@@ -63,23 +97,33 @@ pub async fn diff(
 
     let mut counts_by_kind: BTreeMap<String, u32> = BTreeMap::new();
     let mut counts_by_type: BTreeMap<String, u32> = BTreeMap::new();
+    let mut counts_by_subtype: BTreeMap<String, u32> = BTreeMap::new();
     let mut affected_sheets: BTreeSet<String> = BTreeSet::new();
 
     let mut filtered = Vec::new();
+    let mut recalc_result_change_count = 0u32;
     for change in changes {
         if !change_matches_filters(&change, &sheet_filters, range_bounds) {
+            continue;
+        }
+
+        let subtype = change_subtype_key(&change).map(str::to_string);
+        if exclude_recalc_result && subtype.as_deref() == Some("recalc_result") {
             continue;
         }
 
         let kind = change_kind(&change).to_string();
         *counts_by_kind.entry(kind).or_default() += 1;
 
-        let type_key = change
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
+        let type_key = change_type_key(&change).to_string();
         *counts_by_type.entry(type_key).or_default() += 1;
+
+        if let Some(subtype_key) = subtype {
+            if subtype_key == "recalc_result" {
+                recalc_result_change_count += 1;
+            }
+            *counts_by_subtype.entry(subtype_key).or_default() += 1;
+        }
 
         if let Some(sheet_name) = change_sheet_name(&change) {
             affected_sheets.insert(sheet_name.to_string());
@@ -89,6 +133,20 @@ pub async fn diff(
     }
 
     let total_changes = filtered.len() as u32;
+    let direct_change_count = total_changes.saturating_sub(recalc_result_change_count);
+    let groups = build_groups(&filtered);
+    let mut counts_by_group_type: BTreeMap<String, u32> = BTreeMap::new();
+    for group in &groups {
+        *counts_by_group_type
+            .entry(group.group_type.clone())
+            .or_default() += 1;
+    }
+    let group_preview: Vec<Value> = groups
+        .iter()
+        .take(GROUP_PREVIEW_LIMIT)
+        .map(|group| serde_json::to_value(group).expect("group to value"))
+        .collect();
+    let group_preview_truncated = groups.len() > GROUP_PREVIEW_LIMIT;
 
     let (returned_changes, paged_changes, truncated, next_offset) = if details {
         let offset = offset as usize;
@@ -111,7 +169,17 @@ pub async fn diff(
         "next_offset": next_offset,
         "counts_by_kind": counts_by_kind,
         "counts_by_type": counts_by_type,
-        "affected_sheets": affected_sheets.into_iter().collect::<Vec<_>>()
+        "counts_by_subtype": counts_by_subtype,
+        "affected_sheets": affected_sheets.into_iter().collect::<Vec<_>>(),
+        "recalc_result_change_count": recalc_result_change_count,
+        "direct_change_count": direct_change_count,
+        "group_count": groups.len(),
+        "counts_by_group_type": counts_by_group_type,
+        "group_preview": group_preview,
+        "group_preview_truncated": group_preview_truncated,
+        "filters": {
+            "exclude_recalc_result": exclude_recalc_result,
+        }
     });
 
     let mut response = Map::new();
@@ -128,9 +196,133 @@ pub async fn diff(
 
     if details {
         response.insert("changes".to_string(), Value::Array(paged_changes));
+        response.insert(
+            "groups".to_string(),
+            Value::Array(
+                groups
+                    .into_iter()
+                    .map(|group| serde_json::to_value(group).expect("group to value"))
+                    .collect(),
+            ),
+        );
     }
 
     Ok(Value::Object(response))
+}
+
+fn build_groups(changes: &[Value]) -> Vec<DiffGroup> {
+    let mut ordered = changes.to_vec();
+    ordered.sort_by_key(group_sort_key);
+
+    let mut out = Vec::new();
+    let mut current: Option<DiffGroupBuilder> = None;
+
+    for change in &ordered {
+        let next = group_builder_for_change(change);
+        match current.take() {
+            Some(mut active) if can_merge_group(&active, &next, change) => {
+                merge_group(&mut active, change);
+                current = Some(active);
+            }
+            Some(active) => {
+                out.push(finalize_group(active, out.len()));
+                current = Some(next);
+            }
+            None => current = Some(next),
+        }
+    }
+
+    if let Some(active) = current {
+        out.push(finalize_group(active, out.len()));
+    }
+
+    out
+}
+
+fn group_builder_for_change(change: &Value) -> DiffGroupBuilder {
+    let kind = change_kind(change).to_string();
+    let group_type = change_group_type(change).to_string();
+    let sheet = change_sheet_name(change).map(str::to_string);
+    let mut builder = DiffGroupBuilder {
+        kind,
+        group_type,
+        sheet,
+        change_count: 0,
+        min_col: None,
+        max_col: None,
+        min_row: None,
+        max_row: None,
+        last_address: None,
+        sample_addresses: Vec::new(),
+        sample_items: Vec::new(),
+    };
+    merge_group(&mut builder, change);
+    builder
+}
+
+fn can_merge_group(current: &DiffGroupBuilder, next: &DiffGroupBuilder, change: &Value) -> bool {
+    if current.kind != "cell" || next.kind != "cell" {
+        return false;
+    }
+    if current.group_type != next.group_type || current.sheet != next.sheet {
+        return false;
+    }
+    let Some(last_address) = current.last_address.as_deref() else {
+        return false;
+    };
+    let Some(next_address) = change_address(change) else {
+        return false;
+    };
+    addresses_are_adjacent(last_address, next_address)
+}
+
+fn merge_group(group: &mut DiffGroupBuilder, change: &Value) {
+    group.change_count += 1;
+
+    if let Some(address) = change_address(change) {
+        group.last_address = Some(address.to_string());
+        if group.sample_addresses.len() < 5 {
+            group.sample_addresses.push(address.to_string());
+        }
+        if let Some((col, row)) = parse_a1_coord(address) {
+            group.min_col = Some(group.min_col.map_or(col, |v| v.min(col)));
+            group.max_col = Some(group.max_col.map_or(col, |v| v.max(col)));
+            group.min_row = Some(group.min_row.map_or(row, |v| v.min(row)));
+            group.max_row = Some(group.max_row.map_or(row, |v| v.max(row)));
+        }
+        return;
+    }
+
+    if let Some(item_name) = change_item_name(change)
+        && group.sample_items.len() < 5
+    {
+        group.sample_items.push(item_name.to_string());
+    }
+}
+
+fn finalize_group(group: DiffGroupBuilder, index: usize) -> DiffGroup {
+    DiffGroup {
+        group_id: format!("grp_{:04}", index + 1),
+        kind: group.kind,
+        group_type: group.group_type,
+        sheet: group.sheet,
+        change_count: group.change_count,
+        range: match (group.min_col, group.max_col, group.min_row, group.max_row) {
+            (Some(start_col), Some(end_col), Some(start_row), Some(end_row)) => {
+                Some(format_a1_range(start_col, end_col, start_row, end_row))
+            }
+            _ => None,
+        },
+        sample_addresses: group.sample_addresses,
+        sample_items: group.sample_items,
+    }
+}
+
+fn change_group_type(change: &Value) -> &str {
+    if let Some(subtype) = change_subtype_key(change) {
+        return subtype;
+    }
+    change_type_key(change)
 }
 
 fn change_kind(change: &Value) -> &'static str {
@@ -145,11 +337,60 @@ fn change_kind(change: &Value) -> &'static str {
     }
 }
 
+fn change_type_key(change: &Value) -> &str {
+    match change_kind(change) {
+        "cell" => change
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        "table" => match change.get("type").and_then(Value::as_str) {
+            Some("table_added") => "table_added",
+            Some("table_deleted") => "table_deleted",
+            Some("table_modified") => "table_modified",
+            _ => "table_unknown",
+        },
+        "name" => match change.get("type").and_then(Value::as_str) {
+            Some("name_added") => "name_added",
+            Some("name_deleted") => "name_deleted",
+            Some("name_modified") => "name_modified",
+            _ => "name_unknown",
+        },
+        _ => "unknown",
+    }
+}
+
+fn change_subtype_key(change: &Value) -> Option<&str> {
+    change.get("subtype").and_then(Value::as_str)
+}
+
 fn change_sheet_name(change: &Value) -> Option<&str> {
     change
         .get("sheet")
         .and_then(Value::as_str)
         .or_else(|| change.get("scope_sheet").and_then(Value::as_str))
+}
+
+fn change_address(change: &Value) -> Option<&str> {
+    change.get("address").and_then(Value::as_str)
+}
+
+fn change_item_name(change: &Value) -> Option<&str> {
+    change
+        .get("display_name")
+        .and_then(Value::as_str)
+        .or_else(|| change.get("name").and_then(Value::as_str))
+}
+
+fn group_sort_key(change: &Value) -> (String, String, String, String) {
+    (
+        change_kind(change).to_string(),
+        change_group_type(change).to_string(),
+        change_sheet_name(change).unwrap_or("").to_string(),
+        change_address(change)
+            .or_else(|| change_item_name(change))
+            .unwrap_or("")
+            .to_string(),
+    )
 }
 
 fn change_matches_filters(
@@ -202,6 +443,40 @@ fn range_intersects(range: &str, bounds: A1Bounds) -> bool {
         || candidate.start_col > bounds.end_col
         || candidate.end_row < bounds.start_row
         || candidate.start_row > bounds.end_row)
+}
+
+fn addresses_are_adjacent(left: &str, right: &str) -> bool {
+    let (left_col, left_row) = match parse_a1_coord(left) {
+        Some(v) => v,
+        None => return false,
+    };
+    let (right_col, right_row) = match parse_a1_coord(right) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    (left_row == right_row && left_col.abs_diff(right_col) == 1)
+        || (left_col == right_col && left_row.abs_diff(right_row) == 1)
+}
+
+fn format_a1_range(start_col: u32, end_col: u32, start_row: u32, end_row: u32) -> String {
+    let start = format!("{}{}", column_number_to_name(start_col), start_row);
+    let end = format!("{}{}", column_number_to_name(end_col), end_row);
+    if start == end {
+        start
+    } else {
+        format!("{}:{}", start, end)
+    }
+}
+
+fn column_number_to_name(mut col: u32) -> String {
+    let mut chars = Vec::new();
+    while col > 0 {
+        let rem = ((col - 1) % 26) as u8;
+        chars.push((b'A' + rem) as char);
+        col = (col - 1) / 26;
+    }
+    chars.iter().rev().collect()
 }
 
 fn parse_a1_range(raw: &str) -> Option<A1Bounds> {

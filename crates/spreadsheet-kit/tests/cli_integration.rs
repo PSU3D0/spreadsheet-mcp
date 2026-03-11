@@ -470,6 +470,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(diff.contains("Diff two workbook versions with summary-first, paged details"));
     assert!(diff.contains("Examples:"));
     assert!(diff.contains("asp diff baseline.xlsx candidate.xlsx"));
+    assert!(diff.contains("--exclude-recalc-result"));
 
     let create_help = run_cli(&["create-workbook", "--help"]);
     assert!(
@@ -6412,6 +6413,136 @@ fn cli_diff_sheet_and_range_filters_scope_results() {
     let changes = payload["changes"].as_array().expect("changes");
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0]["address"].as_str(), Some("B2"));
+}
+
+#[test]
+fn cli_diff_summary_includes_group_buckets_and_subtype_counts() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-group-summary-original.xlsx");
+    let modified = tmp.path().join("diff-group-summary-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+        "B3=25",
+        "C2==B2*3",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+    ]);
+    assert!(diff.status.success(), "stderr: {:?}", diff.stderr);
+
+    let payload = parse_stdout_json(&diff);
+    assert_eq!(payload["summary"]["counts_by_subtype"]["value_edit"], 2);
+    assert_eq!(payload["summary"]["counts_by_subtype"]["formula_edit"], 1);
+    assert_eq!(payload["summary"]["recalc_result_change_count"], 0);
+    assert_eq!(
+        payload["summary"]["direct_change_count"],
+        payload["change_count"]
+    );
+    assert_eq!(payload["summary"]["group_count"], 2);
+
+    let preview = payload["summary"]["group_preview"]
+        .as_array()
+        .expect("group preview");
+    assert_eq!(preview.len(), 2);
+    let value_group = preview
+        .iter()
+        .find(|group| group["group_type"] == "value_edit")
+        .expect("value_edit group");
+    assert_eq!(value_group["range"], "B2:B3");
+    assert_eq!(value_group["change_count"], 2);
+    let formula_group = preview
+        .iter()
+        .find(|group| group["group_type"] == "formula_edit")
+        .expect("formula_edit group");
+    assert_eq!(formula_group["range"], "C2");
+}
+
+#[test]
+fn cli_diff_can_exclude_recalc_result_noise() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-exclude-recalc-original.xlsx");
+    let modified = tmp.path().join("diff-exclude-recalc-modified.xlsx");
+    write_fixture(&original);
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let edit = run_cli(&[
+        "edit",
+        modified.to_str().expect("path utf8"),
+        "Sheet1",
+        "B2=11",
+    ]);
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let recalc = run_cli(&["recalculate", modified.to_str().expect("path utf8")]);
+    assert!(recalc.status.success(), "stderr: {:?}", recalc.stderr);
+
+    let full = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "50",
+    ]);
+    assert!(full.status.success(), "stderr: {:?}", full.stderr);
+    let full_payload = parse_stdout_json(&full);
+    assert_eq!(
+        full_payload["summary"]["counts_by_subtype"]["value_edit"],
+        1
+    );
+    let recalc_count = full_payload["summary"]["counts_by_subtype"]["recalc_result"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(
+        recalc_count >= 1,
+        "expected recalc churn, got {full_payload}"
+    );
+    assert_eq!(
+        full_payload["summary"]["recalc_result_change_count"],
+        recalc_count
+    );
+    assert_eq!(full_payload["summary"]["direct_change_count"], 1);
+    assert_eq!(
+        full_payload["change_count"].as_u64().unwrap_or(0),
+        recalc_count + 1
+    );
+
+    let filtered = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+        "--details",
+        "--limit",
+        "50",
+        "--exclude-recalc-result",
+    ]);
+    assert!(filtered.status.success(), "stderr: {:?}", filtered.stderr);
+    let filtered_payload = parse_stdout_json(&filtered);
+    assert_eq!(filtered_payload["change_count"], 1);
+    assert_eq!(filtered_payload["summary"]["recalc_result_change_count"], 0);
+    assert_eq!(filtered_payload["summary"]["direct_change_count"], 1);
+    assert_eq!(
+        filtered_payload["summary"]["filters"]["exclude_recalc_result"],
+        true
+    );
+    assert!(
+        filtered_payload["summary"]["counts_by_subtype"]
+            .get("recalc_result")
+            .is_none()
+    );
+    let changes = filtered_payload["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["address"], "B2");
 }
 
 #[test]

@@ -41,9 +41,9 @@ asp inspect-cells <workbook.xlsx> <Sheet> <targets> \
   --session <session_id> --session-workspace <dir>
 asp session materialize --session <session_id> --output <temp.xlsx> --workspace <dir>
 asp verify <base.xlsx> <temp.xlsx> --targets <Sheet!A1,...>
-asp diff <base.xlsx> <temp.xlsx> --details --limit 50
+asp diff <base.xlsx> <temp.xlsx> --details --limit 50 --exclude-recalc-result
 
-`asp verify` is the summary-first proof step: check target classifications plus new/resolved/preexisting errors, then use `asp diff` when you need deeper detail. Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` when you only want explicit target proof.
+`asp verify` is the summary-first proof step: check target classifications plus new/resolved/preexisting errors, then use `asp diff` when you need deeper detail. Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` when you only want explicit target proof. Add `--exclude-recalc-result` when you want a lower-noise change review focused on direct edits.
 
 # 7) Finalize
 asp session materialize --session <session_id> --output final_result.xlsx --workspace <dir>
