@@ -3702,3 +3702,302 @@ pub fn parse_shorthand_for_tests(entries: Vec<String>) -> Result<(Vec<CellEdit>,
     }
     Ok((edits, warnings))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_sheet<F>(configure: F) -> umya_spreadsheet::Spreadsheet
+    where
+        F: FnOnce(&mut umya_spreadsheet::Worksheet),
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        configure(sheet);
+        workbook
+    }
+
+    fn write_workbook_fixture<F>(name: &str, configure: F) -> (tempfile::TempDir, PathBuf)
+    where
+        F: FnOnce(&mut umya_spreadsheet::Worksheet),
+    {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join(name);
+        let workbook = with_sheet(configure);
+        umya_spreadsheet::writer::xlsx::write(&workbook, &path).expect("write workbook");
+        (tempdir, path)
+    }
+
+    fn seed_basic_region(sheet: &mut umya_spreadsheet::Worksheet) {
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+    }
+
+    fn set_formula(
+        sheet: &mut umya_spreadsheet::Worksheet,
+        address: &str,
+        formula: &str,
+        result: &str,
+    ) {
+        let cell = sheet.get_cell_mut(address);
+        cell.set_formula(formula);
+        cell.get_cell_value_mut().set_formula_result_default(result);
+    }
+
+    fn sample_append_rows() -> Vec<Vec<Option<MatrixCell>>> {
+        vec![vec![
+            Some(MatrixCell::Value(serde_json::json!("Cara"))),
+            Some(MatrixCell::Value(serde_json::json!(30))),
+        ]]
+    }
+
+    fn detect_primary_region_id(path: &Path, sheet_name: &str) -> u32 {
+        let config = Arc::new(local_workbook_config(path));
+        let workbook = WorkbookContext::load(&config, path).expect("load workbook");
+        let entry = workbook
+            .get_sheet_metrics(sheet_name)
+            .expect("sheet metrics");
+        entry
+            .detected_regions()
+            .into_iter()
+            .find(|region| region.bounds.starts_with("A1:"))
+            .or_else(|| entry.detected_regions().into_iter().next())
+            .expect("detected region")
+            .id
+    }
+
+    #[test]
+    fn footer_detects_exact_total_keyword() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Total");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'total'")
+        );
+    }
+
+    #[test]
+    fn footer_detects_grand_total_keyword() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Grand Total");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'grand total'")
+        );
+    }
+
+    #[test]
+    fn footer_detects_subtotal_keyword() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Subtotal");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'subtotal'")
+        );
+    }
+
+    #[test]
+    fn footer_detects_footer_keyword() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Footer");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'footer'")
+        );
+    }
+
+    #[test]
+    fn footer_detects_formula_summary_with_blank_label() {
+        let workbook = with_sheet(|sheet| {
+            set_formula(sheet, "B4", "SUM(B2:B3)", "30");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        assert_eq!(
+            footer_reason_for_row(sheet, 1, 2, 4).as_deref(),
+            Some("formula-bearing summary row 4")
+        );
+    }
+
+    #[test]
+    fn footer_detects_sparse_late_column_formula_summary() {
+        let workbook = with_sheet(|sheet| {
+            set_formula(sheet, "D4", "SUM(D2:D3)", "30");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        assert_eq!(
+            footer_reason_for_row(sheet, 1, 4, 4).as_deref(),
+            Some("formula-bearing summary row 4")
+        );
+    }
+
+    #[test]
+    fn footer_detection_trims_and_normalizes_case() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("  ToTaL  ");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'total'")
+        );
+    }
+
+    #[test]
+    fn footer_ignores_non_footer_total_phrase() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Total Revenue Plan");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        assert!(footer_reason_for_row(sheet, 1, 2, 4).is_none());
+    }
+
+    #[test]
+    fn detect_append_footer_returns_none_when_no_footer_row_exists() {
+        let (_tmp, path) = write_workbook_fixture("append-region-no-footer.xlsx", |sheet| {
+            seed_basic_region(sheet);
+        });
+
+        let detection = detect_append_footer(&path, "Sheet1", 1, 2, 3).expect("detect footer");
+        assert_eq!(detection, (None, None));
+    }
+
+    #[test]
+    fn detect_append_footer_prefers_region_end_row_when_it_is_summary() {
+        let (_tmp, path) = write_workbook_fixture("append-region-footer-at-end.xlsx", |sheet| {
+            seed_basic_region(sheet);
+            sheet.get_cell_mut("A4").set_value("Total");
+            set_formula(sheet, "B4", "SUM(B2:B3)", "30");
+        });
+
+        let detection = detect_append_footer(&path, "Sheet1", 1, 2, 4).expect("detect footer");
+        assert_eq!(
+            detection,
+            (Some(4), Some("footer keyword 'total' on row 4".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_append_footer_finds_summary_on_row_after_region_end() {
+        let (_tmp, path) = write_workbook_fixture("append-region-footer-after-end.xlsx", |sheet| {
+            seed_basic_region(sheet);
+            sheet.get_cell_mut("A4").set_value("Total");
+            set_formula(sheet, "B4", "SUM(B2:B3)", "30");
+        });
+
+        let detection = detect_append_footer(&path, "Sheet1", 1, 2, 3).expect("detect footer");
+        assert_eq!(
+            detection,
+            (Some(4), Some("footer keyword 'total' on row 4".to_string()))
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_inserts_before_footer_and_sets_target_range() {
+        let (_tmp, path) = write_workbook_fixture("append-region-plan-footer.xlsx", |sheet| {
+            seed_basic_region(sheet);
+            sheet.get_cell_mut("A4").set_value("Total");
+            set_formula(sheet, "B4", "SUM(B2:B3)", "30");
+        });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let plan = build_append_region_plan(&path, "Sheet1", region_id, sample_append_rows())
+            .expect("build plan");
+        assert_eq!(plan.footer_row, Some(4));
+        assert_eq!(plan.insert_at_row, 4);
+        assert_eq!(plan.target_anchor, "A4");
+        assert_eq!(plan.target_range, "A4:B4");
+        assert_eq!(plan.confidence, "high");
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn build_append_region_plan_warns_when_no_footer_is_detected() {
+        let (_tmp, path) = write_workbook_fixture("append-region-plan-no-footer.xlsx", |sheet| {
+            seed_basic_region(sheet);
+        });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let plan = build_append_region_plan(&path, "Sheet1", region_id, sample_append_rows())
+            .expect("build plan");
+        assert_eq!(plan.footer_row, None);
+        assert!(plan.insert_at_row >= 4);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("no footer row detected"))
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_rejects_payload_wider_than_region() {
+        let (_tmp, path) = write_workbook_fixture("append-region-plan-too-wide.xlsx", |sheet| {
+            seed_basic_region(sheet);
+        });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+        let rows = vec![vec![
+            Some(MatrixCell::Value(serde_json::json!("Cara"))),
+            Some(MatrixCell::Value(serde_json::json!(30))),
+            Some(MatrixCell::Value(serde_json::json!("extra"))),
+        ]];
+
+        let error = build_append_region_plan(&path, "Sheet1", region_id, rows)
+            .expect_err("payload wider than region should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("rows payload is wider than detected region")
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_rejects_zero_column_payload() {
+        let (_tmp, path) =
+            write_workbook_fixture("append-region-plan-empty-columns.xlsx", |sheet| {
+                seed_basic_region(sheet);
+            });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let error = build_append_region_plan(&path, "Sheet1", region_id, vec![Vec::new()])
+            .expect_err("zero-column payload should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("append-region rows payload must contain at least one non-empty column")
+        );
+    }
+}
