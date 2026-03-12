@@ -1147,6 +1147,48 @@ Diagnostics note:
         formula_parse_policy: Option<FormulaParsePolicy>,
     },
     #[command(
+        about = "Append rows into a detected region with footer-aware insertion",
+        after_long_help = "Examples:\n  asp append-region workbook.xlsx --sheet Sheet1 --region-id 0 --rows @rows.json --dry-run\n  asp append-region workbook.xlsx --sheet Sheet1 --region-id 0 --from-csv rows.csv --header --output updated.xlsx --force\n\nInput payloads:\n  Use exactly one of --rows or --from-csv.\n  --rows accepts a top-level JSON array of rows, or an object with a rows array.\n  Cells may be raw JSON scalars/null, {'v': ...} value cells, or {'f': 'FORMULA'} formula cells.\n  --from-csv imports CSV rows and treats empty fields as blanks; use --header to skip the first CSV row.\n\nBehavior:\n  - resolves a detected region from `asp sheet-overview` output\n  - inserts rows at the region end\n  - if the last region row or next row looks like a total/footer row, inserts before it\n  - writes the appended matrix into the inserted rows\n  - expands adjacent SUM footers below the insertion band"
+    )]
+    AppendRegion {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long = "sheet",
+            value_name = "SHEET",
+            help = "Sheet containing the detected region"
+        )]
+        sheet_name: String,
+        #[arg(
+            long = "region-id",
+            value_name = "ID",
+            help = "Detected region id from `asp sheet-overview`"
+        )]
+        region_id: u32,
+        #[arg(
+            long,
+            value_name = "ROWS_REF",
+            help = "Rows payload as @file or inline JSON"
+        )]
+        rows: Option<String>,
+        #[arg(
+            long = "from-csv",
+            value_name = "PATH",
+            help = "CSV file to append as rows"
+        )]
+        from_csv: Option<String>,
+        #[arg(long, help = "Skip first CSV row when importing --from-csv")]
+        header: bool,
+        #[arg(long, help = "Preview insertion plan without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply append to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
         about = "Apply stateless transform operations from an @ops payload",
         after_long_help = r#"Examples:
   agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run
@@ -2187,6 +2229,24 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
+        Commands::AppendRegion {
+            file,
+            sheet_name,
+            region_id,
+            rows,
+            from_csv,
+            header,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::append_region(
+                file, sheet_name, region_id, rows, from_csv, header, dry_run, in_place, output,
+                force,
+            )
+            .await
+        }
         Commands::TransformBatch {
             file,
             ops,
@@ -3132,6 +3192,46 @@ mod tests {
                 assert!(from_grid.is_none());
                 assert_eq!(from_csv.as_deref(), Some("data.csv"));
                 assert!(header);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_append_region_from_csv_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "append-region",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--region-id",
+            "7",
+            "--from-csv",
+            "rows.csv",
+            "--header",
+            "--dry-run",
+        ])
+        .expect("parse append-region csv");
+
+        match cli.command {
+            Commands::AppendRegion {
+                file,
+                sheet_name,
+                region_id,
+                rows,
+                from_csv,
+                header,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet_name, "Sheet1");
+                assert_eq!(region_id, 7);
+                assert!(rows.is_none());
+                assert_eq!(from_csv.as_deref(), Some("rows.csv"));
+                assert!(header);
+                assert!(dry_run);
             }
             other => panic!("unexpected command: {other:?}"),
         }

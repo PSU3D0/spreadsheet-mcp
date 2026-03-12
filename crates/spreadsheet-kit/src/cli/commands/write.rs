@@ -18,6 +18,7 @@ use crate::tools::fork::{
 };
 use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
 use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
+use crate::workbook::WorkbookContext;
 use anyhow::{Context, Result, anyhow, bail};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -1947,6 +1948,561 @@ fn parse_column_size_ops_payload(raw: &str) -> Result<ColumnSizeOpsPayload> {
         sheet_name,
         ops: normalized_ops,
     })
+}
+
+#[derive(Debug, Serialize)]
+struct AppendRegionResponse {
+    mode: String,
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    sheet_name: String,
+    region_id: u32,
+    region_bounds: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header_row: Option<u32>,
+    insert_at_row: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    footer_row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    footer_detection: Option<String>,
+    rows_appended: u32,
+    columns_written: u32,
+    target_anchor: String,
+    target_range: String,
+    expand_adjacent_sums: bool,
+    confidence: String,
+    warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    would_change: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changed: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct AppendRegionPlan {
+    sheet_name: String,
+    region_id: u32,
+    region_bounds: String,
+    header_row: Option<u32>,
+    insert_at_row: u32,
+    footer_row: Option<u32>,
+    footer_detection: Option<String>,
+    rows_appended: u32,
+    columns_written: u32,
+    target_anchor: String,
+    target_range: String,
+    confidence: String,
+    warnings: Vec<String>,
+    rows: Vec<Vec<Option<MatrixCell>>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn append_region(
+    file: PathBuf,
+    sheet_name: String,
+    region_id: u32,
+    rows_ref: Option<String>,
+    from_csv: Option<String>,
+    header: bool,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let selected_modes = dry_run as u8 + in_place as u8 + output.is_some() as u8;
+    if selected_modes != 1 {
+        return Err(invalid_argument(
+            "choose exactly one of --dry-run, --in-place, or --output <PATH>",
+        ));
+    }
+    if force && output.is_none() {
+        return Err(invalid_argument("--force requires --output <PATH>"));
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let rows = match (rows_ref, from_csv) {
+        (Some(rows_ref), None) => parse_append_region_rows_payload(&rows_ref)?,
+        (None, Some(csv_path)) => parse_append_region_rows_from_csv(&csv_path, header)?,
+        (Some(_), Some(_)) => {
+            return Err(invalid_argument(
+                "--rows and --from-csv are mutually exclusive",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid_argument(
+                "append-region requires exactly one of --rows or --from-csv",
+            ));
+        }
+    };
+    let plan = build_append_region_plan(&source, &sheet_name, region_id, rows)?;
+
+    if dry_run {
+        return Ok(serde_json::to_value(build_append_region_response(
+            &plan,
+            "dry_run",
+            source.display().to_string(),
+            None,
+            Some(true),
+            None,
+            None,
+        ))?);
+    }
+
+    if in_place {
+        let source_path = source.display().to_string();
+        let ((), temp_path) =
+            apply_to_temp_copy(&source, source.parent(), ".append-region-", |work_path| {
+                apply_append_region_plan_to_file(work_path, &plan)
+            })?;
+        atomic_replace_target(temp_path, &source, true)?;
+        return Ok(serde_json::to_value(build_append_region_response(
+            &plan,
+            "in_place",
+            source_path.clone(),
+            Some(source_path.clone()),
+            None,
+            Some(source_path),
+            Some(true),
+        ))?);
+    }
+
+    let target = runtime.normalize_destination_path(
+        output
+            .as_ref()
+            .expect("output required unless dry-run or in-place"),
+    )?;
+    ensure_output_path_is_distinct(&source, &target)?;
+    if path_entry_exists(&target)? && !force {
+        return Err(output_exists(format!(
+            "output path '{}' already exists",
+            target.display()
+        )));
+    }
+
+    let source_path = source.display().to_string();
+    let target_path = target.display().to_string();
+    let ((), temp_path) =
+        apply_to_temp_copy(&source, target.parent(), ".append-region-", |work_path| {
+            apply_append_region_plan_to_file(work_path, &plan)
+        })?;
+    atomic_replace_target(temp_path, &target, force)?;
+
+    Ok(serde_json::to_value(build_append_region_response(
+        &plan,
+        "output",
+        target_path.clone(),
+        Some(source_path),
+        None,
+        Some(target_path),
+        Some(true),
+    ))?)
+}
+
+fn build_append_region_response(
+    plan: &AppendRegionPlan,
+    mode: &str,
+    file: String,
+    source_path: Option<String>,
+    would_change: Option<bool>,
+    target_path: Option<String>,
+    changed: Option<bool>,
+) -> AppendRegionResponse {
+    AppendRegionResponse {
+        mode: mode.to_string(),
+        file,
+        source_path,
+        target_path,
+        sheet_name: plan.sheet_name.clone(),
+        region_id: plan.region_id,
+        region_bounds: plan.region_bounds.clone(),
+        header_row: plan.header_row,
+        insert_at_row: plan.insert_at_row,
+        footer_row: plan.footer_row,
+        footer_detection: plan.footer_detection.clone(),
+        rows_appended: plan.rows_appended,
+        columns_written: plan.columns_written,
+        target_anchor: plan.target_anchor.clone(),
+        target_range: plan.target_range.clone(),
+        expand_adjacent_sums: true,
+        confidence: plan.confidence.clone(),
+        warnings: plan.warnings.clone(),
+        would_change,
+        changed,
+    }
+}
+
+fn build_append_region_plan(
+    source: &Path,
+    sheet_name: &str,
+    region_id: u32,
+    rows: Vec<Vec<Option<MatrixCell>>>,
+) -> Result<AppendRegionPlan> {
+    if rows.is_empty() {
+        return Err(invalid_argument(
+            "append-region requires at least one row in the rows payload",
+        ));
+    }
+
+    let config = Arc::new(local_workbook_config(source));
+    let workbook = WorkbookContext::load(&config, source)?;
+    let region = workbook.detected_region(sheet_name, region_id).map_err(|_| {
+        invalid_argument(format!(
+            "region {} was not found on sheet '{}'; run `asp sheet-overview {} {}` to inspect detected region ids",
+            region_id,
+            sheet_name,
+            source.display(),
+            sheet_name
+        ))
+    })?;
+
+    let bounds = parse_append_region_bounds(&region.bounds).ok_or_else(|| {
+        invalid_argument(format!(
+            "detected region {} on sheet '{}' has unsupported bounds '{}'",
+            region_id, sheet_name, region.bounds
+        ))
+    })?;
+
+    let columns_written = rows.iter().map(Vec::len).max().unwrap_or(0) as u32;
+    if columns_written == 0 {
+        return Err(invalid_argument(
+            "append-region rows payload must contain at least one non-empty column",
+        ));
+    }
+    let region_width = bounds.end_col - bounds.start_col + 1;
+    if columns_written > region_width {
+        return Err(invalid_argument(format!(
+            "rows payload is wider than detected region {} on sheet '{}': payload columns={}, region columns={}",
+            region_id, sheet_name, columns_written, region_width
+        )));
+    }
+
+    let (footer_row, footer_detection) = detect_append_footer(
+        source,
+        sheet_name,
+        bounds.start_col,
+        bounds.end_col,
+        bounds.end_row,
+    )?;
+    let insert_at_row = footer_row.unwrap_or(bounds.end_row + 1);
+    let target_anchor = format!(
+        "{}{}",
+        column_number_to_name(bounds.start_col),
+        insert_at_row
+    );
+    let target_range = format_a1_range(
+        bounds.start_col,
+        bounds.start_col + columns_written - 1,
+        insert_at_row,
+        insert_at_row + rows.len() as u32 - 1,
+    );
+
+    let mut warnings = Vec::new();
+    if region.headers_truncated {
+        warnings.push(
+            "detected region headers were truncated; verify the append target carefully"
+                .to_string(),
+        );
+    }
+    if footer_row.is_none() {
+        warnings.push("no footer row detected; appending at detected region end".to_string());
+    }
+
+    let confidence = if footer_row.is_some() || region.header_row.is_some() {
+        "high"
+    } else {
+        "medium"
+    };
+
+    Ok(AppendRegionPlan {
+        sheet_name: sheet_name.to_string(),
+        region_id,
+        region_bounds: region.bounds,
+        header_row: region.header_row,
+        insert_at_row,
+        footer_row,
+        footer_detection,
+        rows_appended: rows.len() as u32,
+        columns_written,
+        target_anchor,
+        target_range,
+        confidence: confidence.to_string(),
+        warnings,
+        rows,
+    })
+}
+
+fn apply_append_region_plan_to_file(path: &Path, plan: &AppendRegionPlan) -> Result<()> {
+    let structure_ops = vec![StructureOp::InsertRows {
+        sheet_name: plan.sheet_name.clone(),
+        at_row: plan.insert_at_row,
+        count: plan.rows_appended,
+        expand_adjacent_sums: true,
+    }];
+    apply_structure_ops_to_file(path, &structure_ops, FormulaParsePolicy::Warn)?;
+
+    let transform_ops = vec![TransformOp::WriteMatrix {
+        sheet_name: plan.sheet_name.clone(),
+        anchor: plan.target_anchor.clone(),
+        rows: plan.rows.clone(),
+        overwrite_formulas: false,
+    }];
+    apply_transform_ops_to_file(path, &transform_ops)?;
+    Ok(())
+}
+
+fn parse_append_region_rows_from_csv(
+    csv_path: &str,
+    skip_header: bool,
+) -> Result<Vec<Vec<Option<MatrixCell>>>> {
+    let csv_raw = fs::read_to_string(csv_path).map_err(|e| {
+        invalid_argument(format!("unable to read --from-csv '{}': {}", csv_path, e))
+    })?;
+    let mut records = parse_csv_records(&csv_raw)
+        .map_err(|e| invalid_argument(format!("invalid CSV in '{}': {}", csv_path, e)))?;
+
+    if skip_header && !records.is_empty() {
+        records.remove(0);
+    }
+
+    Ok(records
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|field| {
+                    let value = csv_field_to_json(&field);
+                    if value.is_null() {
+                        None
+                    } else {
+                        Some(MatrixCell::Value(value))
+                    }
+                })
+                .collect()
+        })
+        .collect())
+}
+
+fn parse_append_region_rows_payload(raw_ref: &str) -> Result<Vec<Vec<Option<MatrixCell>>>> {
+    let raw = if let Some(path) = raw_ref.strip_prefix('@') {
+        fs::read_to_string(path)
+            .with_context(|| format!("failed to read rows payload file '{}'", path))?
+    } else {
+        raw_ref.to_string()
+    };
+
+    let value: Value = serde_json::from_str(&raw).map_err(|error| {
+        invalid_argument(format!(
+            "rows payload must be valid JSON (top-level array or object with rows array): {}",
+            error
+        ))
+    })?;
+
+    let rows_value = if let Some(rows) = value.get("rows") {
+        rows
+    } else {
+        &value
+    };
+    let rows = rows_value.as_array().ok_or_else(|| {
+        invalid_argument("rows payload must be a top-level array or object with a 'rows' array")
+    })?;
+
+    rows.iter()
+        .map(|row| {
+            let cells = row.as_array().ok_or_else(|| {
+                invalid_argument("each appended row must be a JSON array of cell values")
+            })?;
+            cells.iter().map(parse_append_matrix_cell).collect()
+        })
+        .collect()
+}
+
+fn parse_append_matrix_cell(value: &Value) -> Result<Option<MatrixCell>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(map) if map.len() == 1 && map.contains_key("f") => {
+            let formula = map
+                .get("f")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid_argument("formula cells must use {'f': 'FORMULA'}"))?;
+            Ok(Some(MatrixCell::Formula(formula.to_string())))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("v") => Ok(Some(
+            MatrixCell::Value(map.get("v").cloned().unwrap_or(Value::Null)),
+        )),
+        Value::Object(_) => Err(invalid_argument(
+            "object cells must use {'v': ...} for values or {'f': 'FORMULA'} for formulas",
+        )),
+        other => Ok(Some(MatrixCell::Value(other.clone()))),
+    }
+}
+
+fn detect_append_footer(
+    source: &Path,
+    sheet_name: &str,
+    start_col: u32,
+    end_col: u32,
+    region_end_row: u32,
+) -> Result<(Option<u32>, Option<String>)> {
+    let book = umya_spreadsheet::reader::xlsx::read(source)
+        .with_context(|| format!("failed to read workbook '{}'", source.display()))?;
+    let sheet = book
+        .get_sheet_by_name(sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", sheet_name)))?;
+
+    for row in [region_end_row, region_end_row + 1] {
+        if let Some(reason) = footer_reason_for_row(sheet, start_col, end_col, row) {
+            return Ok((Some(row), Some(reason)));
+        }
+    }
+
+    Ok((None, None))
+}
+
+fn footer_reason_for_row(
+    sheet: &umya_spreadsheet::Worksheet,
+    start_col: u32,
+    end_col: u32,
+    row: u32,
+) -> Option<String> {
+    let mut saw_non_empty = false;
+    let mut saw_formula = false;
+    for col in start_col..=end_col {
+        let Some(cell) = sheet.get_cell((col, row)) else {
+            continue;
+        };
+        let value = cell.get_value().trim().to_ascii_lowercase();
+        let formula = cell.get_formula().trim().to_string();
+        if !formula.is_empty() {
+            saw_formula = true;
+        }
+        if value.is_empty() {
+            continue;
+        }
+        saw_non_empty = true;
+        if value.contains("grand total")
+            || value == "total"
+            || value.contains("subtotal")
+            || value.contains("footer")
+        {
+            return Some(format!("footer keyword '{}' on row {}", value, row));
+        }
+    }
+
+    (saw_formula && (saw_non_empty || start_col <= end_col))
+        .then(|| format!("formula-bearing summary row {}", row))
+}
+
+fn local_workbook_config(source: &Path) -> ServerConfig {
+    let workspace_root = source
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    ServerConfig {
+        workspace_root: workspace_root.clone(),
+        screenshot_dir: workspace_root.join("screenshots"),
+        path_mappings: Vec::new(),
+        cache_capacity: 8,
+        supported_extensions: vec![
+            "xlsx".to_string(),
+            "xlsm".to_string(),
+            "xls".to_string(),
+            "xlsb".to_string(),
+        ],
+        single_workbook: None,
+        enabled_tools: None,
+        transport: TransportKind::Http,
+        http_bind_address: "127.0.0.1:8079".parse().expect("http bind address"),
+        recalc_enabled: false,
+        recalc_backend: RecalcBackendKind::Auto,
+        vba_enabled: false,
+        max_concurrent_recalcs: 2,
+        tool_timeout_ms: Some(30_000),
+        max_response_bytes: Some(1_000_000),
+        output_profile: OutputProfile::TokenDense,
+        max_payload_bytes: Some(65_536),
+        max_cells: Some(10_000),
+        max_items: Some(500),
+        allow_overwrite: false,
+    }
+}
+
+fn parse_append_region_bounds(raw: &str) -> Option<AppendBounds> {
+    let (left, right) = raw.split_once(':').map_or((raw, raw), |(a, b)| (a, b));
+    let (start_col, start_row) = parse_append_coord(left)?;
+    let (end_col, end_row) = parse_append_coord(right)?;
+    Some(AppendBounds {
+        start_col: start_col.min(end_col),
+        end_col: start_col.max(end_col),
+        end_row: start_row.max(end_row),
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AppendBounds {
+    start_col: u32,
+    end_col: u32,
+    end_row: u32,
+}
+
+fn parse_append_coord(raw: &str) -> Option<(u32, u32)> {
+    let coord = raw.trim().trim_start_matches('$');
+    if coord.is_empty() {
+        return None;
+    }
+
+    let mut letters = String::new();
+    let mut digits = String::new();
+    for ch in coord.chars() {
+        if ch == '$' {
+            continue;
+        }
+        if ch.is_ascii_alphabetic() {
+            if !digits.is_empty() {
+                return None;
+            }
+            letters.push(ch.to_ascii_uppercase());
+        } else if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else {
+            return None;
+        }
+    }
+
+    if letters.is_empty() || digits.is_empty() {
+        return None;
+    }
+
+    let mut col = 0u32;
+    for ch in letters.bytes() {
+        col = col
+            .saturating_mul(26)
+            .saturating_add((ch - b'A' + 1) as u32);
+    }
+    let row = digits.parse().ok()?;
+    (col > 0 && row > 0).then_some((col, row))
+}
+
+fn column_number_to_name(mut col: u32) -> String {
+    let mut chars = Vec::new();
+    while col > 0 {
+        let rem = ((col - 1) % 26) as u8;
+        chars.push((b'A' + rem) as char);
+        col = (col - 1) / 26;
+    }
+    chars.iter().rev().collect()
+}
+
+fn format_a1_range(start_col: u32, end_col: u32, start_row: u32, end_row: u32) -> String {
+    let start = format!("{}{}", column_number_to_name(start_col), start_row);
+    let end = format!("{}{}", column_number_to_name(end_col), end_row);
+    if start == end {
+        start
+    } else {
+        format!("{}:{}", start, end)
+    }
 }
 
 fn parse_ops_payload<T: DeserializeOwned>(

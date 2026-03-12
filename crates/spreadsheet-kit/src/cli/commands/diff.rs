@@ -21,6 +21,7 @@ struct DiffGroup {
     group_id: String,
     kind: String,
     group_type: String,
+    review_priority: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sheet: Option<String>,
     change_count: u32,
@@ -30,6 +31,20 @@ struct DiffGroup {
     sample_addresses: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sample_items: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SheetDiffSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sheet: Option<String>,
+    total_changes: u32,
+    direct_change_count: u32,
+    recalc_result_change_count: u32,
+    counts_by_subtype: BTreeMap<String, u32>,
+    group_count: u32,
+    counts_by_group_type: BTreeMap<String, u32>,
+    group_preview: Vec<DiffGroup>,
+    group_preview_truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +150,7 @@ pub async fn diff(
     let total_changes = filtered.len() as u32;
     let direct_change_count = total_changes.saturating_sub(recalc_result_change_count);
     let groups = build_groups(&filtered);
+    let sheet_summaries = build_sheet_summaries(&filtered, &groups);
     let mut counts_by_group_type: BTreeMap<String, u32> = BTreeMap::new();
     for group in &groups {
         *counts_by_group_type
@@ -177,6 +193,7 @@ pub async fn diff(
         "counts_by_group_type": counts_by_group_type,
         "group_preview": group_preview,
         "group_preview_truncated": group_preview_truncated,
+        "sheet_summaries": sheet_summaries,
         "filters": {
             "exclude_recalc_result": exclude_recalc_result,
         }
@@ -225,7 +242,7 @@ fn build_groups(changes: &[Value]) -> Vec<DiffGroup> {
                 current = Some(active);
             }
             Some(active) => {
-                out.push(finalize_group(active, out.len()));
+                out.push(finalize_group(active, 0));
                 current = Some(next);
             }
             None => current = Some(next),
@@ -233,9 +250,13 @@ fn build_groups(changes: &[Value]) -> Vec<DiffGroup> {
     }
 
     if let Some(active) = current {
-        out.push(finalize_group(active, out.len()));
+        out.push(finalize_group(active, 0));
     }
 
+    out.sort_by_key(diff_group_sort_key);
+    for (idx, group) in out.iter_mut().enumerate() {
+        group.group_id = format!("grp_{:04}", idx + 1);
+    }
     out
 }
 
@@ -301,10 +322,12 @@ fn merge_group(group: &mut DiffGroupBuilder, change: &Value) {
 }
 
 fn finalize_group(group: DiffGroupBuilder, index: usize) -> DiffGroup {
+    let group_type = group.group_type;
     DiffGroup {
         group_id: format!("grp_{:04}", index + 1),
         kind: group.kind,
-        group_type: group.group_type,
+        review_priority: review_priority_label(&group_type).to_string(),
+        group_type,
         sheet: group.sheet,
         change_count: group.change_count,
         range: match (group.min_col, group.max_col, group.min_row, group.max_row) {
@@ -381,16 +404,154 @@ fn change_item_name(change: &Value) -> Option<&str> {
         .or_else(|| change.get("name").and_then(Value::as_str))
 }
 
-fn group_sort_key(change: &Value) -> (String, String, String, String) {
+fn group_sort_key(change: &Value) -> (String, String, u32, u32, u32, u32, String) {
+    let (start_row, start_col, end_row, end_col, label) =
+        change_position_key(change_address(change), change_item_name(change));
     (
-        change_kind(change).to_string(),
-        change_group_type(change).to_string(),
         change_sheet_name(change).unwrap_or("").to_string(),
-        change_address(change)
-            .or_else(|| change_item_name(change))
-            .unwrap_or("")
-            .to_string(),
+        change_group_type(change).to_string(),
+        start_row,
+        start_col,
+        end_row,
+        end_col,
+        label,
     )
+}
+
+fn diff_group_sort_key(group: &DiffGroup) -> (u8, String, u32, u32, u32, u32, String, String) {
+    let (start_row, start_col, end_row, end_col, label) = change_position_key(
+        group
+            .range
+            .as_deref()
+            .or_else(|| group.sample_addresses.first().map(String::as_str)),
+        group.sample_items.first().map(String::as_str),
+    );
+    (
+        review_priority_rank(&group.group_type),
+        group.sheet.clone().unwrap_or_default(),
+        start_row,
+        start_col,
+        end_row,
+        end_col,
+        group.group_type.clone(),
+        label,
+    )
+}
+
+fn review_priority_rank(group_type: &str) -> u8 {
+    match group_type {
+        "formula_edit" | "value_edit" | "style_edit" | "added" | "deleted" => 0,
+        "table_modified" | "name_modified" | "table_added" | "table_deleted" | "name_added"
+        | "name_deleted" => 1,
+        "recalc_result" => 2,
+        _ => 3,
+    }
+}
+
+fn review_priority_label(group_type: &str) -> &'static str {
+    match review_priority_rank(group_type) {
+        0 => "direct",
+        1 => "structural",
+        2 => "derived",
+        _ => "other",
+    }
+}
+
+fn change_position_key(
+    address_or_range: Option<&str>,
+    item_name: Option<&str>,
+) -> (u32, u32, u32, u32, String) {
+    if let Some(text) = address_or_range {
+        if let Some(bounds) = parse_a1_range(text) {
+            return (
+                bounds.start_row,
+                bounds.start_col,
+                bounds.end_row,
+                bounds.end_col,
+                text.to_string(),
+            );
+        }
+        if let Some((col, row)) = parse_a1_coord(text) {
+            return (row, col, row, col, text.to_string());
+        }
+    }
+
+    (
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+        item_name.unwrap_or("").to_string(),
+    )
+}
+
+fn build_sheet_summaries(changes: &[Value], groups: &[DiffGroup]) -> Vec<SheetDiffSummary> {
+    let mut counts_by_sheet: BTreeMap<Option<String>, SheetDiffSummary> = BTreeMap::new();
+
+    for change in changes {
+        let sheet_key = change_sheet_name(change).map(str::to_string);
+        let entry = counts_by_sheet
+            .entry(sheet_key.clone())
+            .or_insert_with(|| SheetDiffSummary {
+                sheet: sheet_key.clone(),
+                total_changes: 0,
+                direct_change_count: 0,
+                recalc_result_change_count: 0,
+                counts_by_subtype: BTreeMap::new(),
+                group_count: 0,
+                counts_by_group_type: BTreeMap::new(),
+                group_preview: Vec::new(),
+                group_preview_truncated: false,
+            });
+        entry.total_changes += 1;
+        match change_subtype_key(change) {
+            Some("recalc_result") => {
+                entry.recalc_result_change_count += 1;
+                *entry
+                    .counts_by_subtype
+                    .entry("recalc_result".to_string())
+                    .or_default() += 1;
+            }
+            Some(subtype) => {
+                entry.direct_change_count += 1;
+                *entry
+                    .counts_by_subtype
+                    .entry(subtype.to_string())
+                    .or_default() += 1;
+            }
+            None => {
+                entry.direct_change_count += 1;
+            }
+        }
+    }
+
+    for group in groups {
+        let entry = counts_by_sheet
+            .entry(group.sheet.clone())
+            .or_insert_with(|| SheetDiffSummary {
+                sheet: group.sheet.clone(),
+                total_changes: 0,
+                direct_change_count: 0,
+                recalc_result_change_count: 0,
+                counts_by_subtype: BTreeMap::new(),
+                group_count: 0,
+                counts_by_group_type: BTreeMap::new(),
+                group_preview: Vec::new(),
+                group_preview_truncated: false,
+            });
+        entry.group_count += 1;
+        *entry
+            .counts_by_group_type
+            .entry(group.group_type.clone())
+            .or_default() += 1;
+        if entry.group_preview.len() < 10 {
+            entry.group_preview.push(group.clone());
+        } else {
+            entry.group_preview_truncated = true;
+        }
+    }
+
+    counts_by_sheet.into_values().collect()
 }
 
 fn change_matches_filters(

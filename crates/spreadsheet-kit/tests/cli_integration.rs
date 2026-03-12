@@ -361,6 +361,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root.contains("global --output-format csv is currently unsupported"));
     assert!(root.contains("find-value"));
     assert!(root.contains("verify"));
+    assert!(root.contains("append-region"));
     assert!(root.contains("named-ranges"));
     assert!(root.contains("find-formula"));
     assert!(root.contains("scan-volatiles"));
@@ -568,6 +569,21 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
             "Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset"
         )
     );
+
+    let append_region_help = run_cli(&["append-region", "--help"]);
+    assert!(
+        append_region_help.status.success(),
+        "stderr: {:?}",
+        append_region_help.stderr
+    );
+    let append_region = parse_stdout_text(&append_region_help);
+    assert!(
+        append_region.contains("Append rows into a detected region with footer-aware insertion")
+    );
+    assert!(append_region.contains("--region-id"));
+    assert!(append_region.contains("--rows"));
+    assert!(append_region.contains("--from-csv"));
+    assert!(append_region.contains("--header"));
 
     let transform_help = run_cli(&["transform-batch", "--help"]);
     assert!(
@@ -6450,6 +6466,20 @@ fn cli_diff_summary_includes_group_buckets_and_subtype_counts() {
     );
     assert_eq!(payload["summary"]["group_count"], 2);
 
+    let sheet_summaries = payload["summary"]["sheet_summaries"]
+        .as_array()
+        .expect("sheet summaries");
+    assert_eq!(sheet_summaries.len(), 1);
+    assert_eq!(sheet_summaries[0]["sheet"], "Sheet1");
+    assert_eq!(sheet_summaries[0]["total_changes"], 3);
+    assert_eq!(sheet_summaries[0]["direct_change_count"], 3);
+    assert_eq!(sheet_summaries[0]["recalc_result_change_count"], 0);
+    assert_eq!(sheet_summaries[0]["counts_by_group_type"]["value_edit"], 1);
+    assert_eq!(
+        sheet_summaries[0]["counts_by_group_type"]["formula_edit"],
+        1
+    );
+
     let preview = payload["summary"]["group_preview"]
         .as_array()
         .expect("group preview");
@@ -6460,11 +6490,13 @@ fn cli_diff_summary_includes_group_buckets_and_subtype_counts() {
         .expect("value_edit group");
     assert_eq!(value_group["range"], "B2:B3");
     assert_eq!(value_group["change_count"], 2);
+    assert_eq!(value_group["review_priority"], "direct");
     let formula_group = preview
         .iter()
         .find(|group| group["group_type"] == "formula_edit")
         .expect("formula_edit group");
     assert_eq!(formula_group["range"], "C2");
+    assert_eq!(formula_group["review_priority"], "direct");
 }
 
 #[test]
@@ -6516,6 +6548,16 @@ fn cli_diff_can_exclude_recalc_result_noise() {
         full_payload["change_count"].as_u64().unwrap_or(0),
         recalc_count + 1
     );
+    let full_sheet_summaries = full_payload["summary"]["sheet_summaries"]
+        .as_array()
+        .expect("sheet summaries");
+    assert_eq!(full_sheet_summaries.len(), 1);
+    assert_eq!(full_sheet_summaries[0]["sheet"], "Sheet1");
+    assert_eq!(full_sheet_summaries[0]["direct_change_count"], 1);
+    assert_eq!(
+        full_sheet_summaries[0]["recalc_result_change_count"],
+        recalc_count
+    );
 
     let filtered = run_cli(&[
         "diff",
@@ -6543,6 +6585,363 @@ fn cli_diff_can_exclude_recalc_result_noise() {
     let changes = filtered_payload["changes"].as_array().expect("changes");
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0]["address"], "B2");
+
+    let full_groups = full_payload["groups"].as_array().expect("groups");
+    assert_eq!(full_groups[0]["review_priority"], "direct");
+    assert_ne!(full_groups[0]["group_type"], "recalc_result");
+    assert_eq!(
+        full_groups.last().expect("at least one group")["review_priority"],
+        "derived"
+    );
+}
+
+#[test]
+fn cli_append_region_dry_run_reports_footer_aware_plan() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-dry-run.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        sheet.get_cell_mut("A4").set_value("Total");
+        let total = sheet.get_cell_mut("B4");
+        total.set_formula("SUM(B2:B3)");
+        total.get_cell_value_mut().set_formula_result_default("30");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["mode"], "dry_run");
+    assert_eq!(payload["sheet_name"], "Sheet1");
+    assert_eq!(payload["insert_at_row"], 4);
+    assert_eq!(payload["footer_row"], 4);
+    assert_eq!(payload["target_anchor"], "A4");
+    assert_eq!(payload["target_range"], "A4:B4");
+    assert_eq!(payload["rows_appended"], 1);
+    assert_eq!(payload["columns_written"], 2);
+    assert_eq!(payload["expand_adjacent_sums"], true);
+    assert_eq!(payload["confidence"], "high");
+    assert_eq!(payload["would_change"], true);
+}
+
+#[test]
+fn cli_append_region_output_inserts_before_footer_and_expands_sum() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-output-source.xlsx");
+    let output_path = tmp.path().join("append-region-output-target.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        sheet.get_cell_mut("A4").set_value("Total");
+        let total = sheet.get_cell_mut("B4");
+        total.set_formula("SUM(B2:B3)");
+        total.get_cell_value_mut().set_formula_result_default("30");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--output",
+        out,
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["mode"], "output");
+    assert_eq!(payload["file"], out);
+    assert_eq!(payload["target_path"], out);
+    assert_eq!(payload["changed"], true);
+
+    let book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1 exists");
+    assert_eq!(sheet.get_cell("A4").expect("A4").get_value(), "Cara");
+    assert_eq!(sheet.get_cell("B4").expect("B4").get_value(), "30");
+    assert_eq!(sheet.get_cell("A5").expect("A5").get_value(), "Total");
+    assert_eq!(
+        sheet.get_cell("B5").expect("B5").get_formula(),
+        "SUM(B2:B4)"
+    );
+}
+
+#[test]
+fn cli_append_region_detects_formula_footer_even_with_blank_label_cell() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-blank-footer.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        let total = sheet.get_cell_mut("B4");
+        total.set_formula("SUM(B2:B3)");
+        total.get_cell_value_mut().set_formula_result_default("30");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["footer_row"], 4);
+    assert_eq!(payload["insert_at_row"], 4);
+    assert!(
+        payload["footer_detection"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("formula-bearing summary row")
+    );
+}
+
+#[test]
+fn cli_append_region_from_csv_skips_header_and_handles_quotes_blanks_and_crlf() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-csv-source.xlsx");
+    let output_path = tmp.path().join("append-region-csv-target.xlsx");
+    let csv_path = tmp.path().join("rows.csv");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("C1").set_value("Notes");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        sheet.get_cell_mut("A4").set_value("Total");
+        let total = sheet.get_cell_mut("B4");
+        total.set_formula("SUM(B2:B3)");
+        total.get_cell_value_mut().set_formula_result_default("30");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(
+        &csv_path,
+        "Name,Amount,Notes\r\n\"Cara, Jr\",30,\r\nDina,40,\"Needs review\"\r\n",
+    )
+    .expect("write csv payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let out = output_path.to_str().expect("output path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--from-csv",
+        csv_path.to_str().expect("csv utf8"),
+        "--header",
+        "--output",
+        out,
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["rows_appended"], 2);
+    assert_eq!(payload["columns_written"], 3);
+    assert_eq!(payload["insert_at_row"], 4);
+    assert_eq!(payload["target_range"], "A4:C5");
+
+    let book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1 exists");
+    assert_eq!(sheet.get_cell("A4").expect("A4").get_value(), "Cara, Jr");
+    assert_eq!(sheet.get_cell("B4").expect("B4").get_value(), "30");
+    assert!(
+        sheet.get_cell("C4").is_none()
+            || sheet
+                .get_cell("C4")
+                .expect("C4 present when not none")
+                .get_value()
+                .is_empty()
+    );
+    assert_eq!(sheet.get_cell("A5").expect("A5").get_value(), "Dina");
+    assert_eq!(sheet.get_cell("B5").expect("B5").get_value(), "40");
+    assert_eq!(
+        sheet.get_cell("C5").expect("C5").get_value(),
+        "Needs review"
+    );
+    assert_eq!(sheet.get_cell("A6").expect("A6").get_value(), "Total");
+    assert_eq!(
+        sheet.get_cell("B6").expect("B6").get_formula(),
+        "SUM(B2:B5)"
+    );
+}
+
+#[test]
+fn cli_append_region_rejects_rows_and_from_csv_together() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-invalid-source.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+    let csv_path = tmp.path().join("rows.csv");
+
+    write_fixture(&workbook_path);
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+    fs::write(&csv_path, "Name,Amount\nCara,30\n").expect("write csv payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--from-csv",
+        csv_path.to_str().expect("csv utf8"),
+        "--dry-run",
+    ]);
+    assert!(!output.status.success());
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "INVALID_ARGUMENT");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("mutually exclusive")
+    );
+}
+
+#[test]
+fn cli_diff_groups_multi_digit_row_runs_by_coordinates_not_lexicographic_order() {
+    let tmp = tempdir().expect("tempdir");
+    let original = tmp.path().join("diff-multi-digit-original.xlsx");
+    let modified = tmp.path().join("diff-multi-digit-modified.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        for row in 2..=12u32 {
+            sheet.get_cell_mut((2, row)).set_value_number(row as i32);
+        }
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &original).expect("write original");
+    fs::copy(&original, &modified).expect("copy workbook");
+
+    let mut args = vec![
+        "edit".to_string(),
+        modified.to_str().expect("path utf8").to_string(),
+        "Sheet1".to_string(),
+    ];
+    for row in 2..=12u32 {
+        args.push(format!("B{}={}", row, row + 100));
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let edit = run_cli(arg_refs.as_slice());
+    assert!(edit.status.success(), "stderr: {:?}", edit.stderr);
+
+    let diff = run_cli(&[
+        "diff",
+        original.to_str().expect("path utf8"),
+        modified.to_str().expect("path utf8"),
+    ]);
+    assert!(diff.status.success(), "stderr: {:?}", diff.stderr);
+    let payload = parse_stdout_json(&diff);
+    assert_eq!(payload["summary"]["group_count"], 1);
+    let preview = payload["summary"]["group_preview"]
+        .as_array()
+        .expect("group preview");
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0]["group_type"], "value_edit");
+    assert_eq!(preview[0]["range"], "B2:B12");
+    assert_eq!(preview[0]["change_count"], 11);
 }
 
 #[test]
