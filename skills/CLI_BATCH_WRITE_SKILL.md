@@ -119,7 +119,7 @@ Preferred canonical form includes top-level `sheet_name`:
 1. Run `asp recalculate` if formulas changed
 2. Run `asp verify <baseline> <current> --targets <Sheet!A1,...>` for explicit proof (target classifications + new/resolved/preexisting errors). Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` for pure target proof.
 3. Run `asp diff` to confirm intent. Add `--exclude-recalc-result` when you want a lower-noise review focused on direct edits.
-4. Use `asp append-region ...` when you need to append tabular rows before totals/subtotals without hand-calculating insertion points. It accepts either `--rows @rows.json` or `--from-csv rows.csv --header`.
+4. Use `asp append-region ...` when you need to append tabular rows before totals/subtotals without hand-calculating insertion points. It accepts either `--rows @rows.json` or `--from-csv rows.csv --header`, and it can target either `--region-id` or `--table-name` with `--footer-policy auto|before-footer|append-at-end`.
 5. Use `asp inspect-cells` on critical cells/ranges
 5. Use `asp recalculate --changed-cells` for a change summary
 

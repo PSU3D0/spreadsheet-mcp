@@ -92,6 +92,13 @@ pub enum LayoutRenderArg {
     Both,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AppendRegionFooterPolicyArg {
+    Auto,
+    BeforeFooter,
+    AppendAtEnd,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum SheetportManifestCommands {
     #[command(
@@ -1148,7 +1155,7 @@ Diagnostics note:
     },
     #[command(
         about = "Append rows into a detected region with footer-aware insertion",
-        after_long_help = "Examples:\n  asp append-region workbook.xlsx --sheet Sheet1 --region-id 0 --rows @rows.json --dry-run\n  asp append-region workbook.xlsx --sheet Sheet1 --region-id 0 --from-csv rows.csv --header --output updated.xlsx --force\n\nInput payloads:\n  Use exactly one of --rows or --from-csv.\n  --rows accepts a top-level JSON array of rows, or an object with a rows array.\n  Cells may be raw JSON scalars/null, {'v': ...} value cells, or {'f': 'FORMULA'} formula cells.\n  --from-csv imports CSV rows and treats empty fields as blanks; use --header to skip the first CSV row.\n\nBehavior:\n  - resolves a detected region from `asp sheet-overview` output\n  - inserts rows at the region end\n  - if the last region row or next row looks like a total/footer row, inserts before it\n  - writes the appended matrix into the inserted rows\n  - expands adjacent SUM footers below the insertion band"
+        after_long_help = "Examples:\n  asp append-region workbook.xlsx --sheet Sheet1 --region-id 0 --rows @rows.json --dry-run\n  asp append-region workbook.xlsx --sheet Sheet1 --table-name SalesTable --from-csv rows.csv --header --footer-policy before-footer --output updated.xlsx --force\n\nTarget selection:\n  Use exactly one of --region-id or --table-name.\n  --region-id comes from `asp sheet-overview`.\n  --table-name resolves an existing sheet table by name.\n\nInput payloads:\n  Use exactly one of --rows or --from-csv.\n  --rows accepts a top-level JSON array of rows, or an object with a rows array.\n  Cells may be raw JSON scalars/null, {'v': ...} value cells, or {'f': 'FORMULA'} formula cells.\n  --from-csv imports CSV rows and treats empty fields as blanks; use --header to skip the first CSV row.\n\nFooter policies:\n  - auto (default): insert before a detected footer row when found, else append at the region end\n  - before-footer: require a detected footer/subtotal row and fail when none is found\n  - append-at-end: always append after the detected region end, even when a footer row is present\n\nBehavior:\n  - resolves a detected region or table target\n  - reports footer candidates, policy choice, and formula footer targets in dry-run output\n  - writes the appended matrix into inserted rows\n  - expands adjacent SUM footers below the insertion band when rows are inserted before them"
     )]
     AppendRegion {
         #[arg(value_name = "FILE", help = "Workbook path to update")]
@@ -1156,7 +1163,7 @@ Diagnostics note:
         #[arg(
             long = "sheet",
             value_name = "SHEET",
-            help = "Sheet containing the detected region"
+            help = "Sheet containing the detected region or table"
         )]
         sheet_name: String,
         #[arg(
@@ -1164,7 +1171,13 @@ Diagnostics note:
             value_name = "ID",
             help = "Detected region id from `asp sheet-overview`"
         )]
-        region_id: u32,
+        region_id: Option<u32>,
+        #[arg(
+            long = "table-name",
+            value_name = "NAME",
+            help = "Sheet table name to append into instead of a detected region id"
+        )]
+        table_name: Option<String>,
         #[arg(
             long,
             value_name = "ROWS_REF",
@@ -1179,6 +1192,14 @@ Diagnostics note:
         from_csv: Option<String>,
         #[arg(long, help = "Skip first CSV row when importing --from-csv")]
         header: bool,
+        #[arg(
+            long = "footer-policy",
+            value_enum,
+            default_value = "auto",
+            value_name = "POLICY",
+            help = "Footer handling policy: auto, before-footer, or append-at-end"
+        )]
+        footer_policy: AppendRegionFooterPolicyArg,
         #[arg(long, help = "Preview insertion plan without mutating files")]
         dry_run: bool,
         #[arg(long, help = "Apply by atomically replacing the source file")]
@@ -2233,16 +2254,28 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             file,
             sheet_name,
             region_id,
+            table_name,
             rows,
             from_csv,
             header,
+            footer_policy,
             dry_run,
             in_place,
             output,
             force,
         } => {
             commands::write::append_region(
-                file, sheet_name, region_id, rows, from_csv, header, dry_run, in_place, output,
+                file,
+                sheet_name,
+                region_id,
+                table_name,
+                rows,
+                from_csv,
+                header,
+                footer_policy,
+                dry_run,
+                in_place,
+                output,
                 force,
             )
             .await
@@ -3219,19 +3252,64 @@ mod tests {
                 file,
                 sheet_name,
                 region_id,
+                table_name,
                 rows,
                 from_csv,
                 header,
+                footer_policy,
                 dry_run,
                 ..
             } => {
                 assert_eq!(file, PathBuf::from("workbook.xlsx"));
                 assert_eq!(sheet_name, "Sheet1");
-                assert_eq!(region_id, 7);
+                assert_eq!(region_id, Some(7));
+                assert!(table_name.is_none());
                 assert!(rows.is_none());
                 assert_eq!(from_csv.as_deref(), Some("rows.csv"));
                 assert!(header);
+                assert!(matches!(footer_policy, AppendRegionFooterPolicyArg::Auto));
                 assert!(dry_run);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_append_region_table_target_with_footer_policy() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "append-region",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--table-name",
+            "SalesTable",
+            "--rows",
+            "@rows.json",
+            "--footer-policy",
+            "append-at-end",
+            "--output",
+            "updated.xlsx",
+        ])
+        .expect("parse append-region table target");
+
+        match cli.command {
+            Commands::AppendRegion {
+                region_id,
+                table_name,
+                rows,
+                footer_policy,
+                output,
+                ..
+            } => {
+                assert!(region_id.is_none());
+                assert_eq!(table_name.as_deref(), Some("SalesTable"));
+                assert_eq!(rows.as_deref(), Some("@rows.json"));
+                assert!(matches!(
+                    footer_policy,
+                    AppendRegionFooterPolicyArg::AppendAtEnd
+                ));
+                assert_eq!(output, Some(PathBuf::from("updated.xlsx")));
             }
             other => panic!("unexpected command: {other:?}"),
         }

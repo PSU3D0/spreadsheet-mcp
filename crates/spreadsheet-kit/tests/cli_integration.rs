@@ -581,9 +581,11 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
         append_region.contains("Append rows into a detected region with footer-aware insertion")
     );
     assert!(append_region.contains("--region-id"));
+    assert!(append_region.contains("--table-name"));
     assert!(append_region.contains("--rows"));
     assert!(append_region.contains("--from-csv"));
     assert!(append_region.contains("--header"));
+    assert!(append_region.contains("--footer-policy"));
 
     let transform_help = run_cli(&["transform-batch", "--help"]);
     assert!(
@@ -6642,7 +6644,17 @@ fn cli_append_region_dry_run_reports_footer_aware_plan() {
     let payload = parse_stdout_json(&output);
     assert_eq!(payload["mode"], "dry_run");
     assert_eq!(payload["sheet_name"], "Sheet1");
+    assert_eq!(payload["target_kind"], "detected_region");
+    assert_eq!(
+        payload["region_id"],
+        region_id.parse::<u64>().expect("region id num")
+    );
+    assert_eq!(payload["footer_policy"], "auto");
     assert_eq!(payload["insert_at_row"], 4);
+    assert_eq!(
+        payload["insert_reason"],
+        "auto policy selected detected footer row 4"
+    );
     assert_eq!(payload["footer_row"], 4);
     assert_eq!(payload["target_anchor"], "A4");
     assert_eq!(payload["target_range"], "A4:B4");
@@ -6650,6 +6662,17 @@ fn cli_append_region_dry_run_reports_footer_aware_plan() {
     assert_eq!(payload["columns_written"], 2);
     assert_eq!(payload["expand_adjacent_sums"], true);
     assert_eq!(payload["confidence"], "high");
+    assert!(
+        payload["confidence_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("explicit footer keyword detected")
+    );
+    assert_eq!(payload["footer_formula_targets"][0], "B4");
+    assert_eq!(
+        payload["footer_candidates"].as_array().map(Vec::len),
+        Some(2)
+    );
     assert_eq!(payload["would_change"], true);
 }
 
@@ -6896,6 +6919,218 @@ fn cli_append_region_rejects_rows_and_from_csv_together() {
             .as_str()
             .unwrap_or_default()
             .contains("mutually exclusive")
+    );
+}
+
+#[test]
+fn cli_append_region_supports_table_name_targeting() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-table-target.xlsx");
+    let output_path = tmp.path().join("append-region-table-target-out.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        let mut table = umya_spreadsheet::structs::Table::new("SalesTable", ("A1", "B3"));
+        table.set_display_name("SalesTable");
+        sheet.add_table(table);
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let output = run_cli(&[
+        "append-region",
+        workbook_path.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--table-name",
+        "SalesTable",
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--output",
+        output_path.to_str().expect("output utf8"),
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["target_kind"], "table");
+    assert_eq!(payload["table_name"], "SalesTable");
+    assert!(payload.get("region_id").is_none());
+    assert_eq!(payload["insert_at_row"], 4);
+    assert_eq!(payload["target_range"], "A4:B4");
+
+    let book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1 exists");
+    assert_eq!(sheet.get_cell("A4").expect("A4").get_value(), "Cara");
+    assert_eq!(sheet.get_cell("B4").expect("B4").get_value(), "30");
+    let table = sheet
+        .get_tables()
+        .iter()
+        .find(|table| table.get_name() == "SalesTable")
+        .expect("sales table");
+    assert_eq!(table.get_area().0.get_coordinate(), "A1");
+    assert_eq!(table.get_area().1.get_coordinate(), "B4");
+
+    let named = run_cli(&[
+        "named-ranges",
+        output_path.to_str().expect("output utf8"),
+        "--sheet",
+        "Sheet1",
+    ]);
+    assert!(named.status.success(), "stderr: {:?}", named.stderr);
+    let named_payload = parse_stdout_json(&named);
+    let sales_table = named_payload["items"]
+        .as_array()
+        .expect("named items")
+        .iter()
+        .find(|item| item["name"] == "SalesTable")
+        .expect("sales table item");
+    assert_eq!(sales_table["kind"], "table");
+    assert_eq!(sales_table["refers_to"], "A1:B4");
+
+    let read_table = run_cli(&[
+        "read-table",
+        output_path.to_str().expect("output utf8"),
+        "--sheet",
+        "Sheet1",
+        "--table-name",
+        "SalesTable",
+        "--table-format",
+        "values",
+    ]);
+    assert!(
+        read_table.status.success(),
+        "stderr: {:?}",
+        read_table.stderr
+    );
+    let read_table_payload = parse_stdout_json(&read_table);
+    assert_eq!(read_table_payload["table_name"], "SalesTable");
+    assert_eq!(read_table_payload["total_rows"], 3);
+}
+
+#[test]
+fn cli_append_region_append_at_end_policy_bypasses_detected_footer() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-append-at-end.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+        sheet.get_cell_mut("A4").set_value("Total");
+        let total = sheet.get_cell_mut("B4");
+        total.set_formula("SUM(B2:B3)");
+        total.get_cell_value_mut().set_formula_result_default("30");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--footer-policy",
+        "append-at-end",
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["footer_policy"], "append_at_end");
+    assert_eq!(payload["footer_row"], 4);
+    assert_eq!(payload["insert_at_row"], 5);
+    assert!(
+        payload["insert_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("bypassed detected footer row 4")
+    );
+    assert!(
+        payload["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("ignored detected footer row 4"))
+    );
+}
+
+#[test]
+fn cli_append_region_before_footer_policy_requires_detected_footer() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("append-region-before-footer.xlsx");
+    let rows_path = tmp.path().join("rows.json");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Amount");
+        sheet.get_cell_mut("A2").set_value("Alice");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("A3").set_value("Bob");
+        sheet.get_cell_mut("B3").set_value_number(20.0);
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+    fs::write(&rows_path, r#"{"rows":[["Cara",30]]}"#).expect("write rows payload");
+
+    let file = workbook_path.to_str().expect("path utf8");
+    let overview = run_cli(&["sheet-overview", file, "Sheet1"]);
+    assert!(overview.status.success(), "stderr: {:?}", overview.stderr);
+    let overview_payload = parse_stdout_json(&overview);
+    let region_id = overview_payload["detected_regions"][0]["id"]
+        .as_u64()
+        .expect("region id")
+        .to_string();
+
+    let output = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        region_id.as_str(),
+        "--rows",
+        &format!("@{}", rows_path.display()),
+        "--footer-policy",
+        "before-footer",
+        "--dry-run",
+    ]);
+    assert!(!output.status.success());
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "INVALID_ARGUMENT");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requires a detected footer/subtotal row")
     );
 }
 

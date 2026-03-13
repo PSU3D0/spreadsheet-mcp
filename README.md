@@ -283,7 +283,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `copy <source> <dest>` | Copy workbook (for edit workflows) |
 | `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
 | `verify <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
-| `append-region <file> --sheet S --region-id N (--rows @rows.json\|--from-csv rows.csv [--header]) (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region with footer-aware insertion before totals/subtotals when found |
+| `append-region <file> --sheet S (--region-id N\|--table-name NAME) (--rows @rows.json\|--from-csv rows.csv [--header]) [--footer-policy auto\|before-footer\|append-at-end] (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region or table with footer-aware insertion before totals/subtotals when found |
 | `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
 | `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
 | `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
@@ -294,7 +294,7 @@ Global `--output-format csv` is currently unsupported; use command-specific CSV 
 | `recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
 | `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
 
-`append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; use `--from-csv ... --header` when your incoming rows already exist as CSV.
+`append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; it now supports `--region-id` or `--table-name`, explicit `--footer-policy` selection, and dry-run metadata for footer candidates / formula footer targets. Use `--from-csv ... --header` when your incoming rows already exist as CSV.
 
 #### Formula write-path provenance (`write_path_provenance`)
 Formula-writing commands emit optional provenance metadata for troubleshooting:

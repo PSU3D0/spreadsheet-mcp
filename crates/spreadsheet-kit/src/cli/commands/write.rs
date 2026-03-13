@@ -1,8 +1,10 @@
+use crate::cli::AppendRegionFooterPolicyArg;
 use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::core::types::CellEdit;
 use crate::model::{
     CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
-    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, GridPayload, Warning, validate_formula,
+    FormulaParseDiagnosticsBuilder, FormulaParsePolicy, GridPayload, NamedItemKind, Warning,
+    validate_formula,
 };
 use crate::runtime::stateless::StatelessRuntime;
 use crate::state::AppState;
@@ -1950,6 +1952,21 @@ fn parse_column_size_ops_payload(raw: &str) -> Result<ColumnSizeOpsPayload> {
     })
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AppendRegionTargetKind {
+    DetectedRegion,
+    Table,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AppendFooterCandidate {
+    row: u32,
+    matched: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct AppendRegionResponse {
     mode: String,
@@ -1959,21 +1976,32 @@ struct AppendRegionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     target_path: Option<String>,
     sheet_name: String,
-    region_id: u32,
+    target_kind: AppendRegionTargetKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table_name: Option<String>,
     region_bounds: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     header_row: Option<u32>,
+    footer_policy: String,
     insert_at_row: u32,
+    insert_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     footer_row: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     footer_detection: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    footer_candidates: Vec<AppendFooterCandidate>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    footer_formula_targets: Vec<String>,
     rows_appended: u32,
     columns_written: u32,
     target_anchor: String,
     target_range: String,
     expand_adjacent_sums: bool,
     confidence: String,
+    confidence_reason: String,
     warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     would_change: Option<bool>,
@@ -1984,29 +2012,56 @@ struct AppendRegionResponse {
 #[derive(Debug, Clone)]
 struct AppendRegionPlan {
     sheet_name: String,
-    region_id: u32,
+    target_kind: AppendRegionTargetKind,
+    region_id: Option<u32>,
+    table_name: Option<String>,
     region_bounds: String,
     header_row: Option<u32>,
+    footer_policy: String,
     insert_at_row: u32,
+    insert_reason: String,
     footer_row: Option<u32>,
     footer_detection: Option<String>,
+    footer_candidates: Vec<AppendFooterCandidate>,
+    footer_formula_targets: Vec<String>,
     rows_appended: u32,
     columns_written: u32,
     target_anchor: String,
     target_range: String,
     confidence: String,
+    confidence_reason: String,
     warnings: Vec<String>,
     rows: Vec<Vec<Option<MatrixCell>>>,
+}
+
+struct AppendFooterScan {
+    footer_row: Option<u32>,
+    footer_detection: Option<String>,
+    footer_candidates: Vec<AppendFooterCandidate>,
+    footer_formula_targets: Vec<String>,
+}
+
+struct AppendRegionTarget {
+    sheet_name: String,
+    target_kind: AppendRegionTargetKind,
+    region_id: Option<u32>,
+    table_name: Option<String>,
+    bounds: AppendBounds,
+    region_bounds: String,
+    header_row: Option<u32>,
+    headers_truncated: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn append_region(
     file: PathBuf,
     sheet_name: String,
-    region_id: u32,
+    region_id: Option<u32>,
+    table_name: Option<String>,
     rows_ref: Option<String>,
     from_csv: Option<String>,
     header: bool,
+    footer_policy: AppendRegionFooterPolicyArg,
     dry_run: bool,
     in_place: bool,
     output: Option<PathBuf>,
@@ -2038,7 +2093,14 @@ pub async fn append_region(
             ));
         }
     };
-    let plan = build_append_region_plan(&source, &sheet_name, region_id, rows)?;
+    let plan = build_append_region_plan(
+        &source,
+        &sheet_name,
+        region_id,
+        table_name.as_deref(),
+        footer_policy,
+        rows,
+    )?;
 
     if dry_run {
         return Ok(serde_json::to_value(build_append_region_response(
@@ -2117,18 +2179,25 @@ fn build_append_region_response(
         source_path,
         target_path,
         sheet_name: plan.sheet_name.clone(),
+        target_kind: plan.target_kind,
         region_id: plan.region_id,
+        table_name: plan.table_name.clone(),
         region_bounds: plan.region_bounds.clone(),
         header_row: plan.header_row,
+        footer_policy: plan.footer_policy.clone(),
         insert_at_row: plan.insert_at_row,
+        insert_reason: plan.insert_reason.clone(),
         footer_row: plan.footer_row,
         footer_detection: plan.footer_detection.clone(),
+        footer_candidates: plan.footer_candidates.clone(),
+        footer_formula_targets: plan.footer_formula_targets.clone(),
         rows_appended: plan.rows_appended,
         columns_written: plan.columns_written,
         target_anchor: plan.target_anchor.clone(),
         target_range: plan.target_range.clone(),
         expand_adjacent_sums: true,
         confidence: plan.confidence.clone(),
+        confidence_reason: plan.confidence_reason.clone(),
         warnings: plan.warnings.clone(),
         would_change,
         changed,
@@ -2138,7 +2207,9 @@ fn build_append_region_response(
 fn build_append_region_plan(
     source: &Path,
     sheet_name: &str,
-    region_id: u32,
+    region_id: Option<u32>,
+    table_name: Option<&str>,
+    footer_policy: AppendRegionFooterPolicyArg,
     rows: Vec<Vec<Option<MatrixCell>>>,
 ) -> Result<AppendRegionPlan> {
     if rows.is_empty() {
@@ -2149,22 +2220,9 @@ fn build_append_region_plan(
 
     let config = Arc::new(local_workbook_config(source));
     let workbook = WorkbookContext::load(&config, source)?;
-    let region = workbook.detected_region(sheet_name, region_id).map_err(|_| {
-        invalid_argument(format!(
-            "region {} was not found on sheet '{}'; run `asp sheet-overview {} {}` to inspect detected region ids",
-            region_id,
-            sheet_name,
-            source.display(),
-            sheet_name
-        ))
-    })?;
-
-    let bounds = parse_append_region_bounds(&region.bounds).ok_or_else(|| {
-        invalid_argument(format!(
-            "detected region {} on sheet '{}' has unsupported bounds '{}'",
-            region_id, sheet_name, region.bounds
-        ))
-    })?;
+    let target =
+        resolve_append_region_target(&workbook, source, sheet_name, region_id, table_name)?;
+    let bounds = target.bounds;
 
     let columns_written = rows.iter().map(Vec::len).max().unwrap_or(0) as u32;
     if columns_written == 0 {
@@ -2174,20 +2232,74 @@ fn build_append_region_plan(
     }
     let region_width = bounds.end_col - bounds.start_col + 1;
     if columns_written > region_width {
+        let target_label = target
+            .table_name
+            .clone()
+            .map(|name| format!("table '{}'", name))
+            .or_else(|| target.region_id.map(|id| format!("region {}", id)))
+            .unwrap_or_else(|| "append target".to_string());
         return Err(invalid_argument(format!(
-            "rows payload is wider than detected region {} on sheet '{}': payload columns={}, region columns={}",
-            region_id, sheet_name, columns_written, region_width
+            "rows payload is wider than {} on sheet '{}': payload columns={}, region columns={}",
+            target_label, target.sheet_name, columns_written, region_width
         )));
     }
 
-    let (footer_row, footer_detection) = detect_append_footer(
+    let footer_scan = detect_append_footer(
         source,
-        sheet_name,
+        &target.sheet_name,
         bounds.start_col,
         bounds.end_col,
         bounds.end_row,
     )?;
-    let insert_at_row = footer_row.unwrap_or(bounds.end_row + 1);
+    let footer_policy_label = append_footer_policy_label(footer_policy).to_string();
+    let (insert_at_row, insert_reason) = match footer_policy {
+        AppendRegionFooterPolicyArg::Auto => {
+            if let Some(row) = footer_scan.footer_row {
+                (
+                    row,
+                    format!("auto policy selected detected footer row {}", row),
+                )
+            } else {
+                (
+                    bounds.end_row + 1,
+                    format!(
+                        "auto policy found no footer row; appending after detected region end row {}",
+                        bounds.end_row
+                    ),
+                )
+            }
+        }
+        AppendRegionFooterPolicyArg::BeforeFooter => {
+            let row = footer_scan.footer_row.ok_or_else(|| {
+                invalid_argument(
+                    "footer policy 'before-footer' requires a detected footer/subtotal row; use --footer-policy auto or append-at-end to continue without one",
+                )
+            })?;
+            (
+                row,
+                format!("before_footer policy selected detected footer row {}", row),
+            )
+        }
+        AppendRegionFooterPolicyArg::AppendAtEnd => {
+            if let Some(row) = footer_scan.footer_row {
+                (
+                    bounds.end_row + 1,
+                    format!(
+                        "append_at_end policy bypassed detected footer row {} and appended after region end row {}",
+                        row, bounds.end_row
+                    ),
+                )
+            } else {
+                (
+                    bounds.end_row + 1,
+                    format!(
+                        "append_at_end policy appended after detected region end row {}",
+                        bounds.end_row
+                    ),
+                )
+            }
+        }
+    };
     let target_anchor = format!(
         "{}{}",
         column_number_to_name(bounds.start_col),
@@ -2201,38 +2313,234 @@ fn build_append_region_plan(
     );
 
     let mut warnings = Vec::new();
-    if region.headers_truncated {
+    if target.headers_truncated {
         warnings.push(
             "detected region headers were truncated; verify the append target carefully"
                 .to_string(),
         );
     }
-    if footer_row.is_none() {
-        warnings.push("no footer row detected; appending at detected region end".to_string());
+    match footer_policy {
+        AppendRegionFooterPolicyArg::Auto if footer_scan.footer_row.is_none() => {
+            warnings.push("no footer row detected; appending at detected region end".to_string());
+        }
+        AppendRegionFooterPolicyArg::AppendAtEnd if footer_scan.footer_row.is_some() => {
+            warnings.push(format!(
+                "footer policy '{}' ignored detected footer row {}",
+                footer_policy_label,
+                footer_scan.footer_row.unwrap_or_default()
+            ));
+        }
+        _ => {}
     }
 
-    let confidence = if footer_row.is_some() || region.header_row.is_some() {
-        "high"
-    } else {
-        "medium"
-    };
+    let (confidence, confidence_reason) = append_plan_confidence(&target, &footer_scan);
 
     Ok(AppendRegionPlan {
-        sheet_name: sheet_name.to_string(),
-        region_id,
-        region_bounds: region.bounds,
-        header_row: region.header_row,
+        sheet_name: target.sheet_name,
+        target_kind: target.target_kind,
+        region_id: target.region_id,
+        table_name: target.table_name,
+        region_bounds: target.region_bounds,
+        header_row: target.header_row,
+        footer_policy: footer_policy_label,
         insert_at_row,
-        footer_row,
-        footer_detection,
+        insert_reason,
+        footer_row: footer_scan.footer_row,
+        footer_detection: footer_scan.footer_detection,
+        footer_candidates: footer_scan.footer_candidates,
+        footer_formula_targets: footer_scan.footer_formula_targets,
         rows_appended: rows.len() as u32,
         columns_written,
         target_anchor,
         target_range,
         confidence: confidence.to_string(),
+        confidence_reason,
         warnings,
         rows,
     })
+}
+
+fn resolve_append_region_target(
+    workbook: &WorkbookContext,
+    source: &Path,
+    sheet_name: &str,
+    region_id: Option<u32>,
+    table_name: Option<&str>,
+) -> Result<AppendRegionTarget> {
+    match (region_id, table_name) {
+        (Some(_), Some(_)) => Err(invalid_argument(
+            "--region-id and --table-name are mutually exclusive",
+        )),
+        (None, None) => Err(invalid_argument(
+            "append-region requires exactly one of --region-id or --table-name",
+        )),
+        (Some(region_id), None) => {
+            let region = workbook.detected_region(sheet_name, region_id).map_err(|_| {
+                invalid_argument(format!(
+                    "region {} was not found on sheet '{}'; run `asp sheet-overview {} {}` to inspect detected region ids",
+                    region_id,
+                    sheet_name,
+                    source.display(),
+                    sheet_name
+                ))
+            })?;
+            let bounds = parse_append_region_bounds(&region.bounds).ok_or_else(|| {
+                invalid_argument(format!(
+                    "detected region {} on sheet '{}' has unsupported bounds '{}'",
+                    region_id, sheet_name, region.bounds
+                ))
+            })?;
+            Ok(AppendRegionTarget {
+                sheet_name: sheet_name.to_string(),
+                target_kind: AppendRegionTargetKind::DetectedRegion,
+                region_id: Some(region_id),
+                table_name: None,
+                bounds,
+                region_bounds: region.bounds,
+                header_row: region.header_row,
+                headers_truncated: region.headers_truncated,
+            })
+        }
+        (None, Some(table_name)) => resolve_append_table_target(workbook, sheet_name, table_name),
+    }
+}
+
+fn resolve_append_table_target(
+    workbook: &WorkbookContext,
+    sheet_name: &str,
+    table_name: &str,
+) -> Result<AppendRegionTarget> {
+    let lower_name = table_name.to_ascii_lowercase();
+    let items = workbook.named_items()?;
+    let same_sheet = |item: &crate::model::NamedRangeDescriptor| {
+        item.sheet_name
+            .as_deref()
+            .map(|item_sheet| item_sheet.eq_ignore_ascii_case(sheet_name))
+            .unwrap_or(false)
+    };
+
+    let exact_matches: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == NamedItemKind::Table)
+        .filter(|item| same_sheet(item))
+        .filter(|item| item.name.eq_ignore_ascii_case(table_name))
+        .cloned()
+        .collect();
+    let candidates = if !exact_matches.is_empty() {
+        exact_matches
+    } else {
+        items
+            .into_iter()
+            .filter(|item| item.kind == NamedItemKind::Table)
+            .filter(|item| same_sheet(item))
+            .filter(|item| item.name.to_ascii_lowercase().contains(&lower_name))
+            .collect()
+    };
+
+    let item = match candidates.len() {
+        1 => candidates.into_iter().next().expect("one candidate"),
+        0 => {
+            return Err(invalid_argument(format!(
+                "table '{}' was not found on sheet '{}'; run `asp named-ranges {}` to inspect available table names",
+                table_name,
+                sheet_name,
+                workbook.path.display()
+            )));
+        }
+        _ => {
+            let matches = candidates
+                .into_iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(invalid_argument(format!(
+                "table '{}' matched multiple tables on sheet '{}': {}",
+                table_name, sheet_name, matches
+            )));
+        }
+    };
+
+    let bounds = parse_append_named_item_bounds(&item.refers_to).ok_or_else(|| {
+        invalid_argument(format!(
+            "table '{}' on sheet '{}' has unsupported bounds '{}'",
+            item.name, sheet_name, item.refers_to
+        ))
+    })?;
+
+    Ok(AppendRegionTarget {
+        sheet_name: sheet_name.to_string(),
+        target_kind: AppendRegionTargetKind::Table,
+        region_id: None,
+        table_name: Some(item.name.clone()),
+        region_bounds: format_a1_range(
+            bounds.start_col,
+            bounds.end_col,
+            bounds.start_row,
+            bounds.end_row,
+        ),
+        header_row: Some(bounds.start_row),
+        headers_truncated: false,
+        bounds,
+    })
+}
+
+fn parse_append_named_item_bounds(raw: &str) -> Option<AppendBounds> {
+    let refers_to = raw.trim().trim_start_matches('=');
+    let range_part = refers_to
+        .split_once('!')
+        .map(|(_, rest)| rest)
+        .unwrap_or(refers_to);
+    parse_append_region_bounds(range_part)
+}
+
+fn append_plan_confidence(
+    target: &AppendRegionTarget,
+    footer_scan: &AppendFooterScan,
+) -> (&'static str, String) {
+    if let Some(reason) = footer_scan.footer_detection.as_deref() {
+        if reason.starts_with("footer keyword") {
+            return (
+                "high",
+                format!("explicit footer keyword detected: {}", reason),
+            );
+        }
+        return (
+            "medium",
+            format!("formula-derived footer signal detected: {}", reason),
+        );
+    }
+
+    if matches!(target.target_kind, AppendRegionTargetKind::Table) {
+        return (
+            "medium",
+            format!(
+                "resolved table target '{}' but found no explicit footer row",
+                target.table_name.as_deref().unwrap_or_default()
+            ),
+        );
+    }
+
+    if target.header_row.is_some() {
+        return (
+            "medium",
+            "detected region includes a header row but no explicit footer row was found"
+                .to_string(),
+        );
+    }
+
+    (
+        "low",
+        "no explicit header or footer cues were found; verify the append plan before apply"
+            .to_string(),
+    )
+}
+
+fn append_footer_policy_label(policy: AppendRegionFooterPolicyArg) -> &'static str {
+    match policy {
+        AppendRegionFooterPolicyArg::Auto => "auto",
+        AppendRegionFooterPolicyArg::BeforeFooter => "before_footer",
+        AppendRegionFooterPolicyArg::AppendAtEnd => "append_at_end",
+    }
 }
 
 fn apply_append_region_plan_to_file(path: &Path, plan: &AppendRegionPlan) -> Result<()> {
@@ -2251,6 +2559,49 @@ fn apply_append_region_plan_to_file(path: &Path, plan: &AppendRegionPlan) -> Res
         overwrite_formulas: false,
     }];
     apply_transform_ops_to_file(path, &transform_ops)?;
+
+    if matches!(plan.target_kind, AppendRegionTargetKind::Table)
+        && let Some(table_name) = plan.table_name.as_deref()
+    {
+        expand_table_target_on_file(path, &plan.sheet_name, table_name, plan.rows_appended)?;
+    }
+
+    Ok(())
+}
+
+fn expand_table_target_on_file(
+    path: &Path,
+    sheet_name: &str,
+    table_name: &str,
+    appended_rows: u32,
+) -> Result<()> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+    let sheet = book
+        .get_sheet_by_name_mut(sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", sheet_name)))?;
+    let table = sheet
+        .get_tables_mut()
+        .iter_mut()
+        .find(|table| {
+            table.get_name().eq_ignore_ascii_case(table_name)
+                || table.get_display_name().eq_ignore_ascii_case(table_name)
+        })
+        .ok_or_else(|| {
+            invalid_argument(format!(
+                "table '{}' was not found on sheet '{}' after append",
+                table_name, sheet_name
+            ))
+        })?;
+
+    let start_col = *table.get_area().0.get_col_num();
+    let start_row = *table.get_area().0.get_row_num();
+    let end_col = *table.get_area().1.get_col_num();
+    let end_row = *table.get_area().1.get_row_num();
+    table.set_area(((start_col, start_row), (end_col, end_row + appended_rows)));
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)
+        .with_context(|| format!("failed to write workbook '{}'", path.display()))?;
     Ok(())
 }
 
@@ -2345,20 +2696,57 @@ fn detect_append_footer(
     start_col: u32,
     end_col: u32,
     region_end_row: u32,
-) -> Result<(Option<u32>, Option<String>)> {
+) -> Result<AppendFooterScan> {
     let book = umya_spreadsheet::reader::xlsx::read(source)
         .with_context(|| format!("failed to read workbook '{}'", source.display()))?;
     let sheet = book
         .get_sheet_by_name(sheet_name)
         .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", sheet_name)))?;
 
+    let mut footer_row = None;
+    let mut footer_detection = None;
+    let mut footer_formula_targets = Vec::new();
+    let mut footer_candidates = Vec::new();
+
     for row in [region_end_row, region_end_row + 1] {
-        if let Some(reason) = footer_reason_for_row(sheet, start_col, end_col, row) {
-            return Ok((Some(row), Some(reason)));
+        let reason = footer_reason_for_row(sheet, start_col, end_col, row);
+        let matched = reason.is_some();
+        if footer_row.is_none() && matched {
+            footer_row = Some(row);
+            footer_detection = reason.clone();
+            footer_formula_targets = footer_formula_targets_for_row(sheet, start_col, end_col, row);
         }
+        footer_candidates.push(AppendFooterCandidate {
+            row,
+            matched,
+            reason,
+        });
     }
 
-    Ok((None, None))
+    Ok(AppendFooterScan {
+        footer_row,
+        footer_detection,
+        footer_candidates,
+        footer_formula_targets,
+    })
+}
+
+fn footer_formula_targets_for_row(
+    sheet: &umya_spreadsheet::Worksheet,
+    start_col: u32,
+    end_col: u32,
+    row: u32,
+) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for col in start_col..=end_col {
+        let Some(cell) = sheet.get_cell((col, row)) else {
+            continue;
+        };
+        if !cell.get_formula().trim().is_empty() {
+            addresses.push(format!("{}{}", column_number_to_name(col), row));
+        }
+    }
+    addresses
 }
 
 fn footer_reason_for_row(
@@ -2367,21 +2755,21 @@ fn footer_reason_for_row(
     end_col: u32,
     row: u32,
 ) -> Option<String> {
-    let mut saw_non_empty = false;
     let mut saw_formula = false;
+    let mut saw_non_formula_non_empty = false;
     for col in start_col..=end_col {
         let Some(cell) = sheet.get_cell((col, row)) else {
             continue;
         };
         let value = cell.get_value().trim().to_ascii_lowercase();
         let formula = cell.get_formula().trim().to_string();
-        if !formula.is_empty() {
+        let has_formula = !formula.is_empty();
+        if has_formula {
             saw_formula = true;
         }
         if value.is_empty() {
             continue;
         }
-        saw_non_empty = true;
         if value.contains("grand total")
             || value == "total"
             || value.contains("subtotal")
@@ -2389,9 +2777,12 @@ fn footer_reason_for_row(
         {
             return Some(format!("footer keyword '{}' on row {}", value, row));
         }
+        if !has_formula {
+            saw_non_formula_non_empty = true;
+        }
     }
 
-    (saw_formula && (saw_non_empty || start_col <= end_col))
+    (saw_formula && !saw_non_formula_non_empty)
         .then(|| format!("formula-bearing summary row {}", row))
 }
 
@@ -2436,6 +2827,7 @@ fn parse_append_region_bounds(raw: &str) -> Option<AppendBounds> {
     Some(AppendBounds {
         start_col: start_col.min(end_col),
         end_col: start_col.max(end_col),
+        start_row: start_row.min(end_row),
         end_row: start_row.max(end_row),
     })
 }
@@ -2444,6 +2836,7 @@ fn parse_append_region_bounds(raw: &str) -> Option<AppendBounds> {
 struct AppendBounds {
     start_col: u32,
     end_col: u32,
+    start_row: u32,
     end_row: u32,
 }
 
@@ -3887,13 +4280,29 @@ mod tests {
     }
 
     #[test]
+    fn footer_ignores_last_data_row_with_formula_and_label() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Alice");
+            set_formula(sheet, "B4", "B2+B3", "30");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        assert!(footer_reason_for_row(sheet, 1, 2, 4).is_none());
+    }
+
+    #[test]
     fn detect_append_footer_returns_none_when_no_footer_row_exists() {
         let (_tmp, path) = write_workbook_fixture("append-region-no-footer.xlsx", |sheet| {
             seed_basic_region(sheet);
         });
 
         let detection = detect_append_footer(&path, "Sheet1", 1, 2, 3).expect("detect footer");
-        assert_eq!(detection, (None, None));
+        assert_eq!(detection.footer_row, None);
+        assert_eq!(detection.footer_detection, None);
+        assert!(detection.footer_formula_targets.is_empty());
+        assert_eq!(detection.footer_candidates.len(), 2);
+        assert!(!detection.footer_candidates[0].matched);
+        assert!(!detection.footer_candidates[1].matched);
     }
 
     #[test]
@@ -3905,10 +4314,13 @@ mod tests {
         });
 
         let detection = detect_append_footer(&path, "Sheet1", 1, 2, 4).expect("detect footer");
+        assert_eq!(detection.footer_row, Some(4));
         assert_eq!(
-            detection,
-            (Some(4), Some("footer keyword 'total' on row 4".to_string()))
+            detection.footer_detection.as_deref(),
+            Some("footer keyword 'total' on row 4")
         );
+        assert_eq!(detection.footer_formula_targets, vec!["B4"]);
+        assert!(detection.footer_candidates[0].matched);
     }
 
     #[test]
@@ -3920,10 +4332,13 @@ mod tests {
         });
 
         let detection = detect_append_footer(&path, "Sheet1", 1, 2, 3).expect("detect footer");
+        assert_eq!(detection.footer_row, Some(4));
         assert_eq!(
-            detection,
-            (Some(4), Some("footer keyword 'total' on row 4".to_string()))
+            detection.footer_detection.as_deref(),
+            Some("footer keyword 'total' on row 4")
         );
+        assert!(!detection.footer_candidates[0].matched);
+        assert!(detection.footer_candidates[1].matched);
     }
 
     #[test]
@@ -3935,10 +4350,25 @@ mod tests {
         });
         let region_id = detect_primary_region_id(&path, "Sheet1");
 
-        let plan = build_append_region_plan(&path, "Sheet1", region_id, sample_append_rows())
-            .expect("build plan");
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::Auto,
+            sample_append_rows(),
+        )
+        .expect("build plan");
+        assert_eq!(plan.target_kind, AppendRegionTargetKind::DetectedRegion);
+        assert_eq!(plan.region_id, Some(region_id));
+        assert_eq!(plan.footer_policy, "auto");
         assert_eq!(plan.footer_row, Some(4));
         assert_eq!(plan.insert_at_row, 4);
+        assert_eq!(
+            plan.insert_reason,
+            "auto policy selected detected footer row 4"
+        );
+        assert_eq!(plan.footer_formula_targets, vec!["B4"]);
         assert_eq!(plan.target_anchor, "A4");
         assert_eq!(plan.target_range, "A4:B4");
         assert_eq!(plan.confidence, "high");
@@ -3952,15 +4382,193 @@ mod tests {
         });
         let region_id = detect_primary_region_id(&path, "Sheet1");
 
-        let plan = build_append_region_plan(&path, "Sheet1", region_id, sample_append_rows())
-            .expect("build plan");
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::Auto,
+            sample_append_rows(),
+        )
+        .expect("build plan");
         assert_eq!(plan.footer_row, None);
         assert!(plan.insert_at_row >= 4);
+        assert_eq!(plan.confidence, "low");
         assert!(
             plan.warnings
                 .iter()
                 .any(|warning| warning.contains("no footer row detected"))
         );
+    }
+
+    #[test]
+    fn build_append_region_plan_does_not_treat_formula_data_row_as_footer() {
+        let (_tmp, path) =
+            write_workbook_fixture("append-region-plan-formula-data-row.xlsx", |sheet| {
+                sheet.get_cell_mut("A1").set_value("Name");
+                sheet.get_cell_mut("B1").set_value("Amount");
+                sheet.get_cell_mut("A2").set_value("Alice");
+                sheet.get_cell_mut("B2").set_value_number(10.0);
+                sheet.get_cell_mut("A3").set_value("Bob");
+                set_formula(sheet, "B3", "B2*2", "20");
+            });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::Auto,
+            sample_append_rows(),
+        )
+        .expect("build plan");
+        assert_eq!(plan.footer_row, None);
+        assert_eq!(plan.insert_at_row, 4);
+    }
+
+    #[test]
+    fn build_append_region_plan_table_target_does_not_treat_formula_data_row_as_footer() {
+        let (_tmp, path) =
+            write_workbook_fixture("append-region-plan-table-formula-data-row.xlsx", |sheet| {
+                sheet.get_cell_mut("A1").set_value("Name");
+                sheet.get_cell_mut("B1").set_value("Amount");
+                sheet.get_cell_mut("A2").set_value("Alice");
+                sheet.get_cell_mut("B2").set_value_number(10.0);
+                sheet.get_cell_mut("A3").set_value("Bob");
+                set_formula(sheet, "B3", "B2*2", "20");
+                let mut table = umya_spreadsheet::structs::Table::new("SalesTable", ("A1", "B3"));
+                table.set_display_name("SalesTable");
+                sheet.add_table(table);
+            });
+
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            None,
+            Some("SalesTable"),
+            AppendRegionFooterPolicyArg::Auto,
+            sample_append_rows(),
+        )
+        .expect("build plan");
+        assert_eq!(plan.footer_row, None);
+        assert_eq!(plan.insert_at_row, 4);
+    }
+
+    #[test]
+    fn build_append_region_plan_before_footer_fails_for_formula_data_row() {
+        let (_tmp, path) = write_workbook_fixture(
+            "append-region-plan-formula-data-row-before-footer.xlsx",
+            |sheet| {
+                sheet.get_cell_mut("A1").set_value("Name");
+                sheet.get_cell_mut("B1").set_value("Amount");
+                sheet.get_cell_mut("A2").set_value("Alice");
+                sheet.get_cell_mut("B2").set_value_number(10.0);
+                sheet.get_cell_mut("A3").set_value("Bob");
+                set_formula(sheet, "B3", "B2*2", "20");
+            },
+        );
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let error = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::BeforeFooter,
+            sample_append_rows(),
+        )
+        .expect_err("before-footer should fail for calculated data rows");
+        assert!(
+            error
+                .to_string()
+                .contains("requires a detected footer/subtotal row")
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_append_at_end_ignores_detected_footer() {
+        let (_tmp, path) =
+            write_workbook_fixture("append-region-plan-append-at-end.xlsx", |sheet| {
+                seed_basic_region(sheet);
+                sheet.get_cell_mut("A4").set_value("Total");
+                set_formula(sheet, "B4", "SUM(B2:B3)", "30");
+            });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::AppendAtEnd,
+            sample_append_rows(),
+        )
+        .expect("build plan");
+        assert_eq!(plan.footer_row, Some(4));
+        assert_eq!(plan.insert_at_row, 5);
+        assert!(
+            plan.insert_reason
+                .contains("append_at_end policy bypassed detected footer row 4")
+        );
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|warning| warning.contains("ignored detected footer row 4"))
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_before_footer_requires_detected_footer() {
+        let (_tmp, path) =
+            write_workbook_fixture("append-region-plan-before-footer.xlsx", |sheet| {
+                seed_basic_region(sheet);
+            });
+        let region_id = detect_primary_region_id(&path, "Sheet1");
+
+        let error = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::BeforeFooter,
+            sample_append_rows(),
+        )
+        .expect_err("before-footer should fail without a footer row");
+        assert!(
+            error
+                .to_string()
+                .contains("footer policy 'before-footer' requires a detected footer/subtotal row")
+        );
+    }
+
+    #[test]
+    fn build_append_region_plan_resolves_table_target() {
+        let (_tmp, path) = write_workbook_fixture("append-region-plan-table.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Amount");
+            sheet.get_cell_mut("A2").set_value("Alice");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            sheet.get_cell_mut("A3").set_value("Bob");
+            sheet.get_cell_mut("B3").set_value_number(20.0);
+            let mut table = umya_spreadsheet::structs::Table::new("SalesTable", ("A1", "B3"));
+            table.set_display_name("SalesTable");
+            sheet.add_table(table);
+        });
+
+        let plan = build_append_region_plan(
+            &path,
+            "Sheet1",
+            None,
+            Some("SalesTable"),
+            AppendRegionFooterPolicyArg::Auto,
+            sample_append_rows(),
+        )
+        .expect("build plan");
+        assert_eq!(plan.target_kind, AppendRegionTargetKind::Table);
+        assert_eq!(plan.table_name.as_deref(), Some("SalesTable"));
+        assert_eq!(plan.header_row, Some(1));
+        assert_eq!(plan.region_bounds, "A1:B3");
     }
 
     #[test]
@@ -3975,12 +4583,22 @@ mod tests {
             Some(MatrixCell::Value(serde_json::json!("extra"))),
         ]];
 
-        let error = build_append_region_plan(&path, "Sheet1", region_id, rows)
-            .expect_err("payload wider than region should fail");
+        let error = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::Auto,
+            rows,
+        )
+        .expect_err("payload wider than region should fail");
         assert!(
             error
                 .to_string()
-                .contains("rows payload is wider than detected region")
+                .contains("rows payload is wider than region 0")
+                || error
+                    .to_string()
+                    .contains("rows payload is wider than region ")
         );
     }
 
@@ -3992,8 +4610,15 @@ mod tests {
             });
         let region_id = detect_primary_region_id(&path, "Sheet1");
 
-        let error = build_append_region_plan(&path, "Sheet1", region_id, vec![Vec::new()])
-            .expect_err("zero-column payload should fail");
+        let error = build_append_region_plan(
+            &path,
+            "Sheet1",
+            Some(region_id),
+            None,
+            AppendRegionFooterPolicyArg::Auto,
+            vec![Vec::new()],
+        )
+        .expect_err("zero-column payload should fail");
         assert!(
             error
                 .to_string()

@@ -82,10 +82,10 @@ Commands that tokenize or validate formulas accept `--formula-parse-policy <fail
 | `range-values <file> <sheet> <range> [range...]` | Raw values for one or more ranges |
 | `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search values, or match labels and return adjacent values |
 | `verify <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
-| `append-region <file> --sheet S --region-id N (--rows @rows.json\|--from-csv rows.csv [--header]) (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region with footer-aware insertion before totals/subtotals when found |
+| `append-region <file> --sheet S (--region-id N\|--table-name NAME) (--rows @rows.json\|--from-csv rows.csv [--header]) [--footer-policy auto\|before-footer\|append-at-end] (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region or table with footer-aware insertion before totals/subtotals when found |
 | `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
 
-`append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; use `--from-csv ... --header` when your incoming rows already exist as CSV.
+`append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; it now supports `--region-id` or `--table-name`, explicit `--footer-policy` selection, and dry-run metadata for footer candidates / formula footer targets. Use `--from-csv ... --header` when your incoming rows already exist as CSV.
 | `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
 | `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
 | `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |
