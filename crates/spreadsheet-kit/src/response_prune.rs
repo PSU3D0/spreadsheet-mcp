@@ -46,6 +46,11 @@ fn preserve_empty_array_for_key(key: &str) -> bool {
             | "resolved_errors"
             | "preexisting_errors"
             | "named_range_deltas"
+            | "formula_targets"
+            | "likely_patch_targets"
+            | "adjacent_sum_targets"
+            | "merged_ranges_fully_contained"
+            | "merged_ranges_crossing_boundary"
     )
 }
 

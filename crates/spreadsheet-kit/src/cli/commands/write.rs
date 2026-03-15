@@ -1,4 +1,4 @@
-use crate::cli::AppendRegionFooterPolicyArg;
+use crate::cli::{AppendRegionFooterPolicyArg, CloneMergePolicyArg, ClonePatchTargetsArg};
 use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::core::types::CellEdit;
 use crate::model::{
@@ -22,10 +22,11 @@ use crate::tools::rules_batch::{RulesOp, apply_rules_ops_to_file};
 use crate::tools::sheet_layout::{SheetLayoutOp, apply_sheet_layout_ops_to_file};
 use crate::workbook::WorkbookContext;
 use anyhow::{Context, Result, anyhow, bail};
+use regex::Regex;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -2605,6 +2606,712 @@ fn expand_table_target_on_file(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CloneHelperKind {
+    CloneTemplateRow,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CloneAnchorKind {
+    Before,
+    After,
+    InsertAt,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct CloneTemplateSummary {
+    non_empty_cell_count: u32,
+    formula_cell_count: u32,
+    style_cell_count: u32,
+    validation_cell_count: u32,
+    merged_ranges_fully_contained: Vec<String>,
+    merged_ranges_crossing_boundary: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CloneTemplateRowResponse {
+    mode: String,
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    sheet_name: String,
+    helper_kind: CloneHelperKind,
+    source_row: u32,
+    source_row_range: String,
+    anchor_kind: CloneAnchorKind,
+    anchor_row: u32,
+    insert_at_row: u32,
+    count: u32,
+    rows_inserted: u32,
+    inserted_row_range: String,
+    expand_adjacent_sums: bool,
+    patch_target_mode: String,
+    merge_policy: String,
+    template_summary: CloneTemplateSummary,
+    formula_targets: Vec<String>,
+    likely_patch_targets: Vec<String>,
+    adjacent_sum_targets: Vec<String>,
+    warnings: Vec<String>,
+    confidence: String,
+    confidence_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    would_change: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changed: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct CloneTemplateRowPlan {
+    sheet_name: String,
+    helper_kind: CloneHelperKind,
+    source_row: u32,
+    source_row_range: String,
+    anchor_kind: CloneAnchorKind,
+    anchor_row: u32,
+    insert_at_row: u32,
+    count: u32,
+    rows_inserted: u32,
+    inserted_row_range: String,
+    expand_adjacent_sums: bool,
+    patch_target_mode: String,
+    merge_policy: String,
+    template_summary: CloneTemplateSummary,
+    formula_targets: Vec<String>,
+    likely_patch_targets: Vec<String>,
+    adjacent_sum_targets: Vec<String>,
+    warnings: Vec<String>,
+    confidence: String,
+    confidence_reason: String,
+    contained_merges: Vec<CloneMergeSpan>,
+    contained_validations: Vec<CloneValidationSpec>,
+}
+
+#[derive(Debug, Clone)]
+struct CloneTemplateCellPreview {
+    col: u32,
+    value: String,
+    is_formula: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CloneMergeSpan {
+    start_col: u32,
+    end_col: u32,
+    range: String,
+}
+
+#[derive(Debug, Clone)]
+struct CloneValidationSpec {
+    data_validation: umya_spreadsheet::structs::DataValidation,
+    start_col: u32,
+    end_col: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn clone_template_row(
+    file: PathBuf,
+    sheet_name: String,
+    source_row: u32,
+    before: Option<u32>,
+    after: Option<u32>,
+    insert_at: Option<u32>,
+    count: u32,
+    expand_adjacent_sums: bool,
+    patch_targets: ClonePatchTargetsArg,
+    merge_policy: CloneMergePolicyArg,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let selected_modes = dry_run as u8 + in_place as u8 + output.is_some() as u8;
+    if selected_modes != 1 {
+        return Err(invalid_argument(
+            "choose exactly one of --dry-run, --in-place, or --output <PATH>",
+        ));
+    }
+    if force && output.is_none() {
+        return Err(invalid_argument("--force requires --output <PATH>"));
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let plan = build_clone_template_row_plan(
+        &source,
+        &sheet_name,
+        source_row,
+        before,
+        after,
+        insert_at,
+        count,
+        expand_adjacent_sums,
+        patch_targets,
+        merge_policy,
+    )?;
+
+    if dry_run {
+        return Ok(serde_json::to_value(build_clone_template_row_response(
+            &plan,
+            "dry_run",
+            source.display().to_string(),
+            None,
+            Some(true),
+            None,
+            None,
+        ))?);
+    }
+
+    if in_place {
+        let source_path = source.display().to_string();
+        let ((), temp_path) = apply_to_temp_copy(
+            &source,
+            source.parent(),
+            ".clone-template-row-",
+            |work_path| apply_clone_template_row_plan_to_file(work_path, &plan),
+        )?;
+        atomic_replace_target(temp_path, &source, true)?;
+        return Ok(serde_json::to_value(build_clone_template_row_response(
+            &plan,
+            "in_place",
+            source_path.clone(),
+            Some(source_path.clone()),
+            None,
+            Some(source_path),
+            Some(true),
+        ))?);
+    }
+
+    let target = runtime.normalize_destination_path(
+        output
+            .as_ref()
+            .expect("output required unless dry-run or in-place"),
+    )?;
+    ensure_output_path_is_distinct(&source, &target)?;
+    if path_entry_exists(&target)? && !force {
+        return Err(output_exists(format!(
+            "output path '{}' already exists",
+            target.display()
+        )));
+    }
+
+    let source_path = source.display().to_string();
+    let target_path = target.display().to_string();
+    let ((), temp_path) = apply_to_temp_copy(
+        &source,
+        target.parent(),
+        ".clone-template-row-",
+        |work_path| apply_clone_template_row_plan_to_file(work_path, &plan),
+    )?;
+    atomic_replace_target(temp_path, &target, force)?;
+
+    Ok(serde_json::to_value(build_clone_template_row_response(
+        &plan,
+        "output",
+        target_path.clone(),
+        Some(source_path),
+        None,
+        Some(target_path),
+        Some(true),
+    ))?)
+}
+
+fn build_clone_template_row_response(
+    plan: &CloneTemplateRowPlan,
+    mode: &str,
+    file: String,
+    source_path: Option<String>,
+    would_change: Option<bool>,
+    target_path: Option<String>,
+    changed: Option<bool>,
+) -> CloneTemplateRowResponse {
+    CloneTemplateRowResponse {
+        mode: mode.to_string(),
+        file,
+        source_path,
+        target_path,
+        sheet_name: plan.sheet_name.clone(),
+        helper_kind: plan.helper_kind,
+        source_row: plan.source_row,
+        source_row_range: plan.source_row_range.clone(),
+        anchor_kind: plan.anchor_kind,
+        anchor_row: plan.anchor_row,
+        insert_at_row: plan.insert_at_row,
+        count: plan.count,
+        rows_inserted: plan.rows_inserted,
+        inserted_row_range: plan.inserted_row_range.clone(),
+        expand_adjacent_sums: plan.expand_adjacent_sums,
+        patch_target_mode: plan.patch_target_mode.clone(),
+        merge_policy: plan.merge_policy.clone(),
+        template_summary: plan.template_summary.clone(),
+        formula_targets: plan.formula_targets.clone(),
+        likely_patch_targets: plan.likely_patch_targets.clone(),
+        adjacent_sum_targets: plan.adjacent_sum_targets.clone(),
+        warnings: plan.warnings.clone(),
+        confidence: plan.confidence.clone(),
+        confidence_reason: plan.confidence_reason.clone(),
+        would_change,
+        changed,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_clone_template_row_plan(
+    source: &Path,
+    sheet_name: &str,
+    source_row: u32,
+    before: Option<u32>,
+    after: Option<u32>,
+    insert_at: Option<u32>,
+    count: u32,
+    expand_adjacent_sums: bool,
+    patch_targets: ClonePatchTargetsArg,
+    merge_policy: CloneMergePolicyArg,
+) -> Result<CloneTemplateRowPlan> {
+    if source_row == 0 {
+        return Err(invalid_argument("--source-row must be at least 1"));
+    }
+    if count == 0 {
+        return Err(invalid_argument("--count must be at least 1"));
+    }
+
+    let (anchor_kind, anchor_row, insert_at_row) = resolve_clone_anchor(before, after, insert_at)?;
+    let book = umya_spreadsheet::reader::xlsx::read(source)
+        .with_context(|| format!("failed to read workbook '{}'", source.display()))?;
+    let sheet = book
+        .get_sheet_by_name(sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", sheet_name)))?;
+
+    let template_cells = inspect_template_row_cells(sheet, source_row);
+    let (contained_merges, crossing_merges) = inspect_clone_row_merges(sheet, source_row)?;
+    let (contained_validations, crossing_validations, validation_cell_count) =
+        inspect_clone_row_validations(sheet, source_row)?;
+
+    if matches!(merge_policy, CloneMergePolicyArg::Strict) && !crossing_merges.is_empty() {
+        return Err(unsafe_clone_template(format!(
+            "source row {} intersects merged ranges that cross the clone boundary: {}",
+            source_row,
+            crossing_merges.join(", ")
+        )));
+    }
+
+    let source_row_range = format!("{}:{}", source_row, source_row);
+    let inserted_row_range = format!(
+        "{}:{}",
+        insert_at_row,
+        insert_at_row + count.saturating_sub(1)
+    );
+
+    let formula_targets = build_clone_formula_targets(&template_cells, insert_at_row, count);
+    let likely_patch_targets =
+        build_clone_patch_targets(&template_cells, insert_at_row, count, patch_targets);
+    let adjacent_sum_targets = if expand_adjacent_sums {
+        preview_adjacent_sum_targets(sheet, insert_at_row, count)
+    } else {
+        Vec::new()
+    };
+
+    let non_empty_cell_count = template_cells
+        .iter()
+        .filter(|cell| cell.is_formula || !cell.value.trim().is_empty())
+        .count() as u32;
+    let formula_cell_count = template_cells.iter().filter(|cell| cell.is_formula).count() as u32;
+    let style_cell_count = template_cells.len() as u32;
+
+    let mut warnings = Vec::new();
+    if template_cells.is_empty() {
+        warnings.push(format!(
+            "source row {} has no materialized cells; cloning will insert blank rows",
+            source_row
+        ));
+    }
+    if !crossing_merges.is_empty() {
+        warnings.push(format!(
+            "merge-policy '{}' will not reproduce boundary-crossing merged ranges: {}",
+            clone_merge_policy_label(merge_policy),
+            crossing_merges.join(", ")
+        ));
+    }
+    if !crossing_validations.is_empty() {
+        warnings.push(format!(
+            "row-scoped validation cloning skipped boundary-crossing validation ranges: {}",
+            crossing_validations.join(", ")
+        ));
+    }
+    if expand_adjacent_sums && adjacent_sum_targets.is_empty() {
+        warnings.push(
+            "no adjacent SUM footer formulas qualified for expansion below the inserted rows"
+                .to_string(),
+        );
+    }
+
+    let (confidence, confidence_reason) = if template_cells.is_empty() {
+        (
+            "low",
+            "template row has no materialized cells; verify that inserting blank rows is intended"
+                .to_string(),
+        )
+    } else if !crossing_merges.is_empty() || !crossing_validations.is_empty() {
+        (
+            "medium",
+            "clone can proceed, but boundary-crossing merges or validations will not be fully reproduced"
+                .to_string(),
+        )
+    } else {
+        (
+            "high",
+            "template row cloned cleanly with no merge or validation boundary conflicts"
+                .to_string(),
+        )
+    };
+
+    Ok(CloneTemplateRowPlan {
+        sheet_name: sheet_name.to_string(),
+        helper_kind: CloneHelperKind::CloneTemplateRow,
+        source_row,
+        source_row_range,
+        anchor_kind,
+        anchor_row,
+        insert_at_row,
+        count,
+        rows_inserted: count,
+        inserted_row_range,
+        expand_adjacent_sums,
+        patch_target_mode: clone_patch_targets_label(patch_targets).to_string(),
+        merge_policy: clone_merge_policy_label(merge_policy).to_string(),
+        template_summary: CloneTemplateSummary {
+            non_empty_cell_count,
+            formula_cell_count,
+            style_cell_count,
+            validation_cell_count,
+            merged_ranges_fully_contained: contained_merges
+                .iter()
+                .map(|span| span.range.clone())
+                .collect(),
+            merged_ranges_crossing_boundary: crossing_merges,
+        },
+        formula_targets,
+        likely_patch_targets,
+        adjacent_sum_targets,
+        warnings,
+        confidence: confidence.to_string(),
+        confidence_reason,
+        contained_merges,
+        contained_validations,
+    })
+}
+
+fn resolve_clone_anchor(
+    before: Option<u32>,
+    after: Option<u32>,
+    insert_at: Option<u32>,
+) -> Result<(CloneAnchorKind, u32, u32)> {
+    let selections = before.is_some() as u8 + after.is_some() as u8 + insert_at.is_some() as u8;
+    if selections != 1 {
+        return Err(invalid_argument(
+            "choose exactly one of --before <ROW>, --after <ROW>, or --insert-at <ROW>",
+        ));
+    }
+
+    if let Some(row) = before {
+        if row == 0 {
+            return Err(invalid_argument("--before must be at least 1"));
+        }
+        return Ok((CloneAnchorKind::Before, row, row));
+    }
+    if let Some(row) = after {
+        if row == 0 {
+            return Err(invalid_argument("--after must be at least 1"));
+        }
+        return Ok((CloneAnchorKind::After, row, row + 1));
+    }
+    let row = insert_at.expect("one anchor row required");
+    if row == 0 {
+        return Err(invalid_argument("--insert-at must be at least 1"));
+    }
+    Ok((CloneAnchorKind::InsertAt, row, row))
+}
+
+fn inspect_template_row_cells(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_row: u32,
+) -> Vec<CloneTemplateCellPreview> {
+    let max_col = sheet.get_highest_column();
+    let mut cells = Vec::new();
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, source_row)) else {
+            continue;
+        };
+        cells.push(CloneTemplateCellPreview {
+            col,
+            value: cell.get_value().to_string(),
+            is_formula: cell.is_formula(),
+        });
+    }
+    cells
+}
+
+fn inspect_clone_row_merges(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_row: u32,
+) -> Result<(Vec<CloneMergeSpan>, Vec<String>)> {
+    let mut contained = Vec::new();
+    let mut crossing = Vec::new();
+    for range in sheet.get_merge_cells() {
+        let raw = range.get_range();
+        let Some(bounds) = parse_append_region_bounds(&raw) else {
+            continue;
+        };
+        if !(bounds.start_row..=bounds.end_row).contains(&source_row) {
+            continue;
+        }
+        if bounds.start_row == source_row && bounds.end_row == source_row {
+            contained.push(CloneMergeSpan {
+                start_col: bounds.start_col,
+                end_col: bounds.end_col,
+                range: raw,
+            });
+        } else {
+            crossing.push(raw);
+        }
+    }
+    Ok((contained, crossing))
+}
+
+fn inspect_clone_row_validations(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_row: u32,
+) -> Result<(Vec<CloneValidationSpec>, Vec<String>, u32)> {
+    let mut contained = Vec::new();
+    let mut crossing = Vec::new();
+    let mut validation_cols = BTreeSet::new();
+
+    let Some(validations) = sheet.get_data_validations() else {
+        return Ok((contained, crossing, 0));
+    };
+
+    for data_validation in validations.get_data_validation_list() {
+        for range in data_validation
+            .get_sequence_of_references()
+            .get_range_collection()
+        {
+            let raw = range.get_range();
+            let Some(bounds) = parse_append_region_bounds(&raw) else {
+                continue;
+            };
+            if !(bounds.start_row..=bounds.end_row).contains(&source_row) {
+                continue;
+            }
+            for col in bounds.start_col..=bounds.end_col {
+                validation_cols.insert(col);
+            }
+            if bounds.start_row == source_row && bounds.end_row == source_row {
+                let mut clone = data_validation.clone();
+                clone
+                    .get_sequence_of_references_mut()
+                    .set_sqref(format_a1_range(
+                        bounds.start_col,
+                        bounds.end_col,
+                        source_row,
+                        source_row,
+                    ));
+                contained.push(CloneValidationSpec {
+                    data_validation: clone,
+                    start_col: bounds.start_col,
+                    end_col: bounds.end_col,
+                });
+            } else {
+                crossing.push(raw);
+            }
+        }
+    }
+
+    Ok((contained, crossing, validation_cols.len() as u32))
+}
+
+fn build_clone_formula_targets(
+    template_cells: &[CloneTemplateCellPreview],
+    insert_at_row: u32,
+    count: u32,
+) -> Vec<String> {
+    let formula_cols: Vec<u32> = template_cells
+        .iter()
+        .filter(|cell| cell.is_formula)
+        .map(|cell| cell.col)
+        .collect();
+    let mut targets = Vec::new();
+    for row in insert_at_row..(insert_at_row + count) {
+        for col in &formula_cols {
+            targets.push(format!("{}{}", column_number_to_name(*col), row));
+        }
+    }
+    targets
+}
+
+fn build_clone_patch_targets(
+    template_cells: &[CloneTemplateCellPreview],
+    insert_at_row: u32,
+    count: u32,
+    patch_targets: ClonePatchTargetsArg,
+) -> Vec<String> {
+    let target_cols: Vec<u32> = match patch_targets {
+        ClonePatchTargetsArg::None => Vec::new(),
+        ClonePatchTargetsArg::AllNonFormula => template_cells
+            .iter()
+            .filter(|cell| !cell.is_formula)
+            .map(|cell| cell.col)
+            .collect(),
+        ClonePatchTargetsArg::LikelyInputs => template_cells
+            .iter()
+            .filter(|cell| !cell.is_formula)
+            .filter(|cell| !looks_like_footer_label(&cell.value))
+            .map(|cell| cell.col)
+            .collect(),
+    };
+
+    let mut targets = Vec::new();
+    for row in insert_at_row..(insert_at_row + count) {
+        for col in &target_cols {
+            targets.push(format!("{}{}", column_number_to_name(*col), row));
+        }
+    }
+    targets
+}
+
+fn looks_like_footer_label(value: &str) -> bool {
+    let text = value.trim().to_ascii_lowercase();
+    text == "total"
+        || text.contains("grand total")
+        || text.contains("subtotal")
+        || text.contains("footer")
+}
+
+fn preview_adjacent_sum_targets(
+    sheet: &umya_spreadsheet::Worksheet,
+    insert_at_row: u32,
+    count: u32,
+) -> Vec<String> {
+    let mut targets = Vec::new();
+    let pre_shift_subtotal_row = insert_at_row;
+    let post_shift_subtotal_row = insert_at_row + count;
+    let sum_re = simple_sum_range_regex();
+    let max_col = sheet.get_highest_column();
+    for col in 1..=max_col {
+        let Some(cell) = sheet.get_cell((col, pre_shift_subtotal_row)) else {
+            continue;
+        };
+        if !cell.is_formula() {
+            continue;
+        }
+        let formula_text = cell.get_formula().to_string();
+        let formula_bare = formula_text.strip_prefix('=').unwrap_or(&formula_text);
+        let Some(caps) = sum_re.captures(formula_bare) else {
+            continue;
+        };
+        let col1 = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let col2 = caps.get(3).map(|m| m.as_str()).unwrap_or_default();
+        let row2: u32 = caps
+            .get(4)
+            .and_then(|m| m.as_str().parse::<u32>().ok())
+            .unwrap_or(0);
+        if col1 == col2 && row2 + 1 == insert_at_row {
+            targets.push(format!(
+                "{}{}",
+                column_number_to_name(col),
+                post_shift_subtotal_row
+            ));
+        }
+    }
+    targets
+}
+
+fn simple_sum_range_regex() -> Regex {
+    Regex::new(r"(?i)^SUM\(([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)\)$").expect("valid simple sum regex")
+}
+
+fn apply_clone_template_row_plan_to_file(path: &Path, plan: &CloneTemplateRowPlan) -> Result<()> {
+    let structure_ops = vec![StructureOp::CloneRow {
+        sheet_name: plan.sheet_name.clone(),
+        source_row: plan.source_row,
+        insert_at: plan.insert_at_row,
+        count: plan.count,
+        expand_adjacent_sums: plan.expand_adjacent_sums,
+    }];
+    apply_structure_ops_to_file(path, &structure_ops, FormulaParsePolicy::Warn)?;
+    apply_clone_template_row_postprocess(path, plan)?;
+    Ok(())
+}
+
+fn apply_clone_template_row_postprocess(path: &Path, plan: &CloneTemplateRowPlan) -> Result<()> {
+    if plan.contained_merges.is_empty() && plan.contained_validations.is_empty() {
+        return Ok(());
+    }
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+    let sheet = book
+        .get_sheet_by_name_mut(&plan.sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", plan.sheet_name)))?;
+
+    for copy_idx in 0..plan.count {
+        let dest_row = plan.insert_at_row + copy_idx;
+        for merge in &plan.contained_merges {
+            sheet.add_merge_cells(format_a1_range(
+                merge.start_col,
+                merge.end_col,
+                dest_row,
+                dest_row,
+            ));
+        }
+    }
+
+    if !plan.contained_validations.is_empty() {
+        if sheet.get_data_validations().is_none() {
+            sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+        }
+        let validations = sheet
+            .get_data_validations_mut()
+            .expect("data validations exist after initialization");
+        for copy_idx in 0..plan.count {
+            let dest_row = plan.insert_at_row + copy_idx;
+            for spec in &plan.contained_validations {
+                let mut clone = spec.data_validation.clone();
+                clone
+                    .get_sequence_of_references_mut()
+                    .set_sqref(format_a1_range(
+                        spec.start_col,
+                        spec.end_col,
+                        dest_row,
+                        dest_row,
+                    ));
+                validations.add_data_validation_list(clone);
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)
+        .with_context(|| format!("failed to write workbook '{}'", path.display()))?;
+    Ok(())
+}
+
+fn clone_patch_targets_label(mode: ClonePatchTargetsArg) -> &'static str {
+    match mode {
+        ClonePatchTargetsArg::LikelyInputs => "likely_inputs",
+        ClonePatchTargetsArg::AllNonFormula => "all_non_formula",
+        ClonePatchTargetsArg::None => "none",
+    }
+}
+
+fn clone_merge_policy_label(policy: CloneMergePolicyArg) -> &'static str {
+    match policy {
+        CloneMergePolicyArg::Safe => "safe",
+        CloneMergePolicyArg::Strict => "strict",
+    }
+}
+
 fn parse_append_region_rows_from_csv(
     csv_path: &str,
     skip_header: bool,
@@ -3723,6 +4430,10 @@ fn invalid_ops_payload(message: impl AsRef<str>) -> anyhow::Error {
     anyhow!("invalid ops payload: {}", message.as_ref())
 }
 
+fn unsafe_clone_template(message: impl AsRef<str>) -> anyhow::Error {
+    anyhow!("unsafe clone template: {}", message.as_ref())
+}
+
 fn output_exists(message: impl AsRef<str>) -> anyhow::Error {
     anyhow!("output exists: {}", message.as_ref())
 }
@@ -4624,5 +5335,124 @@ mod tests {
                 .to_string()
                 .contains("append-region rows payload must contain at least one non-empty column")
         );
+    }
+
+    #[test]
+    fn build_clone_template_row_plan_reports_targets_and_adjacent_sum_candidates() {
+        let (_tmp, path) = write_workbook_fixture("clone-template-row-plan.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Item");
+            sheet.get_cell_mut("B1").set_value("Input");
+            sheet.get_cell_mut("C1").set_value("Calc");
+            sheet.get_cell_mut("A2").set_value("Alpha");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            set_formula(sheet, "C2", "B2*2", "20");
+            sheet.get_cell_mut("A3").set_value("Total");
+            set_formula(sheet, "C3", "SUM(C2:C2)", "20");
+        });
+
+        let plan = build_clone_template_row_plan(
+            &path,
+            "Sheet1",
+            2,
+            None,
+            Some(2),
+            None,
+            2,
+            true,
+            ClonePatchTargetsArg::LikelyInputs,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+        assert_eq!(plan.anchor_kind, CloneAnchorKind::After);
+        assert_eq!(plan.insert_at_row, 3);
+        assert_eq!(plan.inserted_row_range, "3:4");
+        assert_eq!(plan.formula_targets, vec!["C3", "C4"]);
+        assert_eq!(plan.likely_patch_targets, vec!["A3", "B3", "A4", "B4"]);
+        assert_eq!(plan.adjacent_sum_targets, vec!["C5"]);
+        assert_eq!(plan.confidence, "high");
+    }
+
+    #[test]
+    fn build_clone_template_row_plan_strict_merge_policy_fails_for_crossing_merge() {
+        let (_tmp, path) =
+            write_workbook_fixture("clone-template-row-strict-merge.xlsx", |sheet| {
+                sheet.get_cell_mut("A1").set_value("Header");
+                sheet.get_cell_mut("A2").set_value("Alpha");
+                sheet.get_cell_mut("B2").set_value_number(10.0);
+                sheet.add_merge_cells("A1:A2");
+            });
+
+        let error = build_clone_template_row_plan(
+            &path,
+            "Sheet1",
+            2,
+            Some(3),
+            None,
+            None,
+            1,
+            false,
+            ClonePatchTargetsArg::LikelyInputs,
+            CloneMergePolicyArg::Strict,
+        )
+        .expect_err("strict merge policy should fail");
+        assert!(error.to_string().contains("unsafe clone template"));
+    }
+
+    #[test]
+    fn apply_clone_template_row_plan_preserves_horizontal_merges_and_row_validations() {
+        let (_tmp, path) = write_workbook_fixture("clone-template-row-apply.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Input");
+            sheet.get_cell_mut("C1").set_value("Calc");
+            sheet.get_cell_mut("A2").set_value("Alpha");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            set_formula(sheet, "C2", "B2*2", "20");
+            sheet.add_merge_cells("A2:B2");
+
+            let mut dv = umya_spreadsheet::structs::DataValidation::default();
+            dv.set_type(umya_spreadsheet::structs::DataValidationValues::List);
+            dv.get_sequence_of_references_mut().set_sqref("B2:B2");
+            dv.set_formula1("\"A,B,C\"");
+            sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+            sheet
+                .get_data_validations_mut()
+                .unwrap()
+                .add_data_validation_list(dv);
+        });
+
+        let plan = build_clone_template_row_plan(
+            &path,
+            "Sheet1",
+            2,
+            Some(3),
+            None,
+            None,
+            2,
+            false,
+            ClonePatchTargetsArg::AllNonFormula,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+        apply_clone_template_row_plan_to_file(&path, &plan).expect("apply plan");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&path).expect("read workbook");
+        let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1");
+        assert_eq!(sheet.get_cell("A3").expect("A3").get_value(), "Alpha");
+        assert_eq!(sheet.get_cell("B4").expect("B4").get_value(), "10");
+        let merge_ranges: Vec<String> = sheet
+            .get_merge_cells()
+            .iter()
+            .map(|range| range.get_range())
+            .collect();
+        assert!(merge_ranges.contains(&"A3:B3".to_string()));
+        assert!(merge_ranges.contains(&"A4:B4".to_string()));
+        let validations = sheet.get_data_validations().expect("validations");
+        let sqrefs: Vec<String> = validations
+            .get_data_validation_list()
+            .iter()
+            .map(|dv| dv.get_sequence_of_references().get_sqref())
+            .collect();
+        assert!(sqrefs.iter().any(|sqref| sqref.contains("B3")));
+        assert!(sqrefs.iter().any(|sqref| sqref.contains("B4")));
     }
 }

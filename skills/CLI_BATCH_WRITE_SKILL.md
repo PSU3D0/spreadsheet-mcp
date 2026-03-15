@@ -120,7 +120,8 @@ Preferred canonical form includes top-level `sheet_name`:
 2. Run `asp verify <baseline> <current> --targets <Sheet!A1,...>` for explicit proof (target classifications + new/resolved/preexisting errors). Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` for pure target proof.
 3. Run `asp diff` to confirm intent. Add `--exclude-recalc-result` when you want a lower-noise review focused on direct edits.
 4. Use `asp append-region ...` when you need to append tabular rows before totals/subtotals without hand-calculating insertion points. It accepts either `--rows @rows.json` or `--from-csv rows.csv --header`, and it can target either `--region-id` or `--table-name` with `--footer-policy auto|before-footer|append-at-end`.
-5. Use `asp inspect-cells` on critical cells/ranges
+5. Use `asp clone-template-row ...` when you need another modeled row like a nearby template row. Start with `--dry-run` and inspect `formula_targets`, `likely_patch_targets`, merge warnings, and confidence before applying.
+6. Use `asp inspect-cells` on critical cells/ranges
 5. Use `asp recalculate --changed-cells` for a change summary
 
 ## Session integration

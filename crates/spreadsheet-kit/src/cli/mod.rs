@@ -99,6 +99,19 @@ pub enum AppendRegionFooterPolicyArg {
     AppendAtEnd,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ClonePatchTargetsArg {
+    LikelyInputs,
+    AllNonFormula,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CloneMergePolicyArg {
+    Safe,
+    Strict,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum SheetportManifestCommands {
     #[command(
@@ -1210,6 +1223,68 @@ Diagnostics note:
         force: bool,
     },
     #[command(
+        about = "Clone one template row into inserted rows with preview-first planning",
+        after_long_help = "Examples:\n  asp clone-template-row workbook.xlsx --sheet Sheet1 --source-row 12 --after 12 --count 2 --dry-run\n  asp clone-template-row workbook.xlsx --sheet Sheet1 --source-row 8 --before 20 --patch-targets all-non-formula --output updated.xlsx --force\n\nAnchor selection:\n  Use exactly one of --before, --after, or --insert-at.\n\nBehavior:\n  - clones a single template row using the existing row-clone structure path\n  - reports formula targets, patch targets, merge-boundary warnings, and confidence metadata in dry-run output\n  - merge-policy safe warns on boundary-crossing merges; strict fails instead"
+    )]
+    CloneTemplateRow {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long = "sheet",
+            value_name = "SHEET",
+            help = "Sheet containing the template row"
+        )]
+        sheet_name: String,
+        #[arg(long = "source-row", value_name = "ROW", help = "1-based row to clone")]
+        source_row: u32,
+        #[arg(long, value_name = "ROW", help = "Insert before this 1-based row")]
+        before: Option<u32>,
+        #[arg(long, value_name = "ROW", help = "Insert after this 1-based row")]
+        after: Option<u32>,
+        #[arg(
+            long = "insert-at",
+            value_name = "ROW",
+            help = "Raw 1-based insertion row"
+        )]
+        insert_at: Option<u32>,
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 1,
+            help = "Number of row copies to insert"
+        )]
+        count: u32,
+        #[arg(
+            long = "expand-adjacent-sums",
+            help = "Expand adjacent SUM footer formulas below the inserted rows"
+        )]
+        expand_adjacent_sums: bool,
+        #[arg(
+            long = "patch-targets",
+            value_enum,
+            default_value = "likely-inputs",
+            value_name = "MODE",
+            help = "Patch target mode: likely-inputs, all-non-formula, or none"
+        )]
+        patch_targets: ClonePatchTargetsArg,
+        #[arg(
+            long = "merge-policy",
+            value_enum,
+            default_value = "safe",
+            value_name = "POLICY",
+            help = "Merge handling policy: safe warns, strict fails"
+        )]
+        merge_policy: CloneMergePolicyArg,
+        #[arg(long, help = "Preview clone plan without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply clone to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
         about = "Apply stateless transform operations from an @ops payload",
         after_long_help = r#"Examples:
   agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run
@@ -2280,6 +2355,40 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
+        Commands::CloneTemplateRow {
+            file,
+            sheet_name,
+            source_row,
+            before,
+            after,
+            insert_at,
+            count,
+            expand_adjacent_sums,
+            patch_targets,
+            merge_policy,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::clone_template_row(
+                file,
+                sheet_name,
+                source_row,
+                before,
+                after,
+                insert_at,
+                count,
+                expand_adjacent_sums,
+                patch_targets,
+                merge_policy,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
         Commands::TransformBatch {
             file,
             ops,
@@ -3310,6 +3419,60 @@ mod tests {
                     AppendRegionFooterPolicyArg::AppendAtEnd
                 ));
                 assert_eq!(output, Some(PathBuf::from("updated.xlsx")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_clone_template_row_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "clone-template-row",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--source-row",
+            "12",
+            "--after",
+            "12",
+            "--count",
+            "2",
+            "--expand-adjacent-sums",
+            "--patch-targets",
+            "all-non-formula",
+            "--merge-policy",
+            "strict",
+            "--dry-run",
+        ])
+        .expect("parse clone-template-row");
+
+        match cli.command {
+            Commands::CloneTemplateRow {
+                file,
+                sheet_name,
+                source_row,
+                before,
+                after,
+                insert_at,
+                count,
+                expand_adjacent_sums,
+                patch_targets,
+                merge_policy,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet_name, "Sheet1");
+                assert_eq!(source_row, 12);
+                assert_eq!(before, None);
+                assert_eq!(after, Some(12));
+                assert_eq!(insert_at, None);
+                assert_eq!(count, 2);
+                assert!(expand_adjacent_sums);
+                assert!(matches!(patch_targets, ClonePatchTargetsArg::AllNonFormula));
+                assert!(matches!(merge_policy, CloneMergePolicyArg::Strict));
+                assert!(dry_run);
             }
             other => panic!("unexpected command: {other:?}"),
         }

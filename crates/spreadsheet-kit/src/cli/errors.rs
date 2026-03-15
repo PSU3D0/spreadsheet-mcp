@@ -86,6 +86,17 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
         };
     }
 
+    if let Some(detail) = message.strip_prefix("unsafe clone template: ") {
+        return ErrorEnvelope {
+            code: "UNSAFE_CLONE_TEMPLATE".to_string(),
+            message: detail.to_string(),
+            did_you_mean: None,
+            try_this: Some(
+                "re-run with --merge-policy safe or choose a different template row".to_string(),
+            ),
+        };
+    }
+
     if let Some(detail) = message.strip_prefix("write failed: ") {
         return ErrorEnvelope {
             code: "WRITE_FAILED".to_string(),

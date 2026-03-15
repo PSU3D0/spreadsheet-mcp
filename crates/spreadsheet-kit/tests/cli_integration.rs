@@ -362,6 +362,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root.contains("find-value"));
     assert!(root.contains("verify"));
     assert!(root.contains("append-region"));
+    assert!(root.contains("clone-template-row"));
     assert!(root.contains("named-ranges"));
     assert!(root.contains("find-formula"));
     assert!(root.contains("scan-volatiles"));
@@ -586,6 +587,24 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(append_region.contains("--from-csv"));
     assert!(append_region.contains("--header"));
     assert!(append_region.contains("--footer-policy"));
+
+    let clone_template_row_help = run_cli(&["clone-template-row", "--help"]);
+    assert!(
+        clone_template_row_help.status.success(),
+        "stderr: {:?}",
+        clone_template_row_help.stderr
+    );
+    let clone_template_row = parse_stdout_text(&clone_template_row_help);
+    assert!(
+        clone_template_row
+            .contains("Clone one template row into inserted rows with preview-first planning")
+    );
+    assert!(clone_template_row.contains("--source-row"));
+    assert!(clone_template_row.contains("--before"));
+    assert!(clone_template_row.contains("--after"));
+    assert!(clone_template_row.contains("--insert-at"));
+    assert!(clone_template_row.contains("--patch-targets"));
+    assert!(clone_template_row.contains("--merge-policy"));
 
     let transform_help = run_cli(&["transform-batch", "--help"]);
     assert!(
@@ -7132,6 +7151,163 @@ fn cli_append_region_before_footer_policy_requires_detected_footer() {
             .unwrap_or_default()
             .contains("requires a detected footer/subtotal row")
     );
+}
+
+#[test]
+fn cli_clone_template_row_dry_run_reports_targets_and_confidence() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("clone-template-row-dry-run.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Item");
+        sheet.get_cell_mut("B1").set_value("Input");
+        sheet.get_cell_mut("C1").set_value("Calc");
+        sheet.get_cell_mut("A2").set_value("Alpha");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("C2").set_formula("B2*2");
+        sheet.get_cell_mut("A3").set_value("Total");
+        sheet.get_cell_mut("C3").set_formula("SUM(C2:C2)");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let output = run_cli(&[
+        "clone-template-row",
+        workbook_path.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--source-row",
+        "2",
+        "--after",
+        "2",
+        "--count",
+        "2",
+        "--expand-adjacent-sums",
+        "--dry-run",
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["helper_kind"], "clone_template_row");
+    assert_eq!(payload["anchor_kind"], "after");
+    assert_eq!(payload["insert_at_row"], 3);
+    assert_eq!(payload["inserted_row_range"], "3:4");
+    assert_eq!(payload["formula_targets"][0], "C3");
+    assert_eq!(payload["formula_targets"][1], "C4");
+    assert_eq!(payload["likely_patch_targets"][0], "A3");
+    assert_eq!(payload["adjacent_sum_targets"][0], "C5");
+    assert_eq!(payload["confidence"], "high");
+    assert_eq!(payload["would_change"], true);
+}
+
+#[test]
+fn cli_clone_template_row_strict_merge_policy_fails_on_crossing_merge() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("clone-template-row-strict-merge.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Header");
+        sheet.get_cell_mut("A2").set_value("Alpha");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.add_merge_cells("A1:A2");
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let output = run_cli(&[
+        "clone-template-row",
+        workbook_path.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--source-row",
+        "2",
+        "--before",
+        "3",
+        "--merge-policy",
+        "strict",
+        "--dry-run",
+    ]);
+    assert!(!output.status.success());
+    let err = parse_stderr_json(&output);
+    assert_eq!(err["code"], "UNSAFE_CLONE_TEMPLATE");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cross the clone boundary")
+    );
+}
+
+#[test]
+fn cli_clone_template_row_output_preserves_horizontal_merge_and_validation() {
+    let tmp = tempdir().expect("tempdir");
+    let workbook_path = tmp.path().join("clone-template-row-output.xlsx");
+    let output_path = tmp.path().join("clone-template-row-output-target.xlsx");
+
+    let mut workbook = umya_spreadsheet::new_file();
+    {
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").expect("sheet1");
+        sheet.get_cell_mut("A1").set_value("Name");
+        sheet.get_cell_mut("B1").set_value("Input");
+        sheet.get_cell_mut("C1").set_value("Calc");
+        sheet.get_cell_mut("A2").set_value("Alpha");
+        sheet.get_cell_mut("B2").set_value_number(10.0);
+        sheet.get_cell_mut("C2").set_formula("B2*2");
+        sheet.add_merge_cells("A2:B2");
+
+        let mut dv = umya_spreadsheet::structs::DataValidation::default();
+        dv.set_type(umya_spreadsheet::structs::DataValidationValues::List);
+        dv.get_sequence_of_references_mut().set_sqref("B2:B2");
+        dv.set_formula1("\"A,B,C\"");
+        sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+        sheet
+            .get_data_validations_mut()
+            .unwrap()
+            .add_data_validation_list(dv);
+    }
+    umya_spreadsheet::writer::xlsx::write(&workbook, &workbook_path).expect("write workbook");
+
+    let output = run_cli(&[
+        "clone-template-row",
+        workbook_path.to_str().expect("path utf8"),
+        "--sheet",
+        "Sheet1",
+        "--source-row",
+        "2",
+        "--before",
+        "3",
+        "--count",
+        "2",
+        "--patch-targets",
+        "all-non-formula",
+        "--output",
+        output_path.to_str().expect("output utf8"),
+    ]);
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["changed"], true);
+    assert_eq!(payload["inserted_row_range"], "3:4");
+
+    let book = umya_spreadsheet::reader::xlsx::read(&output_path).expect("read output workbook");
+    let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1 exists");
+    assert_eq!(sheet.get_cell("A3").expect("A3").get_value(), "Alpha");
+    assert_eq!(sheet.get_cell("B4").expect("B4").get_value(), "10");
+    let merge_ranges: Vec<String> = sheet
+        .get_merge_cells()
+        .iter()
+        .map(|range| range.get_range())
+        .collect();
+    assert!(merge_ranges.contains(&"A3:B3".to_string()));
+    assert!(merge_ranges.contains(&"A4:B4".to_string()));
+    let validations = sheet.get_data_validations().expect("validations");
+    let sqrefs: Vec<String> = validations
+        .get_data_validation_list()
+        .iter()
+        .map(|dv| dv.get_sequence_of_references().get_sqref())
+        .collect();
+    assert!(sqrefs.iter().any(|sqref| sqref.contains("B3")));
+    assert!(sqrefs.iter().any(|sqref| sqref.contains("B4")));
 }
 
 #[test]
