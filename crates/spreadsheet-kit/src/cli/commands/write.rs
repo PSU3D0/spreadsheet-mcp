@@ -1,6 +1,7 @@
 use crate::cli::{AppendRegionFooterPolicyArg, CloneMergePolicyArg, ClonePatchTargetsArg};
 use crate::config::{OutputProfile, RecalcBackendKind, ServerConfig, TransportKind};
 use crate::core::types::CellEdit;
+use crate::formula::pattern::{RelativeMode, parse_base_formula, shift_formula_ast};
 use crate::model::{
     CommandClass, FORMULA_PARSE_FAILED_PREFIX, FormulaParseDiagnostics,
     FormulaParseDiagnosticsBuilder, FormulaParsePolicy, GridPayload, NamedItemKind, Warning,
@@ -2606,10 +2607,11 @@ fn expand_table_target_on_file(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum CloneHelperKind {
     CloneTemplateRow,
+    CloneRowBand,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -2709,6 +2711,103 @@ struct CloneValidationSpec {
     data_validation: umya_spreadsheet::structs::DataValidation,
     start_col: u32,
     end_col: u32,
+    start_row_offset: u32,
+    end_row_offset: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CloneTemplateCellData {
+    col: u32,
+    value: String,
+    formula: Option<String>,
+    style: umya_spreadsheet::Style,
+}
+
+#[derive(Debug, Clone)]
+struct CloneBandTemplateRow {
+    source_row: u32,
+    row_offset: u32,
+    preview_cells: Vec<CloneTemplateCellPreview>,
+    cell_data: Vec<CloneTemplateCellData>,
+    row_dimension: Option<umya_spreadsheet::structs::Row>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CloneInsertedBlock {
+    block_index: u32,
+    row_range: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CloneRowBandResponse {
+    mode: String,
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_path: Option<String>,
+    sheet_name: String,
+    helper_kind: CloneHelperKind,
+    source_row_range: String,
+    source_row_count: u32,
+    anchor_kind: CloneAnchorKind,
+    anchor_row: u32,
+    insert_at_row: u32,
+    repeat: u32,
+    rows_inserted: u32,
+    inserted_row_range: String,
+    inserted_blocks: Vec<CloneInsertedBlock>,
+    expand_adjacent_sums: bool,
+    patch_target_mode: String,
+    merge_policy: String,
+    template_summary: CloneTemplateSummary,
+    formula_targets: Vec<String>,
+    likely_patch_targets: Vec<String>,
+    adjacent_sum_targets: Vec<String>,
+    warnings: Vec<String>,
+    confidence: String,
+    confidence_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    would_change: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changed: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct CloneRowBandPlan {
+    sheet_name: String,
+    helper_kind: CloneHelperKind,
+    source_row_range: String,
+    source_row_count: u32,
+    anchor_kind: CloneAnchorKind,
+    anchor_row: u32,
+    insert_at_row: u32,
+    repeat: u32,
+    rows_inserted: u32,
+    inserted_row_range: String,
+    inserted_blocks: Vec<CloneInsertedBlock>,
+    expand_adjacent_sums: bool,
+    patch_target_mode: String,
+    merge_policy: String,
+    template_summary: CloneTemplateSummary,
+    formula_targets: Vec<String>,
+    likely_patch_targets: Vec<String>,
+    adjacent_sum_targets: Vec<String>,
+    warnings: Vec<String>,
+    confidence: String,
+    confidence_reason: String,
+    template_rows: Vec<CloneBandTemplateRow>,
+    contained_merges: Vec<CloneBandMergeSpan>,
+    contained_validations: Vec<CloneValidationSpec>,
+}
+
+#[derive(Debug, Clone)]
+struct CloneBandMergeSpan {
+    start_col: u32,
+    end_col: u32,
+    start_row_offset: u32,
+    end_row_offset: u32,
+    range: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3122,6 +3221,8 @@ fn inspect_clone_row_validations(
                     data_validation: clone,
                     start_col: bounds.start_col,
                     end_col: bounds.end_col,
+                    start_row_offset: 0,
+                    end_row_offset: 0,
                 });
             } else {
                 crossing.push(raw);
@@ -3310,6 +3411,638 @@ fn clone_merge_policy_label(policy: CloneMergePolicyArg) -> &'static str {
         CloneMergePolicyArg::Safe => "safe",
         CloneMergePolicyArg::Strict => "strict",
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn clone_row_band(
+    file: PathBuf,
+    sheet_name: String,
+    source_rows: String,
+    before: Option<u32>,
+    after: Option<u32>,
+    insert_at: Option<u32>,
+    repeat: u32,
+    expand_adjacent_sums: bool,
+    patch_targets: ClonePatchTargetsArg,
+    merge_policy: CloneMergePolicyArg,
+    dry_run: bool,
+    in_place: bool,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<Value> {
+    let selected_modes = dry_run as u8 + in_place as u8 + output.is_some() as u8;
+    if selected_modes != 1 {
+        return Err(invalid_argument(
+            "choose exactly one of --dry-run, --in-place, or --output <PATH>",
+        ));
+    }
+    if force && output.is_none() {
+        return Err(invalid_argument("--force requires --output <PATH>"));
+    }
+
+    let runtime = StatelessRuntime;
+    let source = runtime.normalize_existing_file(&file)?;
+    let plan = build_clone_row_band_plan(
+        &source,
+        &sheet_name,
+        &source_rows,
+        before,
+        after,
+        insert_at,
+        repeat,
+        expand_adjacent_sums,
+        patch_targets,
+        merge_policy,
+    )?;
+
+    if dry_run {
+        return Ok(serde_json::to_value(build_clone_row_band_response(
+            &plan,
+            "dry_run",
+            source.display().to_string(),
+            None,
+            Some(true),
+            None,
+            None,
+        ))?);
+    }
+
+    if in_place {
+        let source_path = source.display().to_string();
+        let ((), temp_path) =
+            apply_to_temp_copy(&source, source.parent(), ".clone-row-band-", |work_path| {
+                apply_clone_row_band_plan_to_file(work_path, &plan)
+            })?;
+        atomic_replace_target(temp_path, &source, true)?;
+        return Ok(serde_json::to_value(build_clone_row_band_response(
+            &plan,
+            "in_place",
+            source_path.clone(),
+            Some(source_path.clone()),
+            None,
+            Some(source_path),
+            Some(true),
+        ))?);
+    }
+
+    let target = runtime.normalize_destination_path(
+        output
+            .as_ref()
+            .expect("output required unless dry-run or in-place"),
+    )?;
+    ensure_output_path_is_distinct(&source, &target)?;
+    if path_entry_exists(&target)? && !force {
+        return Err(output_exists(format!(
+            "output path '{}' already exists",
+            target.display()
+        )));
+    }
+
+    let source_path = source.display().to_string();
+    let target_path = target.display().to_string();
+    let ((), temp_path) =
+        apply_to_temp_copy(&source, target.parent(), ".clone-row-band-", |work_path| {
+            apply_clone_row_band_plan_to_file(work_path, &plan)
+        })?;
+    atomic_replace_target(temp_path, &target, force)?;
+
+    Ok(serde_json::to_value(build_clone_row_band_response(
+        &plan,
+        "output",
+        target_path.clone(),
+        Some(source_path),
+        None,
+        Some(target_path),
+        Some(true),
+    ))?)
+}
+
+fn build_clone_row_band_response(
+    plan: &CloneRowBandPlan,
+    mode: &str,
+    file: String,
+    source_path: Option<String>,
+    would_change: Option<bool>,
+    target_path: Option<String>,
+    changed: Option<bool>,
+) -> CloneRowBandResponse {
+    CloneRowBandResponse {
+        mode: mode.to_string(),
+        file,
+        source_path,
+        target_path,
+        sheet_name: plan.sheet_name.clone(),
+        helper_kind: plan.helper_kind,
+        source_row_range: plan.source_row_range.clone(),
+        source_row_count: plan.source_row_count,
+        anchor_kind: plan.anchor_kind,
+        anchor_row: plan.anchor_row,
+        insert_at_row: plan.insert_at_row,
+        repeat: plan.repeat,
+        rows_inserted: plan.rows_inserted,
+        inserted_row_range: plan.inserted_row_range.clone(),
+        inserted_blocks: plan.inserted_blocks.clone(),
+        expand_adjacent_sums: plan.expand_adjacent_sums,
+        patch_target_mode: plan.patch_target_mode.clone(),
+        merge_policy: plan.merge_policy.clone(),
+        template_summary: plan.template_summary.clone(),
+        formula_targets: plan.formula_targets.clone(),
+        likely_patch_targets: plan.likely_patch_targets.clone(),
+        adjacent_sum_targets: plan.adjacent_sum_targets.clone(),
+        warnings: plan.warnings.clone(),
+        confidence: plan.confidence.clone(),
+        confidence_reason: plan.confidence_reason.clone(),
+        would_change,
+        changed,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_clone_row_band_plan(
+    source: &Path,
+    sheet_name: &str,
+    source_rows: &str,
+    before: Option<u32>,
+    after: Option<u32>,
+    insert_at: Option<u32>,
+    repeat: u32,
+    expand_adjacent_sums: bool,
+    patch_targets: ClonePatchTargetsArg,
+    merge_policy: CloneMergePolicyArg,
+) -> Result<CloneRowBandPlan> {
+    if repeat == 0 {
+        return Err(invalid_argument("--repeat must be at least 1"));
+    }
+    let (source_start_row, source_end_row) = parse_clone_row_band(source_rows)?;
+    let source_row_count = source_end_row - source_start_row + 1;
+    let (anchor_kind, anchor_row, insert_at_row) = resolve_clone_anchor(before, after, insert_at)?;
+
+    let book = umya_spreadsheet::reader::xlsx::read(source)
+        .with_context(|| format!("failed to read workbook '{}'", source.display()))?;
+    let sheet = book
+        .get_sheet_by_name(sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", sheet_name)))?;
+
+    let template_rows = inspect_clone_band_rows(sheet, source_start_row, source_end_row);
+    let (contained_merges, crossing_merges) =
+        inspect_clone_band_merges(sheet, source_start_row, source_end_row)?;
+    let (contained_validations, crossing_validations, validation_cell_count) =
+        inspect_clone_band_validations(sheet, source_start_row, source_end_row)?;
+
+    if matches!(merge_policy, CloneMergePolicyArg::Strict) && !crossing_merges.is_empty() {
+        return Err(unsafe_clone_template(format!(
+            "source rows {}:{} intersect merged ranges that cross the clone boundary: {}",
+            source_start_row,
+            source_end_row,
+            crossing_merges.join(", ")
+        )));
+    }
+
+    let rows_inserted = source_row_count * repeat;
+    let source_row_range = format!("{}:{}", source_start_row, source_end_row);
+    let inserted_row_range = format!(
+        "{}:{}",
+        insert_at_row,
+        insert_at_row + rows_inserted.saturating_sub(1)
+    );
+    let inserted_blocks = build_clone_inserted_blocks(insert_at_row, source_row_count, repeat);
+    let formula_targets =
+        build_clone_band_formula_targets(&template_rows, insert_at_row, source_row_count, repeat);
+    let likely_patch_targets = build_clone_band_patch_targets(
+        &template_rows,
+        insert_at_row,
+        source_row_count,
+        repeat,
+        patch_targets,
+    );
+    let adjacent_sum_targets = if expand_adjacent_sums {
+        preview_adjacent_sum_targets(sheet, insert_at_row, rows_inserted)
+    } else {
+        Vec::new()
+    };
+
+    let non_empty_cell_count = template_rows
+        .iter()
+        .flat_map(|row| row.preview_cells.iter())
+        .filter(|cell| cell.is_formula || !cell.value.trim().is_empty())
+        .count() as u32;
+    let formula_cell_count = template_rows
+        .iter()
+        .flat_map(|row| row.preview_cells.iter())
+        .filter(|cell| cell.is_formula)
+        .count() as u32;
+    let style_cell_count = template_rows
+        .iter()
+        .map(|row| row.cell_data.len() as u32)
+        .sum();
+
+    let mut warnings = Vec::new();
+    if template_rows.iter().all(|row| row.cell_data.is_empty()) {
+        warnings.push(format!(
+            "source rows {}:{} have no materialized cells; cloning will insert blank rows",
+            source_start_row, source_end_row
+        ));
+    }
+    if !crossing_merges.is_empty() {
+        warnings.push(format!(
+            "merge-policy '{}' will not reproduce boundary-crossing merged ranges: {}",
+            clone_merge_policy_label(merge_policy),
+            crossing_merges.join(", ")
+        ));
+    }
+    if !crossing_validations.is_empty() {
+        warnings.push(format!(
+            "band validation cloning skipped boundary-crossing validation ranges: {}",
+            crossing_validations.join(", ")
+        ));
+    }
+    if expand_adjacent_sums && adjacent_sum_targets.is_empty() {
+        warnings.push(
+            "no adjacent SUM footer formulas qualified for expansion below the inserted rows"
+                .to_string(),
+        );
+    }
+
+    let (confidence, confidence_reason) = if template_rows
+        .iter()
+        .all(|row| row.cell_data.is_empty())
+    {
+        (
+            "low",
+            "source row band has no materialized cells; verify that inserting blank rows is intended"
+                .to_string(),
+        )
+    } else if !crossing_merges.is_empty() || !crossing_validations.is_empty() {
+        (
+            "medium",
+            "clone can proceed, but boundary-crossing merges or validations will not be fully reproduced"
+                .to_string(),
+        )
+    } else {
+        (
+            "high",
+            "row band cloned cleanly with no merge or validation boundary conflicts".to_string(),
+        )
+    };
+
+    Ok(CloneRowBandPlan {
+        sheet_name: sheet_name.to_string(),
+        helper_kind: CloneHelperKind::CloneRowBand,
+        source_row_range,
+        source_row_count,
+        anchor_kind,
+        anchor_row,
+        insert_at_row,
+        repeat,
+        rows_inserted,
+        inserted_row_range,
+        inserted_blocks,
+        expand_adjacent_sums,
+        patch_target_mode: clone_patch_targets_label(patch_targets).to_string(),
+        merge_policy: clone_merge_policy_label(merge_policy).to_string(),
+        template_summary: CloneTemplateSummary {
+            non_empty_cell_count,
+            formula_cell_count,
+            style_cell_count,
+            validation_cell_count,
+            merged_ranges_fully_contained: contained_merges
+                .iter()
+                .map(|span| span.range.clone())
+                .collect(),
+            merged_ranges_crossing_boundary: crossing_merges,
+        },
+        formula_targets,
+        likely_patch_targets,
+        adjacent_sum_targets,
+        warnings,
+        confidence: confidence.to_string(),
+        confidence_reason,
+        template_rows,
+        contained_merges,
+        contained_validations,
+    })
+}
+
+fn parse_clone_row_band(raw: &str) -> Result<(u32, u32)> {
+    let (start, end) = raw
+        .split_once(':')
+        .ok_or_else(|| invalid_argument("--source-rows must use START:END notation"))?;
+    let start_row = start
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| invalid_argument("--source-rows start row must be a positive integer"))?;
+    let end_row = end
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| invalid_argument("--source-rows end row must be a positive integer"))?;
+    if start_row == 0 || end_row == 0 {
+        return Err(invalid_argument(
+            "--source-rows values must both be at least 1",
+        ));
+    }
+    if start_row > end_row {
+        return Err(invalid_argument(
+            "--source-rows must be an ascending contiguous range like 12:14",
+        ));
+    }
+    Ok((start_row, end_row))
+}
+
+fn inspect_clone_band_rows(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_start_row: u32,
+    source_end_row: u32,
+) -> Vec<CloneBandTemplateRow> {
+    let max_col = sheet.get_highest_column();
+    let mut rows = Vec::new();
+    for source_row in source_start_row..=source_end_row {
+        let row_offset = source_row - source_start_row;
+        let mut preview_cells = Vec::new();
+        let mut cell_data = Vec::new();
+        for col in 1..=max_col {
+            let Some(cell) = sheet.get_cell((col, source_row)) else {
+                continue;
+            };
+            let value = cell.get_value().to_string();
+            let is_formula = cell.is_formula();
+            preview_cells.push(CloneTemplateCellPreview {
+                col,
+                value: value.clone(),
+                is_formula,
+            });
+            cell_data.push(CloneTemplateCellData {
+                col,
+                value,
+                formula: if is_formula {
+                    Some(cell.get_formula().to_string())
+                } else {
+                    None
+                },
+                style: cell.get_style().clone(),
+            });
+        }
+        rows.push(CloneBandTemplateRow {
+            source_row,
+            row_offset,
+            preview_cells,
+            cell_data,
+            row_dimension: sheet.get_row_dimension(&source_row).cloned(),
+        });
+    }
+    rows
+}
+
+fn inspect_clone_band_merges(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_start_row: u32,
+    source_end_row: u32,
+) -> Result<(Vec<CloneBandMergeSpan>, Vec<String>)> {
+    let mut contained = Vec::new();
+    let mut crossing = Vec::new();
+    for range in sheet.get_merge_cells() {
+        let raw = range.get_range();
+        let Some(bounds) = parse_append_region_bounds(&raw) else {
+            continue;
+        };
+        if bounds.end_row < source_start_row || bounds.start_row > source_end_row {
+            continue;
+        }
+        if bounds.start_row >= source_start_row && bounds.end_row <= source_end_row {
+            contained.push(CloneBandMergeSpan {
+                start_col: bounds.start_col,
+                end_col: bounds.end_col,
+                start_row_offset: bounds.start_row - source_start_row,
+                end_row_offset: bounds.end_row - source_start_row,
+                range: raw,
+            });
+        } else {
+            crossing.push(raw);
+        }
+    }
+    Ok((contained, crossing))
+}
+
+fn inspect_clone_band_validations(
+    sheet: &umya_spreadsheet::Worksheet,
+    source_start_row: u32,
+    source_end_row: u32,
+) -> Result<(Vec<CloneValidationSpec>, Vec<String>, u32)> {
+    let mut contained = Vec::new();
+    let mut crossing = Vec::new();
+    let mut validation_cells = BTreeSet::new();
+
+    let Some(validations) = sheet.get_data_validations() else {
+        return Ok((contained, crossing, 0));
+    };
+
+    for data_validation in validations.get_data_validation_list() {
+        for range in data_validation
+            .get_sequence_of_references()
+            .get_range_collection()
+        {
+            let raw = range.get_range();
+            let Some(bounds) = parse_append_region_bounds(&raw) else {
+                continue;
+            };
+            if bounds.end_row < source_start_row || bounds.start_row > source_end_row {
+                continue;
+            }
+            let intersect_start = bounds.start_row.max(source_start_row);
+            let intersect_end = bounds.end_row.min(source_end_row);
+            for row in intersect_start..=intersect_end {
+                for col in bounds.start_col..=bounds.end_col {
+                    validation_cells.insert((row, col));
+                }
+            }
+            if bounds.start_row >= source_start_row && bounds.end_row <= source_end_row {
+                let mut clone = data_validation.clone();
+                clone
+                    .get_sequence_of_references_mut()
+                    .set_sqref(format_a1_range(
+                        bounds.start_col,
+                        bounds.end_col,
+                        bounds.start_row,
+                        bounds.end_row,
+                    ));
+                contained.push(CloneValidationSpec {
+                    data_validation: clone,
+                    start_col: bounds.start_col,
+                    end_col: bounds.end_col,
+                    start_row_offset: bounds.start_row - source_start_row,
+                    end_row_offset: bounds.end_row - source_start_row,
+                });
+            } else {
+                crossing.push(raw);
+            }
+        }
+    }
+
+    Ok((contained, crossing, validation_cells.len() as u32))
+}
+
+fn build_clone_inserted_blocks(
+    insert_at_row: u32,
+    source_row_count: u32,
+    repeat: u32,
+) -> Vec<CloneInsertedBlock> {
+    (0..repeat)
+        .map(|block_index| {
+            let start_row = insert_at_row + block_index * source_row_count;
+            CloneInsertedBlock {
+                block_index,
+                row_range: format!(
+                    "{}:{}",
+                    start_row,
+                    start_row + source_row_count.saturating_sub(1)
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_clone_band_formula_targets(
+    template_rows: &[CloneBandTemplateRow],
+    insert_at_row: u32,
+    source_row_count: u32,
+    repeat: u32,
+) -> Vec<String> {
+    let mut targets = Vec::new();
+    for block_index in 0..repeat {
+        let block_start = insert_at_row + block_index * source_row_count;
+        for row in template_rows {
+            let dest_row = block_start + row.row_offset;
+            for cell in row.preview_cells.iter().filter(|cell| cell.is_formula) {
+                targets.push(format!("{}{}", column_number_to_name(cell.col), dest_row));
+            }
+        }
+    }
+    targets
+}
+
+fn build_clone_band_patch_targets(
+    template_rows: &[CloneBandTemplateRow],
+    insert_at_row: u32,
+    source_row_count: u32,
+    repeat: u32,
+    patch_targets: ClonePatchTargetsArg,
+) -> Vec<String> {
+    let mut targets = Vec::new();
+    for block_index in 0..repeat {
+        let block_start = insert_at_row + block_index * source_row_count;
+        for row in template_rows {
+            let dest_row = block_start + row.row_offset;
+            for cell in &row.preview_cells {
+                if cell.is_formula {
+                    continue;
+                }
+                let include = match patch_targets {
+                    ClonePatchTargetsArg::None => false,
+                    ClonePatchTargetsArg::AllNonFormula => true,
+                    ClonePatchTargetsArg::LikelyInputs => !looks_like_footer_label(&cell.value),
+                };
+                if include {
+                    targets.push(format!("{}{}", column_number_to_name(cell.col), dest_row));
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn apply_clone_row_band_plan_to_file(path: &Path, plan: &CloneRowBandPlan) -> Result<()> {
+    let structure_ops = vec![StructureOp::InsertRows {
+        sheet_name: plan.sheet_name.clone(),
+        at_row: plan.insert_at_row,
+        count: plan.rows_inserted,
+        expand_adjacent_sums: plan.expand_adjacent_sums,
+    }];
+    apply_structure_ops_to_file(path, &structure_ops, FormulaParsePolicy::Warn)?;
+    apply_clone_row_band_postprocess(path, plan)?;
+    Ok(())
+}
+
+fn apply_clone_row_band_postprocess(path: &Path, plan: &CloneRowBandPlan) -> Result<()> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("failed to read workbook '{}'", path.display()))?;
+    let sheet = book
+        .get_sheet_by_name_mut(&plan.sheet_name)
+        .ok_or_else(|| invalid_argument(format!("sheet '{}' was not found", plan.sheet_name)))?;
+
+    for block_index in 0..plan.repeat {
+        let block_start = plan.insert_at_row + block_index * plan.source_row_count;
+        for row in &plan.template_rows {
+            let dest_row = block_start + row.row_offset;
+            if let Some(src_dim) = &row.row_dimension {
+                let dest_dim = sheet.get_row_dimension_mut(&dest_row);
+                dest_dim
+                    .set_height(*src_dim.get_height())
+                    .set_descent(*src_dim.get_descent())
+                    .set_thick_bot(*src_dim.get_thick_bot())
+                    .set_custom_height(*src_dim.get_custom_height())
+                    .set_hidden(*src_dim.get_hidden())
+                    .set_style(src_dim.get_style().clone());
+            }
+            for cell in &row.cell_data {
+                let dest_cell = sheet.get_cell_mut((cell.col, dest_row));
+                dest_cell.set_style(cell.style.clone());
+                dest_cell.get_cell_value_mut().remove_formula();
+                if let Some(formula) = &cell.formula {
+                    let shifted = parse_base_formula(formula)
+                        .and_then(|ast| {
+                            shift_formula_ast(
+                                &ast,
+                                0,
+                                dest_row as i32 - row.source_row as i32,
+                                RelativeMode::Excel,
+                            )
+                        })
+                        .ok()
+                        .map(|value| value.strip_prefix('=').unwrap_or(&value).to_string())
+                        .unwrap_or_else(|| formula.clone());
+                    dest_cell.set_formula(shifted);
+                    dest_cell.set_formula_result_default("");
+                } else {
+                    dest_cell.set_value(cell.value.clone());
+                }
+            }
+        }
+        for merge in &plan.contained_merges {
+            sheet.add_merge_cells(format_a1_range(
+                merge.start_col,
+                merge.end_col,
+                block_start + merge.start_row_offset,
+                block_start + merge.end_row_offset,
+            ));
+        }
+    }
+
+    if !plan.contained_validations.is_empty() {
+        if sheet.get_data_validations().is_none() {
+            sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+        }
+        let validations = sheet
+            .get_data_validations_mut()
+            .expect("data validations exist after initialization");
+        for block_index in 0..plan.repeat {
+            let block_start = plan.insert_at_row + block_index * plan.source_row_count;
+            for spec in &plan.contained_validations {
+                let mut clone = spec.data_validation.clone();
+                clone
+                    .get_sequence_of_references_mut()
+                    .set_sqref(format_a1_range(
+                        spec.start_col,
+                        spec.end_col,
+                        block_start + spec.start_row_offset,
+                        block_start + spec.end_row_offset,
+                    ));
+                validations.add_data_validation_list(clone);
+            }
+        }
+    }
+
+    umya_spreadsheet::writer::xlsx::write(&book, path)
+        .with_context(|| format!("failed to write workbook '{}'", path.display()))?;
+    Ok(())
 }
 
 fn parse_append_region_rows_from_csv(
@@ -5454,5 +6187,175 @@ mod tests {
             .collect();
         assert!(sqrefs.iter().any(|sqref| sqref.contains("B3")));
         assert!(sqrefs.iter().any(|sqref| sqref.contains("B4")));
+    }
+
+    #[test]
+    fn build_clone_row_band_plan_reports_inserted_blocks_and_targets() {
+        let (_tmp, path) = write_workbook_fixture("clone-row-band-plan.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Item");
+            sheet.get_cell_mut("B1").set_value("Input");
+            sheet.get_cell_mut("C1").set_value("Calc");
+            sheet.get_cell_mut("A2").set_value("Alpha");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            set_formula(sheet, "C2", "B2*2", "20");
+            sheet.get_cell_mut("A3").set_value("Beta");
+            sheet.get_cell_mut("B3").set_value_number(20.0);
+            set_formula(sheet, "C3", "B3*2", "40");
+            sheet.get_cell_mut("A4").set_value("Total");
+            set_formula(sheet, "C4", "SUM(C2:C3)", "60");
+        });
+
+        let plan = build_clone_row_band_plan(
+            &path,
+            "Sheet1",
+            "2:3",
+            None,
+            Some(3),
+            None,
+            2,
+            true,
+            ClonePatchTargetsArg::LikelyInputs,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+        assert_eq!(plan.helper_kind, CloneHelperKind::CloneRowBand);
+        assert_eq!(plan.source_row_count, 2);
+        assert_eq!(plan.rows_inserted, 4);
+        assert_eq!(plan.inserted_row_range, "4:7");
+        assert_eq!(plan.inserted_blocks.len(), 2);
+        assert_eq!(plan.inserted_blocks[0].row_range, "4:5");
+        assert_eq!(plan.inserted_blocks[1].row_range, "6:7");
+        assert_eq!(plan.formula_targets, vec!["C4", "C5", "C6", "C7"]);
+        assert_eq!(
+            plan.likely_patch_targets,
+            vec!["A4", "B4", "A5", "B5", "A6", "B6", "A7", "B7"]
+        );
+        assert_eq!(plan.adjacent_sum_targets, vec!["C8"]);
+    }
+
+    #[test]
+    fn build_clone_row_band_plan_strict_merge_policy_fails_for_crossing_merge() {
+        let (_tmp, path) = write_workbook_fixture("clone-row-band-strict-merge.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Header");
+            sheet.get_cell_mut("A2").set_value("Alpha");
+            sheet.get_cell_mut("A3").set_value("Beta");
+            sheet.add_merge_cells("A1:A2");
+        });
+
+        let error = build_clone_row_band_plan(
+            &path,
+            "Sheet1",
+            "2:3",
+            Some(4),
+            None,
+            None,
+            1,
+            false,
+            ClonePatchTargetsArg::LikelyInputs,
+            CloneMergePolicyArg::Strict,
+        )
+        .expect_err("strict merge policy should fail");
+        assert!(error.to_string().contains("unsafe clone template"));
+    }
+
+    #[test]
+    fn apply_clone_row_band_plan_preserves_contained_merges_validations_and_row_heights() {
+        let (_tmp, path) = write_workbook_fixture("clone-row-band-apply.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Name");
+            sheet.get_cell_mut("B1").set_value("Input");
+            sheet.get_cell_mut("C1").set_value("Calc");
+            sheet.get_cell_mut("A2").set_value("Alpha");
+            sheet.get_cell_mut("B2").set_value_number(10.0);
+            set_formula(sheet, "C2", "B2*2", "20");
+            sheet.get_cell_mut("A3").set_value("Beta");
+            sheet.get_cell_mut("B3").set_value_number(20.0);
+            set_formula(sheet, "C3", "B3*2", "40");
+            sheet.add_merge_cells("A2:A3");
+            sheet
+                .get_row_dimension_mut(&2)
+                .set_height(28.0)
+                .set_custom_height(true);
+            sheet
+                .get_row_dimension_mut(&3)
+                .set_height(32.0)
+                .set_custom_height(true);
+
+            let mut dv = umya_spreadsheet::structs::DataValidation::default();
+            dv.set_type(umya_spreadsheet::structs::DataValidationValues::List);
+            dv.get_sequence_of_references_mut().set_sqref("B2:B3");
+            dv.set_formula1("\"A,B,C\"");
+            sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+            sheet
+                .get_data_validations_mut()
+                .unwrap()
+                .add_data_validation_list(dv);
+        });
+
+        let plan = build_clone_row_band_plan(
+            &path,
+            "Sheet1",
+            "2:3",
+            Some(4),
+            None,
+            None,
+            2,
+            false,
+            ClonePatchTargetsArg::AllNonFormula,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+        apply_clone_row_band_plan_to_file(&path, &plan).expect("apply plan");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&path).expect("read workbook");
+        let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1");
+        assert_eq!(sheet.get_cell("A4").expect("A4").get_value(), "Alpha");
+        assert_eq!(sheet.get_cell("A5").expect("A5").get_value(), "Beta");
+        assert_eq!(
+            sheet
+                .get_cell("C4")
+                .expect("C4")
+                .get_formula()
+                .replace(' ', ""),
+            "B4*2"
+        );
+        assert_eq!(
+            sheet
+                .get_cell("C7")
+                .expect("C7")
+                .get_formula()
+                .replace(' ', ""),
+            "B7*2"
+        );
+        let merge_ranges: Vec<String> = sheet
+            .get_merge_cells()
+            .iter()
+            .map(|range| range.get_range())
+            .collect();
+        assert!(merge_ranges.contains(&"A4:A5".to_string()));
+        assert!(merge_ranges.contains(&"A6:A7".to_string()));
+        assert_eq!(
+            sheet.get_row_dimension(&4).map(|row| *row.get_height()),
+            Some(28.0)
+        );
+        assert_eq!(
+            sheet.get_row_dimension(&5).map(|row| *row.get_height()),
+            Some(32.0)
+        );
+        let validations = sheet.get_data_validations().expect("validations");
+        let sqrefs: Vec<String> = validations
+            .get_data_validation_list()
+            .iter()
+            .map(|dv| dv.get_sequence_of_references().get_sqref())
+            .collect();
+        assert!(
+            sqrefs
+                .iter()
+                .any(|sqref| sqref.contains("B4") && sqref.contains("B5"))
+        );
+        assert!(
+            sqrefs
+                .iter()
+                .any(|sqref| sqref.contains("B6") && sqref.contains("B7"))
+        );
     }
 }

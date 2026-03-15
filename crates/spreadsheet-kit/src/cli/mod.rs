@@ -1285,6 +1285,72 @@ Diagnostics note:
         force: bool,
     },
     #[command(
+        about = "Clone a contiguous template row band with preview-first planning",
+        after_long_help = "Examples:\n  asp clone-row-band workbook.xlsx --sheet Sheet1 --source-rows 12:14 --after 14 --repeat 2 --dry-run\n  asp clone-row-band workbook.xlsx --sheet Sheet1 --source-rows 20:22 --before 30 --patch-targets all-non-formula --output updated.xlsx --force\n\nAnchor selection:\n  Use exactly one of --before, --after, or --insert-at.\n\nBehavior:\n  - clones a contiguous source row band using row insertion plus stamped template cells\n  - reports inserted blocks, formula targets, patch targets, merge-boundary warnings, and confidence metadata in dry-run output\n  - merge-policy safe warns on boundary-crossing merges; strict fails instead"
+    )]
+    CloneRowBand {
+        #[arg(value_name = "FILE", help = "Workbook path to update")]
+        file: PathBuf,
+        #[arg(
+            long = "sheet",
+            value_name = "SHEET",
+            help = "Sheet containing the source row band"
+        )]
+        sheet_name: String,
+        #[arg(
+            long = "source-rows",
+            value_name = "START:END",
+            help = "Contiguous 1-based source row band"
+        )]
+        source_rows: String,
+        #[arg(long, value_name = "ROW", help = "Insert before this 1-based row")]
+        before: Option<u32>,
+        #[arg(long, value_name = "ROW", help = "Insert after this 1-based row")]
+        after: Option<u32>,
+        #[arg(
+            long = "insert-at",
+            value_name = "ROW",
+            help = "Raw 1-based insertion row"
+        )]
+        insert_at: Option<u32>,
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 1,
+            help = "Number of times to repeat the row band"
+        )]
+        repeat: u32,
+        #[arg(
+            long = "expand-adjacent-sums",
+            help = "Expand adjacent SUM footer formulas below the inserted rows"
+        )]
+        expand_adjacent_sums: bool,
+        #[arg(
+            long = "patch-targets",
+            value_enum,
+            default_value = "likely-inputs",
+            value_name = "MODE",
+            help = "Patch target mode: likely-inputs, all-non-formula, or none"
+        )]
+        patch_targets: ClonePatchTargetsArg,
+        #[arg(
+            long = "merge-policy",
+            value_enum,
+            default_value = "safe",
+            value_name = "POLICY",
+            help = "Merge handling policy: safe warns, strict fails"
+        )]
+        merge_policy: CloneMergePolicyArg,
+        #[arg(long, help = "Preview clone plan without mutating files")]
+        dry_run: bool,
+        #[arg(long, help = "Apply by atomically replacing the source file")]
+        in_place: bool,
+        #[arg(long, value_name = "PATH", help = "Apply clone to this output path")]
+        output: Option<PathBuf>,
+        #[arg(long, help = "Allow overwriting --output when it already exists")]
+        force: bool,
+    },
+    #[command(
         about = "Apply stateless transform operations from an @ops payload",
         after_long_help = r#"Examples:
   agent-spreadsheet transform-batch workbook.xlsx --ops @ops.json --dry-run
@@ -2389,6 +2455,40 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             )
             .await
         }
+        Commands::CloneRowBand {
+            file,
+            sheet_name,
+            source_rows,
+            before,
+            after,
+            insert_at,
+            repeat,
+            expand_adjacent_sums,
+            patch_targets,
+            merge_policy,
+            dry_run,
+            in_place,
+            output,
+            force,
+        } => {
+            commands::write::clone_row_band(
+                file,
+                sheet_name,
+                source_rows,
+                before,
+                after,
+                insert_at,
+                repeat,
+                expand_adjacent_sums,
+                patch_targets,
+                merge_policy,
+                dry_run,
+                in_place,
+                output,
+                force,
+            )
+            .await
+        }
         Commands::TransformBatch {
             file,
             ops,
@@ -3473,6 +3573,58 @@ mod tests {
                 assert!(matches!(patch_targets, ClonePatchTargetsArg::AllNonFormula));
                 assert!(matches!(merge_policy, CloneMergePolicyArg::Strict));
                 assert!(dry_run);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_clone_row_band_arguments() {
+        let cli = Cli::try_parse_from([
+            "agent-spreadsheet",
+            "clone-row-band",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--source-rows",
+            "12:14",
+            "--before",
+            "20",
+            "--repeat",
+            "2",
+            "--patch-targets",
+            "none",
+            "--merge-policy",
+            "safe",
+            "--output",
+            "updated.xlsx",
+        ])
+        .expect("parse clone-row-band");
+
+        match cli.command {
+            Commands::CloneRowBand {
+                file,
+                sheet_name,
+                source_rows,
+                before,
+                after,
+                insert_at,
+                repeat,
+                patch_targets,
+                merge_policy,
+                output,
+                ..
+            } => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet_name, "Sheet1");
+                assert_eq!(source_rows, "12:14");
+                assert_eq!(before, Some(20));
+                assert_eq!(after, None);
+                assert_eq!(insert_at, None);
+                assert_eq!(repeat, 2);
+                assert!(matches!(patch_targets, ClonePatchTargetsArg::None));
+                assert!(matches!(merge_policy, CloneMergePolicyArg::Safe));
+                assert_eq!(output, Some(PathBuf::from("updated.xlsx")));
             }
             other => panic!("unexpected command: {other:?}"),
         }
