@@ -9938,3 +9938,145 @@ fn cli_structure_batch_clone_row_in_place() {
         "SUM should expand to include cloned rows"
     );
 }
+
+#[test]
+fn cli_end_to_end_budget_cloning_and_appending() {
+    let tmp = tempdir().expect("tempdir");
+    let wb = tmp.path().join("budget.xlsx");
+    let ops_path = tmp.path().join("ops.json");
+    let rows_path = tmp.path().join("rows.json");
+
+    // 1. Build initial budget template
+    {
+        let mut workbook = umya_spreadsheet::new_file();
+        let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
+        sheet.get_cell_mut("A1").set_value("Dept: Marketing");
+        
+        sheet.get_cell_mut("A2").set_value("Item");
+        sheet.get_cell_mut("B2").set_value("Cost");
+        
+        sheet.get_cell_mut("A3").set_value("Ads");
+        sheet.get_cell_mut("B3").set_value_number(5000.0);
+        
+        sheet.get_cell_mut("A4").set_value("Subtotal");
+        sheet.get_cell_mut("B4").set_formula("SUM(B3:B3)");
+        
+        // Let's make "Dept: Marketing" span A1:B1 to test safe merge policy drop
+        sheet.add_merge_cells("A1:B1");
+
+        // Grand Total row at the bottom (Row 7 now, leaving row 5, 6 blank to space it out)
+        sheet.get_cell_mut("A7").set_value("Grand Total");
+        sheet.get_cell_mut("B7").set_formula("B4"); // Simple ref to Dept Total
+        
+        umya_spreadsheet::writer::xlsx::write(&workbook, &wb).expect("write fixture");
+    }
+    
+    let baseline = tmp.path().join("baseline.xlsx");
+    fs::copy(&wb, &baseline).unwrap();
+
+    let file = wb.to_str().unwrap();
+    let baseline_file = baseline.to_str().unwrap();
+
+    // 2. Clone the department band (Rows 1:5) to create a new department below it
+    // Row 5 is blank, providing a gutter. We insert after row 5. It will become rows 6:10.
+    let clone_out = run_cli(&[
+        "clone-row-band",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--source-rows",
+        "1:5",
+        "--after",
+        "5",
+        "--expand-adjacent-sums",
+        "--patch-targets",
+        "likely-inputs",
+        "--merge-policy",
+        "safe",
+        "--in-place",
+    ]);
+    assert!(clone_out.status.success(), "clone failed: {:?}", clone_out.stderr);
+    
+    // 3. Edit the new department's patch targets (It cloned to rows 6:10)
+    // The "likely inputs" should be B8 (the number 5000.0). We also want to edit A6 to "Dept: Sales"
+    let edit_out = run_cli(&[
+        "edit",
+        file,
+        "Sheet1",
+        "A6=Dept: Sales",
+        "A8=Travel",
+        "B8=2000",
+        "B12==B4+B9" // Update Grand Total to include new dept. Grand total shifted from row 7 to 12.
+    ]);
+    assert!(edit_out.status.success(), "edit failed: {:?}", edit_out.stderr);
+
+    // 4. Append a new line item to the new "Sales" department (Rows 6:10)
+    // The table for Sales is A7:B8, with footer at row 9 ("Dept Total").
+    // We append to region 2.
+    fs::write(&rows_path, r#"{"rows":[["Software",1500]]}"#).unwrap();
+    let append_out = run_cli(&[
+        "append-region",
+        file,
+        "--sheet",
+        "Sheet1",
+        "--region-id",
+        "0",
+        "--rows",
+        &format!("@{}", rows_path.to_str().unwrap()),
+        "--in-place",
+    ]);
+    assert!(append_out.status.success(), "append failed: {}", String::from_utf8_lossy(&append_out.stderr));
+
+    // 5. Recalculate
+    let recalc_out = run_cli(&[
+        "recalculate",
+        file,
+    ]);
+    assert!(recalc_out.status.success(), "recalc failed: {:?}", recalc_out.stderr);
+
+    // 6. Verify and Diff
+    let verify_out = run_cli(&[
+        "verify",
+        "--sheet",
+        "Sheet1",
+        baseline_file,
+        file,
+    ]);
+    assert!(verify_out.status.success(), "verify failed: {:?}", verify_out.stderr);
+    let verify_json = parse_stdout_json(&verify_out);
+    assert_eq!(verify_json["summary"]["new_error_count"], 0, "should have no new errors");
+
+    let final_book = umya_spreadsheet::reader::xlsx::read(&wb).unwrap();
+    let final_sheet = final_book.get_sheet_by_name("Sheet1").unwrap();
+    
+    for i in 1..=14 {
+        let a = final_sheet.get_cell((1, i)).map(|c| c.get_value().to_string()).unwrap_or_default();
+        let b = final_sheet.get_cell((2, i)).map(|c| c.get_value().to_string()).unwrap_or_default();
+        let bf = final_sheet.get_cell((2, i)).map(|c| c.get_formula().to_string()).unwrap_or_default();
+        println!("Row {i}: {a} | {b} | {bf}");
+    }
+    
+    // Check original Dept
+    assert_eq!(final_sheet.get_cell("A1").unwrap().get_value(), "Dept: Marketing");
+    assert_eq!(final_sheet.get_cell("B4").unwrap().get_formula().replace(' ', ""), "SUM(B3:B3)");
+    assert_eq!(final_sheet.get_cell("B4").unwrap().get_value(), "5000"); // Cached from recalc
+    
+    // Check new Dept (Sales)
+    assert_eq!(final_sheet.get_cell("A6").unwrap().get_value(), "Dept: Sales");
+    assert_eq!(final_sheet.get_cell("A8").unwrap().get_value(), "Travel");
+    assert_eq!(final_sheet.get_cell("B8").unwrap().get_value(), "2000");
+    
+    // Check appended row (inserted at row 9, pushing footer to 10)
+    assert_eq!(final_sheet.get_cell("A9").unwrap().get_value(), "Software");
+    assert_eq!(final_sheet.get_cell("B9").unwrap().get_value(), "1500");
+    
+    // Check new footer
+    assert_eq!(final_sheet.get_cell("A10").unwrap().get_value(), "Subtotal");
+    assert_eq!(final_sheet.get_cell("B10").unwrap().get_formula().replace(' ', ""), "SUM(B8:B9)");
+    assert_eq!(final_sheet.get_cell("B10").unwrap().get_value(), "3500"); // 2000 + 1500
+    
+    // Check Grand Total (shifted to row 13 due to the append-region insertion)
+    assert_eq!(final_sheet.get_cell("A13").unwrap().get_value(), "Grand Total");
+    assert_eq!(final_sheet.get_cell("B13").unwrap().get_formula().replace(' ', ""), "B4+B10");
+    assert_eq!(final_sheet.get_cell("B13").unwrap().get_value(), "8500"); // 5000 + 3500
+}
