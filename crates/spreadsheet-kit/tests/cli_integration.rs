@@ -7210,7 +7210,8 @@ fn cli_clone_template_row_dry_run_reports_targets_and_confidence() {
     assert_eq!(payload["inserted_row_range"], "3:4");
     assert_eq!(payload["formula_targets"][0], "C3");
     assert_eq!(payload["formula_targets"][1], "C4");
-    assert_eq!(payload["likely_patch_targets"][0], "A3");
+    assert_eq!(payload["likely_patch_targets"][0], "B3");
+    assert_eq!(payload["likely_patch_targets"][1], "B4");
     assert_eq!(payload["adjacent_sum_targets"][0], "C5");
     assert_eq!(payload["confidence"], "high");
     assert_eq!(payload["would_change"], true);

@@ -3005,8 +3005,13 @@ fn build_clone_template_row_plan(
     );
 
     let formula_targets = build_clone_formula_targets(&template_cells, insert_at_row, count);
-    let likely_patch_targets =
-        build_clone_patch_targets(&template_cells, insert_at_row, count, patch_targets);
+    let likely_patch_targets = build_clone_patch_targets(
+        &template_cells,
+        &contained_validations,
+        insert_at_row,
+        count,
+        patch_targets,
+    );
     let adjacent_sum_targets = if expand_adjacent_sums {
         preview_adjacent_sum_targets(sheet, insert_at_row, count)
     } else {
@@ -3252,26 +3257,65 @@ fn build_clone_formula_targets(
     targets
 }
 
+fn get_likely_input_cols_for_row(
+    preview_cells: &[CloneTemplateCellPreview],
+    validations: &[CloneValidationSpec],
+    row_offset: u32,
+    patch_targets: ClonePatchTargetsArg,
+) -> Vec<u32> {
+    let mut target_cols = std::collections::BTreeSet::new();
+
+    match patch_targets {
+        ClonePatchTargetsArg::None => {}
+        ClonePatchTargetsArg::AllNonFormula => {
+            for cell in preview_cells {
+                if !cell.is_formula {
+                    target_cols.insert(cell.col);
+                }
+            }
+        }
+        ClonePatchTargetsArg::LikelyInputs => {
+            for cell in preview_cells {
+                if cell.is_formula {
+                    continue;
+                }
+                if looks_like_footer_label(&cell.value) {
+                    continue;
+                }
+                let is_numeric = cell.value.trim().parse::<f64>().is_ok();
+                let has_validation = validations.iter().any(|v| {
+                    v.start_col <= cell.col
+                        && v.end_col >= cell.col
+                        && v.start_row_offset <= row_offset
+                        && v.end_row_offset >= row_offset
+                });
+                if is_numeric || has_validation {
+                    target_cols.insert(cell.col);
+                }
+            }
+
+            // Add completely empty cells that have validation
+            for v in validations {
+                if v.start_row_offset <= row_offset && v.end_row_offset >= row_offset {
+                    for col in v.start_col..=v.end_col {
+                        target_cols.insert(col);
+                    }
+                }
+            }
+        }
+    }
+
+    target_cols.into_iter().collect()
+}
+
 fn build_clone_patch_targets(
     template_cells: &[CloneTemplateCellPreview],
+    validations: &[CloneValidationSpec],
     insert_at_row: u32,
     count: u32,
     patch_targets: ClonePatchTargetsArg,
 ) -> Vec<String> {
-    let target_cols: Vec<u32> = match patch_targets {
-        ClonePatchTargetsArg::None => Vec::new(),
-        ClonePatchTargetsArg::AllNonFormula => template_cells
-            .iter()
-            .filter(|cell| !cell.is_formula)
-            .map(|cell| cell.col)
-            .collect(),
-        ClonePatchTargetsArg::LikelyInputs => template_cells
-            .iter()
-            .filter(|cell| !cell.is_formula)
-            .filter(|cell| !looks_like_footer_label(&cell.value))
-            .map(|cell| cell.col)
-            .collect(),
-    };
+    let target_cols = get_likely_input_cols_for_row(template_cells, validations, 0, patch_targets);
 
     let mut targets = Vec::new();
     for row in insert_at_row..(insert_at_row + count) {
@@ -3610,6 +3654,7 @@ fn build_clone_row_band_plan(
         build_clone_band_formula_targets(&template_rows, insert_at_row, source_row_count, repeat);
     let likely_patch_targets = build_clone_band_patch_targets(
         &template_rows,
+        &contained_validations,
         insert_at_row,
         source_row_count,
         repeat,
@@ -3921,27 +3966,33 @@ fn build_clone_band_formula_targets(
 
 fn build_clone_band_patch_targets(
     template_rows: &[CloneBandTemplateRow],
+    validations: &[CloneValidationSpec],
     insert_at_row: u32,
     source_row_count: u32,
     repeat: u32,
     patch_targets: ClonePatchTargetsArg,
 ) -> Vec<String> {
     let mut targets = Vec::new();
+
+    // precompute target cols per row_offset
+    let mut cols_by_offset = std::collections::HashMap::new();
+    for row in template_rows {
+        let cols = get_likely_input_cols_for_row(
+            &row.preview_cells,
+            validations,
+            row.row_offset,
+            patch_targets,
+        );
+        cols_by_offset.insert(row.row_offset, cols);
+    }
+
     for block_index in 0..repeat {
         let block_start = insert_at_row + block_index * source_row_count;
         for row in template_rows {
             let dest_row = block_start + row.row_offset;
-            for cell in &row.preview_cells {
-                if cell.is_formula {
-                    continue;
-                }
-                let include = match patch_targets {
-                    ClonePatchTargetsArg::None => false,
-                    ClonePatchTargetsArg::AllNonFormula => true,
-                    ClonePatchTargetsArg::LikelyInputs => !looks_like_footer_label(&cell.value),
-                };
-                if include {
-                    targets.push(format!("{}{}", column_number_to_name(cell.col), dest_row));
+            if let Some(cols) = cols_by_offset.get(&row.row_offset) {
+                for col in cols {
+                    targets.push(format!("{}{}", column_number_to_name(*col), dest_row));
                 }
             }
         }
@@ -6100,7 +6151,7 @@ mod tests {
         assert_eq!(plan.insert_at_row, 3);
         assert_eq!(plan.inserted_row_range, "3:4");
         assert_eq!(plan.formula_targets, vec!["C3", "C4"]);
-        assert_eq!(plan.likely_patch_targets, vec!["A3", "B3", "A4", "B4"]);
+        assert_eq!(plan.likely_patch_targets, vec!["B3", "B4"]);
         assert_eq!(plan.adjacent_sum_targets, vec!["C5"]);
         assert_eq!(plan.confidence, "high");
     }
@@ -6226,10 +6277,7 @@ mod tests {
         assert_eq!(plan.inserted_blocks[0].row_range, "4:5");
         assert_eq!(plan.inserted_blocks[1].row_range, "6:7");
         assert_eq!(plan.formula_targets, vec!["C4", "C5", "C6", "C7"]);
-        assert_eq!(
-            plan.likely_patch_targets,
-            vec!["A4", "B4", "A5", "B5", "A6", "B6", "A7", "B7"]
-        );
+        assert_eq!(plan.likely_patch_targets, vec!["B4", "B5", "B6", "B7"]);
         assert_eq!(plan.adjacent_sum_targets, vec!["C8"]);
     }
 
@@ -6357,5 +6405,189 @@ mod tests {
                 .iter()
                 .any(|sqref| sqref.contains("B6") && sqref.contains("B7"))
         );
+    }
+
+    #[test]
+    fn apply_clone_row_band_shifts_formulas_correctly_for_internal_external_and_absolute_refs() {
+        let (_tmp, path) = write_workbook_fixture("clone-row-band-formulas.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Rate");
+            sheet.get_cell_mut("Z1").set_value_number(0.05);
+
+            // Row 2
+            set_formula(sheet, "A2", "A1", ""); // External relative
+            set_formula(sheet, "B2", "$Z$1", ""); // Absolute
+            sheet.get_cell_mut("C2").set_value_number(100.0);
+
+            // Row 3
+            set_formula(sheet, "A3", "A2", ""); // Internal relative
+            set_formula(sheet, "B3", "$Z$1", ""); // Absolute
+            set_formula(sheet, "D3", "SUM(C2:C3)", ""); // Internal range
+        });
+
+        let plan = build_clone_row_band_plan(
+            &path,
+            "Sheet1",
+            "2:3",
+            None,
+            Some(3), // after row 3 -> inserts at row 4
+            None,
+            1, // repeat 1 time -> range 4:5
+            false,
+            ClonePatchTargetsArg::None,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+
+        apply_clone_row_band_plan_to_file(&path, &plan).expect("apply plan");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&path).expect("read workbook");
+        let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        // Row 4 (cloned from Row 2, offset +2)
+        assert_eq!(
+            sheet
+                .get_cell("A4")
+                .expect("A4")
+                .get_formula()
+                .replace(' ', ""),
+            "A3"
+        );
+        assert_eq!(
+            sheet
+                .get_cell("B4")
+                .expect("B4")
+                .get_formula()
+                .replace(' ', ""),
+            "$Z$1"
+        );
+
+        // Row 5 (cloned from Row 3, offset +2)
+        assert_eq!(
+            sheet
+                .get_cell("A5")
+                .expect("A5")
+                .get_formula()
+                .replace(' ', ""),
+            "A4"
+        );
+        assert_eq!(
+            sheet
+                .get_cell("B5")
+                .expect("B5")
+                .get_formula()
+                .replace(' ', ""),
+            "$Z$1"
+        );
+        assert_eq!(
+            sheet
+                .get_cell("D5")
+                .expect("D5")
+                .get_formula()
+                .replace(' ', ""),
+            "SUM(C4:C5)"
+        );
+    }
+
+    #[test]
+    fn apply_clone_row_band_safe_policy_drops_crossing_merges_but_keeps_contained_merges() {
+        let (_tmp, path) = write_workbook_fixture("clone-row-band-safe-merges.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("A1");
+            sheet.get_cell_mut("A2").set_value("A2");
+            sheet.get_cell_mut("A3").set_value("A3");
+            sheet.get_cell_mut("A4").set_value("A4");
+
+            sheet.add_merge_cells("A2:A3"); // Fully contained in 2:3
+            sheet.add_merge_cells("B3:B4"); // Crossing bottom boundary
+            sheet.add_merge_cells("C1:C2"); // Crossing top boundary
+        });
+
+        let plan = build_clone_row_band_plan(
+            &path,
+            "Sheet1",
+            "2:3",
+            None,
+            Some(3), // after row 3 -> inserts at row 4
+            None,
+            1, // repeat 1 time -> range 4:5
+            false,
+            ClonePatchTargetsArg::None,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+
+        apply_clone_row_band_plan_to_file(&path, &plan).expect("apply plan");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&path).expect("read workbook");
+        let sheet = book.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let merge_ranges: Vec<String> = sheet
+            .get_merge_cells()
+            .iter()
+            .map(|range| range.get_range())
+            .collect();
+
+        // Original merges should still exist (or be properly expanded)
+        assert!(merge_ranges.contains(&"A2:A3".to_string()));
+        assert!(merge_ranges.contains(&"C1:C2".to_string()));
+        // B3:B4 crosses the insertion boundary at row 4, so inserting 2 rows expands it to B3:B6
+        assert!(merge_ranges.contains(&"B3:B6".to_string()));
+
+        // Cloned fully contained merge should exist
+        assert!(merge_ranges.contains(&"A4:A5".to_string()));
+
+        // Cloned crossing merges should NOT exist
+        // shifted B3:B4 (+2 rows) = B5:B6 (does not exist, though B3:B6 covers the area)
+        // shifted C1:C2 (+2 rows) = C3:C4
+        assert!(!merge_ranges.contains(&"C3:C4".to_string()));
+    }
+
+    #[test]
+    fn build_clone_template_row_plan_identifies_likely_inputs_correctly() {
+        let (_tmp, path) = write_workbook_fixture("clone-likely-inputs.xlsx", |sheet| {
+            sheet.get_cell_mut("A1").set_value("Expense"); // String label, skip
+            sheet.get_cell_mut("B1").set_value_number(150.0); // Numeric, include
+            // C1 is completely empty, no validation
+            sheet.get_cell_mut("D1").set_value_number(200.0); // Numeric, include
+            set_formula(sheet, "E1", "B1+D1", "350"); // Formula, skip
+
+            // F1 is a string but has data validation, include
+            sheet.get_cell_mut("F1").set_value("Select...");
+            let mut dv = umya_spreadsheet::structs::DataValidation::default();
+            dv.set_type(umya_spreadsheet::structs::DataValidationValues::List);
+            dv.get_sequence_of_references_mut().set_sqref("F1:F1");
+            dv.set_formula1("\"A,B,C\"");
+            sheet.set_data_validations(umya_spreadsheet::structs::DataValidations::default());
+            sheet
+                .get_data_validations_mut()
+                .unwrap()
+                .add_data_validation_list(dv);
+
+            // G1 is completely empty but has data validation, include
+            let mut dv2 = umya_spreadsheet::structs::DataValidation::default();
+            dv2.set_type(umya_spreadsheet::structs::DataValidationValues::List);
+            dv2.get_sequence_of_references_mut().set_sqref("G1:G1");
+            dv2.set_formula1("\"X,Y,Z\"");
+            sheet
+                .get_data_validations_mut()
+                .unwrap()
+                .add_data_validation_list(dv2);
+        });
+
+        let plan = build_clone_template_row_plan(
+            &path,
+            "Sheet1",
+            1,
+            None,
+            Some(1),
+            None,
+            1,
+            false,
+            ClonePatchTargetsArg::LikelyInputs,
+            CloneMergePolicyArg::Safe,
+        )
+        .expect("build plan");
+
+        let expected_targets = vec!["B2", "D2", "F2", "G2"];
+        assert_eq!(plan.likely_patch_targets, expected_targets);
     }
 }

@@ -750,13 +750,21 @@ async fn test_vlookup_recalc_with_real_workbook() -> Result<()> {
         c2, c3, c4, c11
     );
 
-    assert_eq!(c2, Some("1234567890".to_string()), "C2 should be provider's ID");
+    assert_eq!(
+        c2,
+        Some("1234567890".to_string()),
+        "C2 should be provider's ID"
+    );
     assert_eq!(
         c3,
         Some("Provider1".to_string()),
         "C3 should be Provider1 (VLOOKUP result)"
     );
-    assert_eq!(c4, Some("MD".to_string()), "C4 should be MD (provider's title)");
+    assert_eq!(
+        c4,
+        Some("MD".to_string()),
+        "C4 should be MD (provider's title)"
+    );
     assert_eq!(
         c11,
         Some("Draw".to_string()),
