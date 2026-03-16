@@ -3328,7 +3328,7 @@ fn build_clone_patch_targets(
 
 fn looks_like_footer_label(value: &str) -> bool {
     let text = value.trim().to_ascii_lowercase();
-    text == "total"
+    text.starts_with("total")
         || text.contains("grand total")
         || text.contains("subtotal")
         || text.contains("footer")
@@ -4248,28 +4248,28 @@ fn footer_reason_for_row(
 ) -> Option<String> {
     let mut saw_formula = false;
     let mut saw_non_formula_non_empty = false;
+    let mut saw_footer_label = None;
     for col in start_col..=end_col {
         let Some(cell) = sheet.get_cell((col, row)) else {
             continue;
         };
-        let value = cell.get_value().trim().to_ascii_lowercase();
+        let value = cell.get_value().trim().to_string();
         let formula = cell.get_formula().trim().to_string();
         let has_formula = !formula.is_empty();
         if has_formula {
             saw_formula = true;
+        } else if !value.is_empty() {
+            if looks_like_footer_label(&value) {
+                saw_footer_label = Some(value.clone());
+            } else {
+                saw_non_formula_non_empty = true;
+            }
         }
-        if value.is_empty() {
-            continue;
-        }
-        if value.contains("grand total")
-            || value == "total"
-            || value.contains("subtotal")
-            || value.contains("footer")
-        {
-            return Some(format!("footer keyword '{}' on row {}", value, row));
-        }
-        if !has_formula {
-            saw_non_formula_non_empty = true;
+    }
+
+    if let Some(label) = saw_footer_label {
+        if saw_formula {
+            return Some(format!("footer keyword '{}' and formula on row {}", label, row));
         }
     }
 
@@ -5662,6 +5662,7 @@ mod tests {
     fn footer_detects_exact_total_keyword() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("Total");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
@@ -5670,7 +5671,7 @@ mod tests {
             reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("footer keyword 'total'")
+                .contains("footer keyword 'Total' and formula")
         );
     }
 
@@ -5678,6 +5679,7 @@ mod tests {
     fn footer_detects_grand_total_keyword() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("Grand Total");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
@@ -5686,7 +5688,7 @@ mod tests {
             reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("footer keyword 'grand total'")
+                .contains("footer keyword 'Grand Total' and formula")
         );
     }
 
@@ -5694,6 +5696,7 @@ mod tests {
     fn footer_detects_subtotal_keyword() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("Subtotal");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
@@ -5702,7 +5705,7 @@ mod tests {
             reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("footer keyword 'subtotal'")
+                .contains("footer keyword 'Subtotal' and formula")
         );
     }
 
@@ -5710,6 +5713,7 @@ mod tests {
     fn footer_detects_footer_keyword() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("Footer");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
@@ -5718,7 +5722,7 @@ mod tests {
             reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("footer keyword 'footer'")
+                .contains("footer keyword 'Footer' and formula")
         );
     }
 
@@ -5752,6 +5756,7 @@ mod tests {
     fn footer_detection_trims_and_normalizes_case() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("  ToTaL  ");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
@@ -5760,18 +5765,35 @@ mod tests {
             reason
                 .as_deref()
                 .unwrap_or_default()
-                .contains("footer keyword 'total'")
+                .contains("footer keyword 'ToTaL' and formula")
         );
     }
 
     #[test]
-    fn footer_ignores_non_footer_total_phrase() {
+    fn footer_ignores_non_footer_total_phrase_without_formula() {
         let workbook = with_sheet(|sheet| {
             sheet.get_cell_mut("A4").set_value("Total Revenue Plan");
         });
         let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
 
         assert!(footer_reason_for_row(sheet, 1, 2, 4).is_none());
+    }
+
+    #[test]
+    fn footer_detects_starts_with_total_with_formula() {
+        let workbook = with_sheet(|sheet| {
+            sheet.get_cell_mut("A4").set_value("Total Revenue Plan");
+            set_formula(sheet, "B4", "SUM(B1:B3)", "100");
+        });
+        let sheet = workbook.get_sheet_by_name("Sheet1").expect("sheet1");
+
+        let reason = footer_reason_for_row(sheet, 1, 2, 4);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("footer keyword 'Total Revenue Plan' and formula")
+        );
     }
 
     #[test]
@@ -5812,7 +5834,7 @@ mod tests {
         assert_eq!(detection.footer_row, Some(4));
         assert_eq!(
             detection.footer_detection.as_deref(),
-            Some("footer keyword 'total' on row 4")
+            Some("footer keyword 'Total' and formula on row 4")
         );
         assert_eq!(detection.footer_formula_targets, vec!["B4"]);
         assert!(detection.footer_candidates[0].matched);
@@ -5830,7 +5852,7 @@ mod tests {
         assert_eq!(detection.footer_row, Some(4));
         assert_eq!(
             detection.footer_detection.as_deref(),
-            Some("footer keyword 'total' on row 4")
+            Some("footer keyword 'Total' and formula on row 4")
         );
         assert!(!detection.footer_candidates[0].matched);
         assert!(detection.footer_candidates[1].matched);
