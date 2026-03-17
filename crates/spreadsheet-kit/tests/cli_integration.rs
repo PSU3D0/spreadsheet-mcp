@@ -295,7 +295,7 @@ fn schema_and_example_commands_support_batch_and_session_discovery() {
         );
     }
 
-    let schema = run_cli(&["schema", "session-op", "transform.write_matrix"]);
+    let schema = run_cli(&["schema", "session", "op", "transform.write_matrix"]);
     assert!(schema.status.success(), "stderr: {:?}", schema.stderr);
     let schema_payload = parse_stdout_json(&schema);
     assert_eq!(schema_payload["schema_kind"], "session_ops_payload");
@@ -309,7 +309,7 @@ fn schema_and_example_commands_support_batch_and_session_discovery() {
         "transform.write_matrix"
     );
 
-    let example = run_cli(&["example", "session-op", "structure.insert_rows"]);
+    let example = run_cli(&["example", "session", "op", "structure.insert_rows"]);
     assert!(example.status.success(), "stderr: {:?}", example.stderr);
     let example_payload = parse_stdout_json(&example);
     assert_eq!(example_payload["example_kind"], "session_ops_payload");
@@ -320,7 +320,7 @@ fn schema_and_example_commands_support_batch_and_session_discovery() {
 
 #[test]
 fn session_schema_rejects_unknown_kind_with_guidance() {
-    let output = run_cli(&["schema", "session-op", "totally.unknown"]);
+    let output = run_cli(&["schema", "session", "op", "totally.unknown"]);
     assert!(!output.status.success(), "command unexpectedly succeeded");
     let err = parse_stderr_json(&output);
     assert_eq!(err["code"], "INVALID_ARGUMENT");
@@ -328,7 +328,7 @@ fn session_schema_rejects_unknown_kind_with_guidance() {
         err["try_this"]
             .as_str()
             .unwrap_or("")
-            .contains("example session-op transform.write_matrix"),
+            .contains("example session op transform.write_matrix"),
         "err={err}"
     );
 }
@@ -341,54 +341,81 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(root.contains("Stateless spreadsheet CLI for AI and automation workflows"));
     assert!(root.contains("Primary command: asp"));
     assert!(root.contains("Compatibility alias: agent-spreadsheet"));
-    assert!(root.contains("Common workflows:"));
-    assert!(
-        root.contains("Inspect a workbook: list-sheets → sheet-overview → table-profile"),
-        "missing inspect workflow anchor: {root}"
-    );
-    assert!(
-        root.contains(
-            "Deterministic pagination loops: sheet-page (--format + next_start_row) and read-table (--limit/--offset + next_offset)"
-        ),
-        "missing pagination workflow anchor: {root}"
-    );
-    assert!(
-        root.contains(
-            "Stateless batch writes: transform/style/formula/structure/column/layout/rules via --ops @ops.json + one mode (--dry-run|--in-place|--output)"
-        ),
-        "missing batch workflow anchor: {root}"
-    );
-    assert!(root.contains("global --output-format csv is currently unsupported"));
-    assert!(root.contains("find-value"));
+    assert!(root.contains("Primary groups:"));
+    assert!(root.contains("read"));
+    assert!(root.contains("analyze"));
+    assert!(root.contains("write"));
+    assert!(root.contains("workbook"));
     assert!(root.contains("verify"));
-    assert!(root.contains("append-region"));
-    assert!(root.contains("clone-template-row"));
-    assert!(root.contains("clone-row-band"));
-    assert!(root.contains("named-ranges"));
-    assert!(root.contains("find-formula"));
-    assert!(root.contains("scan-volatiles"));
-    assert!(root.contains("sheet-statistics"));
-    assert!(root.contains("Find cells matching a text query by value or label"));
+    assert!(root.contains("session"));
+    assert!(root.contains("sheetport"));
+    assert!(root.contains("asp schema write batch transform"));
+    assert!(root.contains("asp example write batch transform"));
+    assert!(root.contains("asp schema session op transform.write_matrix"));
+    assert!(root.contains("global --output-format csv is currently unsupported"));
 
     let asp_help = run_asp(&["--help"]);
     assert!(asp_help.status.success(), "stderr: {:?}", asp_help.stderr);
     let asp_root = parse_stdout_text(&asp_help);
     assert!(asp_root.contains("Primary command: asp"));
 
-    let find_help = run_cli(&["find-value", "--help"]);
+    let read_help = run_cli(&["read", "--help"]);
+    assert!(read_help.status.success(), "stderr: {:?}", read_help.stderr);
+    let read = parse_stdout_text(&read_help);
+    assert!(read.contains("Read workbook data and structure"));
+    assert!(read.contains("sheets"));
+    assert!(read.contains("overview"));
+    assert!(read.contains("table"));
+    assert!(read.contains("names"));
+
+    let write_help = run_cli(&["write", "--help"]);
+    assert!(
+        write_help.status.success(),
+        "stderr: {:?}",
+        write_help.stderr
+    );
+    let write = parse_stdout_text(&write_help);
+    assert!(write.contains("Write and mutate workbook contents"));
+    assert!(write.contains("cells"));
+    assert!(write.contains("append"));
+    assert!(write.contains("clone-template-row"));
+    assert!(write.contains("clone-row-band"));
+    assert!(write.contains("batch"));
+    assert!(write.contains("name"));
+    assert!(write.contains("formulas"));
+
+    let batch_help = run_cli(&["write", "batch", "--help"]);
+    assert!(
+        batch_help.status.success(),
+        "stderr: {:?}",
+        batch_help.stderr
+    );
+    let batch = parse_stdout_text(&batch_help);
+    assert!(batch.contains("Stateless batch mutation surfaces"));
+    assert!(batch.contains("transform"));
+    assert!(batch.contains("style"));
+    assert!(batch.contains("formula-pattern"));
+    assert!(batch.contains("structure"));
+    assert!(batch.contains("column-size"));
+    assert!(batch.contains("sheet-layout"));
+    assert!(batch.contains("rules"));
+
+    let find_help = run_cli(&["analyze", "find-value", "--help"]);
     assert!(find_help.status.success(), "stderr: {:?}", find_help.stderr);
     let find = parse_stdout_text(&find_help);
     assert!(find.contains("Find cells matching a text query by value or label"));
     assert!(find.contains("Examples:"));
     assert!(
         find.contains(
-            "find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label --label-direction below"
+            "analyze find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label --label-direction below"
+        ) || find.contains(
+            "asp analyze find-value data.xlsx \"Net Income\" --sheet \"Q1 Actuals\" --mode label --label-direction below"
         )
     );
     assert!(find.contains("Label mode behavior:"));
     assert!(find.contains("--label-direction any (default) checks right first, then below"));
 
-    let formula_help = run_cli(&["formula-map", "--help"]);
+    let formula_help = run_cli(&["analyze", "formula-map", "--help"]);
     assert!(
         formula_help.status.success(),
         "stderr: {:?}",
@@ -397,9 +424,14 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let formula = parse_stdout_text(&formula_help);
     assert!(formula.contains("Summarize formulas on a sheet by complexity or frequency"));
     assert!(formula.contains("Examples:"));
-    assert!(formula.contains("formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25"));
+    assert!(
+        formula.contains("analyze formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25")
+            || formula.contains(
+                "asp analyze formula-map data.xlsx \"Q1 Actuals\" --sort-by count --limit 25"
+            )
+    );
 
-    let named_ranges_help = run_cli(&["named-ranges", "--help"]);
+    let named_ranges_help = run_cli(&["read", "names", "--help"]);
     assert!(
         named_ranges_help.status.success(),
         "stderr: {:?}",
@@ -408,12 +440,12 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let named_ranges = parse_stdout_text(&named_ranges_help);
     assert!(named_ranges.contains("List workbook named ranges and table/formula named items"));
     assert!(named_ranges.contains("Examples:"));
-    assert!(named_ranges.contains("named-ranges data.xlsx"));
     assert!(
-        named_ranges.contains("named-ranges data.xlsx --sheet \"Q1 Actuals\" --name-prefix Sales")
+        named_ranges.contains("read names data.xlsx")
+            || named_ranges.contains("asp read names data.xlsx")
     );
 
-    let find_formula_help = run_cli(&["find-formula", "--help"]);
+    let find_formula_help = run_cli(&["analyze", "find-formula", "--help"]);
     assert!(
         find_formula_help.status.success(),
         "stderr: {:?}",
@@ -422,14 +454,12 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let find_formula = parse_stdout_text(&find_formula_help);
     assert!(find_formula.contains("Find formulas containing a text query with pagination"));
     assert!(find_formula.contains("Examples:"));
-    assert!(find_formula.contains("find-formula data.xlsx SUM("));
     assert!(
-        find_formula.contains(
-            "find-formula data.xlsx VLOOKUP --sheet \"Q1 Actuals\" --limit 25 --offset 50"
-        )
+        find_formula.contains("analyze find-formula data.xlsx SUM(")
+            || find_formula.contains("asp analyze find-formula data.xlsx SUM(")
     );
 
-    let scan_volatiles_help = run_cli(&["scan-volatiles", "--help"]);
+    let scan_volatiles_help = run_cli(&["analyze", "scan-volatiles", "--help"]);
     assert!(
         scan_volatiles_help.status.success(),
         "stderr: {:?}",
@@ -439,12 +469,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(scan_volatiles.contains("Scan workbook formulas for volatile functions"));
     assert!(scan_volatiles.contains("Examples:"));
     assert!(scan_volatiles.contains("scan-volatiles data.xlsx"));
-    assert!(
-        scan_volatiles
-            .contains("scan-volatiles data.xlsx --sheet \"Q1 Actuals\" --limit 10 --offset 10")
-    );
 
-    let sheet_statistics_help = run_cli(&["sheet-statistics", "--help"]);
+    let sheet_statistics_help = run_cli(&["analyze", "sheet-statistics", "--help"]);
     assert!(
         sheet_statistics_help.status.success(),
         "stderr: {:?}",
@@ -454,9 +480,8 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(sheet_statistics.contains("Compute per-sheet statistics for density and column types"));
     assert!(sheet_statistics.contains("Examples:"));
     assert!(sheet_statistics.contains("sheet-statistics data.xlsx Sheet1"));
-    assert!(sheet_statistics.contains("sheet-statistics data.xlsx \"Q1 Actuals\""));
 
-    let table_help = run_cli(&["table-profile", "--help"]);
+    let table_help = run_cli(&["analyze", "table-profile", "--help"]);
     assert!(
         table_help.status.success(),
         "stderr: {:?}",
@@ -465,17 +490,20 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let table = parse_stdout_text(&table_help);
     assert!(table.contains("Profile table headers, types, and column distributions"));
     assert!(table.contains("Examples:"));
-    assert!(table.contains("table-profile data.xlsx --sheet \"Q1 Actuals\""));
+    assert!(
+        table.contains("table-profile data.xlsx --sheet \"Q1 Actuals\"")
+            || table.contains("analyze table-profile data.xlsx --sheet \"Q1 Actuals\"")
+    );
 
-    let diff_help = run_cli(&["diff", "--help"]);
+    let diff_help = run_cli(&["verify", "diff", "--help"]);
     assert!(diff_help.status.success(), "stderr: {:?}", diff_help.stderr);
     let diff = parse_stdout_text(&diff_help);
     assert!(diff.contains("Diff two workbook versions with summary-first, paged details"));
     assert!(diff.contains("Examples:"));
-    assert!(diff.contains("asp diff baseline.xlsx candidate.xlsx"));
+    assert!(diff.contains("asp verify diff baseline.xlsx candidate.xlsx"));
     assert!(diff.contains("--exclude-recalc-result"));
 
-    let create_help = run_cli(&["create-workbook", "--help"]);
+    let create_help = run_cli(&["workbook", "create", "--help"]);
     assert!(
         create_help.status.success(),
         "stderr: {:?}",
@@ -483,10 +511,13 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     );
     let create = parse_stdout_text(&create_help);
     assert!(create.contains("Create a new workbook at a destination path"));
-    assert!(create.contains("create-workbook new.xlsx"));
+    assert!(
+        create.contains("workbook create new.xlsx")
+            || create.contains("asp workbook create new.xlsx")
+    );
     assert!(create.contains("--sheets"));
 
-    let range_help = run_cli(&["range-values", "--help"]);
+    let range_help = run_cli(&["read", "values", "--help"]);
     assert!(
         range_help.status.success(),
         "stderr: {:?}",
@@ -495,12 +526,15 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let range = parse_stdout_text(&range_help);
     assert!(range.contains("Read raw values for one or more A1 ranges"));
     assert!(range.contains("Examples:"));
-    assert!(range.contains("range-values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20"));
+    assert!(
+        range.contains("read values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20")
+            || range.contains("asp read values data.xlsx \"Q1 Actuals\" A1:B5 D10:E20")
+    );
     assert!(range.contains("--include-formulas"));
     assert!(range.contains("dense JSON encoding"));
     assert!(range.contains("sparse list in dense mode"));
 
-    let inspect_help = run_cli(&["inspect-cells", "--help"]);
+    let inspect_help = run_cli(&["read", "cells", "--help"]);
     assert!(
         inspect_help.status.success(),
         "stderr: {:?}",
@@ -510,10 +544,13 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(inspect.contains(
         "Inspect detail snapshots for targeted A1 cells/ranges (detail view, default max 25 cells)"
     ));
-    assert!(inspect.contains("inspect-cells data.xlsx Sheet1 A1:C3"));
+    assert!(
+        inspect.contains("read cells data.xlsx Sheet1 A1:C3")
+            || inspect.contains("asp read cells data.xlsx Sheet1 A1:C3")
+    );
     assert!(inspect.contains("--include-empty"));
 
-    let sheet_page_help = run_cli(&["sheet-page", "--help"]);
+    let sheet_page_help = run_cli(&["read", "page", "--help"]);
     assert!(
         sheet_page_help.status.success(),
         "stderr: {:?}",
@@ -522,19 +559,18 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let sheet_page = parse_stdout_text(&sheet_page_help);
     assert!(sheet_page.contains("Read one sheet page with deterministic continuation"));
     assert!(sheet_page.contains("Examples:"));
-    assert!(sheet_page.contains("sheet-page data.xlsx Sheet1 --format compact --page-size 200"));
+    assert!(
+        sheet_page.contains("read page data.xlsx Sheet1 --format compact --page-size 200")
+            || sheet_page
+                .contains("asp read page data.xlsx Sheet1 --format compact --page-size 200")
+    );
     assert!(sheet_page.contains("Machine contract:"));
     assert!(sheet_page.contains("format=full"));
     assert!(sheet_page.contains("Global --shape compact preserves the active sheet-page branch"));
-    assert!(
-        sheet_page.contains(
-            "sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201"
-        )
-    );
     assert!(sheet_page.contains("Pagination loop:"));
     assert!(sheet_page.contains("Machine continuation example:"));
 
-    let read_table_help = run_cli(&["read-table", "--help"]);
+    let read_table_help = run_cli(&["read", "table", "--help"]);
     assert!(
         read_table_help.status.success(),
         "stderr: {:?}",
@@ -545,15 +581,14 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(read_table.contains("Examples:"));
     assert!(
         read_table.contains(
-            "read-table data.xlsx --sheet Sheet1 --table-format csv --limit 50 --offset 0"
+            "read table data.xlsx --sheet Sheet1 --table-format csv --limit 50 --offset 0"
+        ) || read_table.contains(
+            "asp read table data.xlsx --sheet Sheet1 --table-format csv --limit 50 --offset 0"
         )
     );
-    assert!(read_table.contains(
-        "read-table data.xlsx --table-name SalesTable --sample-mode distributed --limit 20"
-    ));
     assert!(read_table.contains("Repeat with --offset set to next_offset"));
 
-    let formula_trace_help = run_cli(&["formula-trace", "--help"]);
+    let formula_trace_help = run_cli(&["analyze", "formula-trace", "--help"]);
     assert!(
         formula_trace_help.status.success(),
         "stderr: {:?}",
@@ -562,17 +597,20 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let formula_trace = parse_stdout_text(&formula_trace_help);
     assert!(formula_trace.contains("Trace formula precedents or dependents from one origin cell"));
     assert!(formula_trace.contains("Examples:"));
-    assert!(formula_trace.contains("formula-trace data.xlsx Sheet1 C2 precedents --depth 2"));
-    assert!(formula_trace.contains(
-        "formula-trace data.xlsx Sheet1 C2 precedents --cursor-depth 1 --cursor-offset 25"
-    ));
+    assert!(
+        formula_trace.contains("formula-trace data.xlsx Sheet1 C2 precedents --depth 2")
+            || formula_trace
+                .contains("analyze formula-trace data.xlsx Sheet1 C2 precedents --depth 2")
+            || formula_trace
+                .contains("asp analyze formula-trace data.xlsx Sheet1 C2 precedents --depth 2")
+    );
     assert!(
         formula_trace.contains(
             "Reuse next_cursor.depth/next_cursor.offset as --cursor-depth/--cursor-offset"
         )
     );
 
-    let append_region_help = run_cli(&["append-region", "--help"]);
+    let append_region_help = run_cli(&["write", "append", "--help"]);
     assert!(
         append_region_help.status.success(),
         "stderr: {:?}",
@@ -589,7 +627,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(append_region.contains("--header"));
     assert!(append_region.contains("--footer-policy"));
 
-    let clone_template_row_help = run_cli(&["clone-template-row", "--help"]);
+    let clone_template_row_help = run_cli(&["write", "clone-template-row", "--help"]);
     assert!(
         clone_template_row_help.status.success(),
         "stderr: {:?}",
@@ -607,7 +645,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(clone_template_row.contains("--patch-targets"));
     assert!(clone_template_row.contains("--merge-policy"));
 
-    let clone_row_band_help = run_cli(&["clone-row-band", "--help"]);
+    let clone_row_band_help = run_cli(&["write", "clone-row-band", "--help"]);
     assert!(
         clone_row_band_help.status.success(),
         "stderr: {:?}",
@@ -622,7 +660,7 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     assert!(clone_row_band.contains("--patch-targets"));
     assert!(clone_row_band.contains("--merge-policy"));
 
-    let transform_help = run_cli(&["transform-batch", "--help"]);
+    let transform_help = run_cli(&["write", "batch", "transform", "--help"]);
     assert!(
         transform_help.status.success(),
         "stderr: {:?}",
@@ -631,11 +669,12 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
     let transform = parse_stdout_text(&transform_help);
     assert!(transform.contains("Apply stateless transform operations from an @ops payload"));
     assert!(transform.contains("Examples:"));
-    assert!(transform.contains("transform-batch workbook.xlsx --ops @ops.json --dry-run"));
-    assert!(transform.contains(
-        "transform-batch workbook.xlsx --ops @ops.json --output transformed.xlsx --force"
-    ));
-    assert!(transform.contains("Choose exactly one of --dry-run, --in-place, or --output <PATH>"),);
+    assert!(
+        transform.contains("write batch transform workbook.xlsx --ops @ops.json --dry-run")
+            || transform
+                .contains("asp write batch transform workbook.xlsx --ops @ops.json --dry-run")
+    );
+    assert!(transform.contains("Choose exactly one of --dry-run, --in-place, or --output <PATH>"));
     assert!(transform.contains("Payload examples (`--ops @transform_ops.json`):"));
     assert!(transform.contains("\"kind\":\"fill_range\""));
     assert!(transform.contains("\"kind\":\"replace_in_range\""));
@@ -646,13 +685,13 @@ fn cli_help_surfaces_include_descriptions_and_examples() {
 fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
     let readme = read_repo_doc("README.md");
     for anchor in [
-        "asp sheet-page data.xlsx Sheet1 --format compact --page-size 200",
-        "asp read-table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
-        "asp transform-batch data.xlsx --ops @ops.json --dry-run",
-        "asp style-batch data.xlsx --ops @style_ops.json --dry-run",
+        "asp read page data.xlsx Sheet1 --format compact --page-size 200",
+        "asp read table data.xlsx --sheet \"Sheet1\" --table-format values --limit 200 --offset 0",
+        "asp write batch transform data.xlsx --ops @ops.json --dry-run",
+        "asp write batch style data.xlsx --ops @style_ops.json --dry-run",
         "##### transform-batch payloads (`@transform_ops.json`)",
         "##### style-batch payloads (`@style_ops.json`)",
-        "##### apply-formula-pattern payloads (`@formula_ops.json`)",
+        "##### write batch formula-pattern payloads (`@formula_ops.json`)",
         "relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`",
         "##### structure-batch payloads (`@structure_ops.json`)",
         "##### column-size-batch payloads (`@column_size_ops.json`)",
@@ -660,19 +699,19 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "##### sheet-layout-batch payloads (`@layout_ops.json`)",
         "##### rules-batch payloads (`@rules_ops.json`)",
         "top-level envelope object",
-        "asp find-value data.xlsx \"Net Income\" --mode label --label-direction below",
-        "`sheet-page <file> <sheet> --format <full|compact|values_only>",
+        "asp analyze find-value data.xlsx \"Net Income\" --mode label --label-direction below",
+        "`read page <file> <sheet> --format <full|compact|values_only>",
         "#### `sheet-page` machine contract",
         "format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`",
         "Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.",
         "Machine continuation example:",
-        "`range-values <file> <sheet> <range> [range...] [--format dense\\|json\\|values\\|csv] [--include-formulas]`",
+        "`read values <file> <sheet> <range> [range...] [--format dense\\|json\\|values\\|csv] [--include-formulas]`",
         "range-values default encoding:** dense JSON (`dense.encoding = \"dense_v1\"`)",
         "range-values `--include-formulas`:** includes sparse formula coordinates in dense mode",
-        "`inspect-cells <file> <sheet> <target> [target...] [--include-empty]`",
-        "`create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]`",
-        "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
-        "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
+        "`read cells <file> <sheet> <target> [target...] [--include-empty]`",
+        "`workbook create <path> [--sheets Inputs,Calc,...] [--overwrite]`",
+        "`analyze find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
+        "`write batch transform <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "#### Formula write-path provenance (`write_path_provenance`)",
         "`written_via`: write path (`edit`, `transform_batch`, `apply_formula_pattern`)",
         "#### Financial presentation starter defaults",
@@ -680,8 +719,8 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
         "Percent: `0.0%`",
         "range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.",
         "read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)",
-        "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.",
-        "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
+        "Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read table --table-format csv`.",
+        "`write batch formula-pattern` clears cached results for touched formula cells; run `workbook recalculate` to refresh computed values.",
     ] {
         assert!(
             readme.contains(anchor),
@@ -789,15 +828,15 @@ fn readme_cli_docs_parity_examples_execute_with_local_fixtures() {
 fn npm_readme_cli_docs_parity_examples_execute_with_local_fixtures() {
     let readme = read_repo_doc("npm/agent-spreadsheet/README.md");
     for anchor in [
-        "asp sheet-page data.xlsx Sheet1 --format compact --page-size 200",
-        "asp transform-batch data.xlsx --ops @ops.json --dry-run",
-        "asp find-value data.xlsx \"Net Income\" --mode label --label-direction below",
-        "`sheet-page <file> <sheet> --format <full|compact|values_only>",
-        "`find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
-        "`transform-batch <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
+        "asp read page data.xlsx Sheet1 --format compact --page-size 200",
+        "asp write batch transform data.xlsx --ops @ops.json --dry-run",
+        "asp analyze find-value data.xlsx \"Net Income\" --mode label --label-direction below",
+        "`read page <file> <sheet> --format <full|compact|values_only>",
+        "`analyze find-value <file> <query> [--sheet S] [--mode value\\|label] [--label-direction right\\|below\\|any]`",
+        "`write batch transform <file> --ops @ops.json (--dry-run\\|--in-place\\|--output PATH)",
         "Canonical (default/omitted): return `values: [...]` when entries are present; omit `values` when all requested ranges are pruned (for example, invalid ranges).",
-        "Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read-table --table-format csv`.",
-        "`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.",
+        "Global `--output-format csv` is currently unsupported; use command-specific CSV options such as `read table --table-format csv`.",
+        "`write batch formula-pattern` clears cached results for touched formula cells; run `workbook recalculate` to refresh computed values.",
     ] {
         assert!(
             readme.contains(anchor),
@@ -1113,7 +1152,7 @@ fn cli_verify_missing_sheet_uses_normalized_error_envelope() {
     assert_eq!(err["message"], "sheet 'Missing' was not found");
     assert_eq!(
         err["try_this"],
-        "run `asp list-sheets <file>` to inspect valid names"
+        "run `asp read sheets <file>` to inspect valid names"
     );
 }
 
@@ -4379,12 +4418,10 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     );
     let style = parse_stdout_text(&style_help);
     assert!(style.contains("Examples:"));
-    assert!(style.contains("style-batch workbook.xlsx --ops @style_ops.json --dry-run"));
-    assert!(
-        style.contains(
-            "style-batch workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
-        )
-    );
+    assert!(style.contains("asp write batch style workbook.xlsx --ops @style_ops.json --dry-run"));
+    assert!(style.contains(
+        "asp write batch style workbook.xlsx --ops @style_ops.json --output styled.xlsx --force"
+    ));
     assert!(style.contains("Payload examples (`--ops @style_ops.json`):"));
     assert!(style.contains("\"patch\":{\"font\":{\"bold\":true}}"));
     assert!(style.contains("Required envelope:"));
@@ -4397,12 +4434,12 @@ fn phase_a_help_examples_for_style_and_formula_commands() {
     );
     let formula = parse_stdout_text(&formula_help);
     assert!(formula.contains("Examples:"));
-    assert!(
-        formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place")
-    );
-    assert!(
-        formula.contains("apply-formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run")
-    );
+    assert!(formula.contains(
+        "asp write batch formula-pattern workbook.xlsx --ops @formula_ops.json --in-place"
+    ));
+    assert!(formula.contains(
+        "asp write batch formula-pattern workbook.xlsx --ops @formula_ops.json --dry-run"
+    ));
     assert!(formula.contains("Payload examples (`--ops @formula_ops.json`):"));
     assert!(formula.contains("\"target_range\":\"C2:C4\""));
     assert!(formula.contains("\"fill_direction\":\"both\""));
@@ -4976,10 +5013,12 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     let structure = parse_stdout_text(&structure_help);
     assert!(structure.contains("Examples:"));
     assert!(
-        structure.contains("structure-batch workbook.xlsx --ops @structure_ops.json --dry-run")
+        structure.contains(
+            "asp write batch structure workbook.xlsx --ops @structure_ops.json --dry-run"
+        )
     );
     assert!(structure.contains(
-        "structure-batch workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
+        "asp write batch structure workbook.xlsx --ops @structure_ops.json --output structured.xlsx"
     ));
     assert!(structure.contains("Payload examples (`--ops @structure_ops.json`):"));
     assert!(structure.contains("\"kind\":\"rename_sheet\""));
@@ -4993,11 +5032,11 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     );
     let column = parse_stdout_text(&column_help);
     assert!(column.contains("Examples:"));
-    assert!(
-        column.contains("column-size-batch workbook.xlsx --ops @column_size_ops.json --in-place")
-    );
     assert!(column.contains(
-        "column-size-batch workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
+        "asp write batch column-size workbook.xlsx --ops @column_size_ops.json --in-place"
+    ));
+    assert!(column.contains(
+        "asp write batch column-size workbook.xlsx --ops @column_size_ops.json --output columns.xlsx"
     ));
     assert!(column.contains("Payload examples (`--ops @column_size_ops.json`):"));
     assert!(column.contains("\"sheet_name\":\"Sheet1\""));
@@ -5012,8 +5051,16 @@ fn phase_b_help_examples_for_structure_column_and_layout_commands() {
     );
     let layout = parse_stdout_text(&layout_help);
     assert!(layout.contains("Examples:"));
-    assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --dry-run"));
-    assert!(layout.contains("sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place"));
+    assert!(
+        layout.contains(
+            "asp write batch sheet-layout workbook.xlsx --ops @layout_ops.json --dry-run"
+        )
+    );
+    assert!(
+        layout.contains(
+            "asp write batch sheet-layout workbook.xlsx --ops @layout_ops.json --in-place"
+        )
+    );
     assert!(layout.contains("Payload examples (`--ops @layout_ops.json`):"));
     assert!(layout.contains("\"kind\":\"freeze_panes\""));
     assert!(layout.contains("\"kind\":\"set_page_setup\""));
@@ -5962,12 +6009,10 @@ fn phase_c_help_examples_for_rules_command() {
     );
     let rules = parse_stdout_text(&rules_help);
     assert!(rules.contains("Examples:"));
-    assert!(rules.contains("rules-batch workbook.xlsx --ops @rules_ops.json --dry-run"));
-    assert!(
-        rules.contains(
-            "rules-batch workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
-        )
-    );
+    assert!(rules.contains("asp write batch rules workbook.xlsx --ops @rules_ops.json --dry-run"));
+    assert!(rules.contains(
+        "asp write batch rules workbook.xlsx --ops @rules_ops.json --output ruled.xlsx --force"
+    ));
     assert!(rules.contains("Payload examples (`--ops @rules_ops.json`):"));
     assert!(rules.contains("\"kind\":\"set_data_validation\""));
     assert!(rules.contains("\"kind\":\"set_conditional_format\""));
@@ -7725,7 +7770,7 @@ fn cli_edit_dry_run_preflight_fails_for_missing_sheet() {
     assert_eq!(err["message"], "sheet 'NoSuchSheet' was not found");
     assert_eq!(
         err["try_this"],
-        "run `asp list-sheets <file>` to inspect valid names"
+        "run `asp read sheets <file>` to inspect valid names"
     );
 }
 
@@ -7755,7 +7800,7 @@ fn cli_errors_use_machine_envelope() {
         err["try_this"]
             .as_str()
             .unwrap_or_default()
-            .contains("list-sheets")
+            .contains("read sheets")
     );
 }
 
@@ -9943,7 +9988,6 @@ fn cli_structure_batch_clone_row_in_place() {
 fn cli_end_to_end_budget_cloning_and_appending() {
     let tmp = tempdir().expect("tempdir");
     let wb = tmp.path().join("budget.xlsx");
-    let ops_path = tmp.path().join("ops.json");
     let rows_path = tmp.path().join("rows.json");
 
     // 1. Build initial budget template
@@ -9951,26 +9995,26 @@ fn cli_end_to_end_budget_cloning_and_appending() {
         let mut workbook = umya_spreadsheet::new_file();
         let sheet = workbook.get_sheet_by_name_mut("Sheet1").unwrap();
         sheet.get_cell_mut("A1").set_value("Dept: Marketing");
-        
+
         sheet.get_cell_mut("A2").set_value("Item");
         sheet.get_cell_mut("B2").set_value("Cost");
-        
+
         sheet.get_cell_mut("A3").set_value("Ads");
         sheet.get_cell_mut("B3").set_value_number(5000.0);
-        
+
         sheet.get_cell_mut("A4").set_value("Subtotal");
         sheet.get_cell_mut("B4").set_formula("SUM(B3:B3)");
-        
+
         // Let's make "Dept: Marketing" span A1:B1 to test safe merge policy drop
         sheet.add_merge_cells("A1:B1");
 
         // Grand Total row at the bottom (Row 7 now, leaving row 5, 6 blank to space it out)
         sheet.get_cell_mut("A7").set_value("Grand Total");
         sheet.get_cell_mut("B7").set_formula("B4"); // Simple ref to Dept Total
-        
+
         umya_spreadsheet::writer::xlsx::write(&workbook, &wb).expect("write fixture");
     }
-    
+
     let baseline = tmp.path().join("baseline.xlsx");
     fs::copy(&wb, &baseline).unwrap();
 
@@ -9995,8 +10039,12 @@ fn cli_end_to_end_budget_cloning_and_appending() {
         "safe",
         "--in-place",
     ]);
-    assert!(clone_out.status.success(), "clone failed: {:?}", clone_out.stderr);
-    
+    assert!(
+        clone_out.status.success(),
+        "clone failed: {:?}",
+        clone_out.stderr
+    );
+
     // 3. Edit the new department's patch targets (It cloned to rows 6:10)
     // The "likely inputs" should be B8 (the number 5000.0). We also want to edit A6 to "Dept: Sales"
     let edit_out = run_cli(&[
@@ -10006,9 +10054,13 @@ fn cli_end_to_end_budget_cloning_and_appending() {
         "A6=Dept: Sales",
         "A8=Travel",
         "B8=2000",
-        "B12==B4+B9" // Update Grand Total to include new dept. Grand total shifted from row 7 to 12.
+        "B12==B4+B9", // Update Grand Total to include new dept. Grand total shifted from row 7 to 12.
     ]);
-    assert!(edit_out.status.success(), "edit failed: {:?}", edit_out.stderr);
+    assert!(
+        edit_out.status.success(),
+        "edit failed: {:?}",
+        edit_out.stderr
+    );
 
     // 4. Append a new line item to the new "Sales" department (Rows 6:10)
     // The table for Sales is A7:B8, with footer at row 9 ("Dept Total").
@@ -10025,58 +10077,103 @@ fn cli_end_to_end_budget_cloning_and_appending() {
         &format!("@{}", rows_path.to_str().unwrap()),
         "--in-place",
     ]);
-    assert!(append_out.status.success(), "append failed: {}", String::from_utf8_lossy(&append_out.stderr));
+    assert!(
+        append_out.status.success(),
+        "append failed: {}",
+        String::from_utf8_lossy(&append_out.stderr)
+    );
 
     // 5. Recalculate
-    let recalc_out = run_cli(&[
-        "recalculate",
-        file,
-    ]);
-    assert!(recalc_out.status.success(), "recalc failed: {:?}", recalc_out.stderr);
+    let recalc_out = run_cli(&["recalculate", file]);
+    assert!(
+        recalc_out.status.success(),
+        "recalc failed: {:?}",
+        recalc_out.stderr
+    );
 
     // 6. Verify and Diff
-    let verify_out = run_cli(&[
-        "verify",
-        "--sheet",
-        "Sheet1",
-        baseline_file,
-        file,
-    ]);
-    assert!(verify_out.status.success(), "verify failed: {:?}", verify_out.stderr);
+    let verify_out = run_cli(&["verify", "--sheet", "Sheet1", baseline_file, file]);
+    assert!(
+        verify_out.status.success(),
+        "verify failed: {:?}",
+        verify_out.stderr
+    );
     let verify_json = parse_stdout_json(&verify_out);
-    assert_eq!(verify_json["summary"]["new_error_count"], 0, "should have no new errors");
+    assert_eq!(
+        verify_json["summary"]["new_error_count"], 0,
+        "should have no new errors"
+    );
 
     let final_book = umya_spreadsheet::reader::xlsx::read(&wb).unwrap();
     let final_sheet = final_book.get_sheet_by_name("Sheet1").unwrap();
-    
+
     for i in 1..=14 {
-        let a = final_sheet.get_cell((1, i)).map(|c| c.get_value().to_string()).unwrap_or_default();
-        let b = final_sheet.get_cell((2, i)).map(|c| c.get_value().to_string()).unwrap_or_default();
-        let bf = final_sheet.get_cell((2, i)).map(|c| c.get_formula().to_string()).unwrap_or_default();
+        let a = final_sheet
+            .get_cell((1, i))
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let b = final_sheet
+            .get_cell((2, i))
+            .map(|c| c.get_value().to_string())
+            .unwrap_or_default();
+        let bf = final_sheet
+            .get_cell((2, i))
+            .map(|c| c.get_formula().to_string())
+            .unwrap_or_default();
         println!("Row {i}: {a} | {b} | {bf}");
     }
-    
+
     // Check original Dept
-    assert_eq!(final_sheet.get_cell("A1").unwrap().get_value(), "Dept: Marketing");
-    assert_eq!(final_sheet.get_cell("B4").unwrap().get_formula().replace(' ', ""), "SUM(B3:B3)");
+    assert_eq!(
+        final_sheet.get_cell("A1").unwrap().get_value(),
+        "Dept: Marketing"
+    );
+    assert_eq!(
+        final_sheet
+            .get_cell("B4")
+            .unwrap()
+            .get_formula()
+            .replace(' ', ""),
+        "SUM(B3:B3)"
+    );
     assert_eq!(final_sheet.get_cell("B4").unwrap().get_value(), "5000"); // Cached from recalc
-    
+
     // Check new Dept (Sales)
-    assert_eq!(final_sheet.get_cell("A6").unwrap().get_value(), "Dept: Sales");
+    assert_eq!(
+        final_sheet.get_cell("A6").unwrap().get_value(),
+        "Dept: Sales"
+    );
     assert_eq!(final_sheet.get_cell("A8").unwrap().get_value(), "Travel");
     assert_eq!(final_sheet.get_cell("B8").unwrap().get_value(), "2000");
-    
+
     // Check appended row (inserted at row 9, pushing footer to 10)
     assert_eq!(final_sheet.get_cell("A9").unwrap().get_value(), "Software");
     assert_eq!(final_sheet.get_cell("B9").unwrap().get_value(), "1500");
-    
+
     // Check new footer
     assert_eq!(final_sheet.get_cell("A10").unwrap().get_value(), "Subtotal");
-    assert_eq!(final_sheet.get_cell("B10").unwrap().get_formula().replace(' ', ""), "SUM(B8:B9)");
+    assert_eq!(
+        final_sheet
+            .get_cell("B10")
+            .unwrap()
+            .get_formula()
+            .replace(' ', ""),
+        "SUM(B8:B9)"
+    );
     assert_eq!(final_sheet.get_cell("B10").unwrap().get_value(), "3500"); // 2000 + 1500
-    
+
     // Check Grand Total (shifted to row 13 due to the append-region insertion)
-    assert_eq!(final_sheet.get_cell("A13").unwrap().get_value(), "Grand Total");
-    assert_eq!(final_sheet.get_cell("B13").unwrap().get_formula().replace(' ', ""), "B4+B10");
+    assert_eq!(
+        final_sheet.get_cell("A13").unwrap().get_value(),
+        "Grand Total"
+    );
+    assert_eq!(
+        final_sheet
+            .get_cell("B13")
+            .unwrap()
+            .get_formula()
+            .replace(' ', ""),
+        "B4+B10"
+    );
     assert_eq!(final_sheet.get_cell("B13").unwrap().get_value(), "8500"); // 5000 + 3500
 }

@@ -20,15 +20,15 @@ Use this skill when making non-trivial workbook edits.
 asp session start --base <workbook.xlsx> --label "edit session" --workspace <dir>
 
 # 2) Explore
-asp named-ranges <workbook.xlsx> --session <session_id> --session-workspace <dir>
-asp formula-trace <workbook.xlsx> <Sheet> <Cell> precedents --depth 2 \
+asp read names <workbook.xlsx> --session <session_id> --session-workspace <dir>
+asp analyze formula-trace <workbook.xlsx> <Sheet> <Cell> precedents --depth 2 \
   --session <session_id> --session-workspace <dir>
-asp range-values <workbook.xlsx> <Sheet> <range> --format rows \
+asp read values <workbook.xlsx> <Sheet> <range> --format rows \
   --session <session_id> --session-workspace <dir>
 
 # 3) Discover exact payload contract
-asp schema session-op transform.write_matrix
-asp example session-op transform.write_matrix
+asp schema session op transform.write_matrix
+asp example session op transform.write_matrix
 
 # 4) Stage
 asp session op --session <session_id> --ops @edits.json --workspace <dir>
@@ -37,11 +37,11 @@ asp session op --session <session_id> --ops @edits.json --workspace <dir>
 asp session apply --session <session_id> <staged_id> --workspace <dir>
 
 # 6) Verify
-asp inspect-cells <workbook.xlsx> <Sheet> <targets> \
+asp read cells <workbook.xlsx> <Sheet> <targets> \
   --session <session_id> --session-workspace <dir>
 asp session materialize --session <session_id> --output <temp.xlsx> --workspace <dir>
-asp verify <base.xlsx> <temp.xlsx> --targets <Sheet!A1,...>
-asp diff <base.xlsx> <temp.xlsx> --details --limit 50 --exclude-recalc-result
+asp verify proof <base.xlsx> <temp.xlsx> --targets <Sheet!A1,...>
+asp verify diff <base.xlsx> <temp.xlsx> --details --limit 50 --exclude-recalc-result
 
 `asp verify` is the summary-first proof step: check target classifications plus new/resolved/preexisting errors, then use `asp diff` when you need deeper detail. Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` when you only want explicit target proof. Add `--exclude-recalc-result` when you want a lower-noise change review focused on direct edits.
 
@@ -101,7 +101,7 @@ asp session materialize --session <session_id> --output final_result.xlsx --work
 Before insert/delete row/column operations, always preflight:
 
 ```bash
-asp check-ref-impact <workbook.xlsx> --ops @structure_ops.json --show-formula-delta
+asp analyze ref-impact <workbook.xlsx> --ops @structure_ops.json --show-formula-delta
 ```
 
 Prefer `clone_row` over raw `insert_rows` in modeled zones.

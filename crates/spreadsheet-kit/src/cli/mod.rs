@@ -4,7 +4,7 @@ pub mod output;
 
 use crate::model::FormulaParsePolicy;
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -326,6 +326,250 @@ pub enum DiscoverabilityCommands {
         )]
         kind: String,
     },
+}
+
+#[derive(Debug, Args, Clone)]
+struct SurfaceLeafArgs {
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        num_args = 0..,
+        value_name = "ARGS"
+    )]
+    args: Vec<OsString>,
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceReadCommands {
+    #[command(about = "List workbook sheets with basic summary metadata")]
+    Sheets(SurfaceLeafArgs),
+    #[command(about = "Inspect one sheet and detect structured regions")]
+    Overview(SurfaceLeafArgs),
+    #[command(about = "Read raw values for one or more A1 ranges")]
+    Values(SurfaceLeafArgs),
+    #[command(about = "Export a range to a specific format")]
+    Export(SurfaceLeafArgs),
+    #[command(about = "Inspect detail snapshots for targeted A1 cells/ranges")]
+    Cells(SurfaceLeafArgs),
+    #[command(about = "Read one sheet page with deterministic continuation")]
+    Page(SurfaceLeafArgs),
+    #[command(about = "Read a table-like region as json, values, or csv")]
+    Table(SurfaceLeafArgs),
+    #[command(about = "List workbook named ranges and table/formula named items")]
+    Names(SurfaceLeafArgs),
+    #[command(about = "Describe workbook-level metadata and sheet counts")]
+    Workbook(SurfaceLeafArgs),
+    #[command(about = "Render a range with layout metadata")]
+    Layout(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceAnalyzeCommands {
+    #[command(about = "Find cells matching a text query by value or label")]
+    FindValue(SurfaceLeafArgs),
+    #[command(about = "Find formulas containing a text query with pagination")]
+    FindFormula(SurfaceLeafArgs),
+    #[command(about = "Summarize formulas on a sheet by complexity or frequency")]
+    FormulaMap(SurfaceLeafArgs),
+    #[command(about = "Trace formula precedents or dependents from one origin cell")]
+    FormulaTrace(SurfaceLeafArgs),
+    #[command(about = "Scan workbook formulas for volatile functions")]
+    ScanVolatiles(SurfaceLeafArgs),
+    #[command(about = "Compute per-sheet statistics for density and column types")]
+    SheetStatistics(SurfaceLeafArgs),
+    #[command(about = "Profile table headers, types, and column distributions")]
+    TableProfile(SurfaceLeafArgs),
+    #[command(about = "Analyze structural operation impact without mutation")]
+    RefImpact(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceWriteFormulaCommands {
+    #[command(about = "Find and replace text in formula bodies (not values)")]
+    Replace(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceWriteNameCommands {
+    #[command(about = "Define a new named range in a workbook")]
+    Define(SurfaceLeafArgs),
+    #[command(about = "Update an existing named range")]
+    Update(SurfaceLeafArgs),
+    #[command(about = "Delete a named range from a workbook")]
+    Delete(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceWriteBatchCommands {
+    #[command(about = "Apply stateless transform operations from an @ops payload")]
+    Transform(SurfaceLeafArgs),
+    #[command(about = "Apply stateless style operations from an @ops payload")]
+    Style(SurfaceLeafArgs),
+    #[command(about = "Apply stateless formula pattern operations from an @ops payload")]
+    FormulaPattern(SurfaceLeafArgs),
+    #[command(about = "Apply stateless structure operations from an @ops payload")]
+    Structure(SurfaceLeafArgs),
+    #[command(about = "Apply stateless column sizing operations from an @ops payload")]
+    ColumnSize(SurfaceLeafArgs),
+    #[command(about = "Apply stateless sheet layout operations from an @ops payload")]
+    SheetLayout(SurfaceLeafArgs),
+    #[command(
+        about = "Apply stateless data validation and conditional format operations from an @ops payload"
+    )]
+    Rules(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceWriteCommands {
+    #[command(about = "Apply one or more shorthand cell edits to a sheet")]
+    Cells(SurfaceLeafArgs),
+    #[command(about = "Import range data from grid JSON or CSV")]
+    Import(SurfaceLeafArgs),
+    #[command(about = "Append rows into a detected region with footer-aware insertion")]
+    Append(SurfaceLeafArgs),
+    #[command(about = "Clone one template row into inserted rows with preview-first planning")]
+    CloneTemplateRow(SurfaceLeafArgs),
+    #[command(about = "Clone a contiguous template row band with preview-first planning")]
+    CloneRowBand(SurfaceLeafArgs),
+    #[command(subcommand, about = "Formula-only mutation helpers")]
+    Formulas(SurfaceWriteFormulaCommands),
+    #[command(subcommand, about = "Named range mutation helpers")]
+    Name(SurfaceWriteNameCommands),
+    #[command(subcommand, about = "Stateless batch mutation surfaces")]
+    Batch(SurfaceWriteBatchCommands),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceWorkbookCommands {
+    #[command(about = "Create a new workbook at a destination path")]
+    Create(SurfaceLeafArgs),
+    #[command(about = "Copy a workbook to a new path for safe edits")]
+    Copy(SurfaceLeafArgs),
+    #[command(about = "Recalculate workbook formulas")]
+    Recalculate(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceVerifyCommands {
+    #[command(about = "Compare two workbook states and verify target deltas plus error provenance")]
+    Proof(SurfaceLeafArgs),
+    #[command(about = "Diff two workbook versions with summary-first, paged details")]
+    Diff(SurfaceLeafArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceDiscoverabilityBatchCommands {
+    #[command(about = "Schema/example target for transform batch payloads")]
+    Transform,
+    #[command(about = "Schema/example target for style batch payloads")]
+    Style,
+    #[command(about = "Schema/example target for formula pattern batch payloads")]
+    FormulaPattern,
+    #[command(about = "Schema/example target for structure batch payloads")]
+    Structure,
+    #[command(about = "Schema/example target for column size batch payloads")]
+    ColumnSize,
+    #[command(about = "Schema/example target for sheet layout batch payloads")]
+    SheetLayout,
+    #[command(about = "Schema/example target for rules batch payloads")]
+    Rules,
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceDiscoverabilityWriteCommands {
+    #[command(subcommand, about = "Batch payload targets")]
+    Batch(SurfaceDiscoverabilityBatchCommands),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceDiscoverabilitySessionCommands {
+    #[command(about = "Schema/example target for event-sourced session op payloads")]
+    Op {
+        #[arg(
+            value_name = "KIND",
+            help = "Exact session op kind, e.g. transform.write_matrix"
+        )]
+        kind: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceDiscoverabilityCommands {
+    #[command(subcommand, about = "Discoverability targets for write payloads")]
+    Write(SurfaceDiscoverabilityWriteCommands),
+    #[command(subcommand, about = "Discoverability targets for session payloads")]
+    Session(SurfaceDiscoverabilitySessionCommands),
+}
+
+#[derive(Debug, Subcommand)]
+enum SurfaceCommands {
+    #[command(subcommand, about = "Read workbook data and structure")]
+    Read(SurfaceReadCommands),
+    #[command(subcommand, about = "Analyze workbook contents and formulas")]
+    Analyze(SurfaceAnalyzeCommands),
+    #[command(subcommand, about = "Write and mutate workbook contents")]
+    Write(SurfaceWriteCommands),
+    #[command(subcommand, about = "Workbook-level file operations")]
+    Workbook(SurfaceWorkbookCommands),
+    #[command(subcommand, about = "Verification and review workflows")]
+    Verify(SurfaceVerifyCommands),
+    #[command(about = "Print canonical JSON schema for a command or payload target")]
+    Schema {
+        #[command(subcommand)]
+        command: SurfaceDiscoverabilityCommands,
+    },
+    #[command(about = "Print a copy-pastable canonical example for a command or payload target")]
+    Example {
+        #[command(subcommand)]
+        command: SurfaceDiscoverabilityCommands,
+    },
+    #[command(about = "Event-sourced session management", subcommand, hide = false)]
+    Session(Box<SessionCommands>),
+    #[command(about = "SheetPort manifest lifecycle and execution commands")]
+    Sheetport {
+        #[command(subcommand)]
+        command: SheetportCommands,
+    },
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "asp",
+    version,
+    about = "Stateless spreadsheet CLI for reads, writes, and verification workflows",
+    long_about = "Stateless spreadsheet CLI for AI and automation workflows.\n\nPrimary command: asp\nCompatibility alias: agent-spreadsheet\n\nVerify install:\n  asp --version\n  asp --help\n\nPrimary groups:\n  • read      -> workbook extraction and inspection\n  • analyze   -> search, profiling, and diagnostics\n  • write     -> direct edits, workflow helpers, and batch mutations\n  • workbook  -> file-level create/copy/recalculate flows\n  • verify    -> proof and diff review surfaces\n  • session   -> event-sourced stateful editing\n  • sheetport -> manifest lifecycle and execution\n\nDiscoverability:\n  • asp schema write batch transform\n  • asp example write batch transform\n  • asp schema session op transform.write_matrix\n\nTip: global --output-format csv is currently unsupported and returns an error. Use --output-format json, or command-level CSV options such as asp read table --table-format csv."
+)]
+struct SurfaceCli {
+    #[arg(
+        long = "output-format",
+        value_enum,
+        default_value_t = OutputFormat::Json,
+        global = true,
+        help = "Output format (csv is currently unsupported globally; use json or command-specific CSV options like asp read table --table-format csv)"
+    )]
+    output_format: OutputFormat,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OutputShape::Canonical,
+        global = true,
+        help = "Output shape (canonical keeps full schema; compact applies command-specific projections while preserving stable payload contracts for range-values/read-table/sheet-page; formula-trace compact omits per-layer highlights while preserving continuation fields)"
+    )]
+    shape: OutputShape,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Emit compact JSON without pretty-printing (default behavior)"
+    )]
+    compact: bool,
+
+    #[arg(long, global = true, help = "Suppress non-fatal warnings")]
+    quiet: bool,
+
+    #[command(subcommand)]
+    command: SurfaceCommands,
 }
 
 #[derive(Debug, Parser)]
@@ -2975,9 +3219,18 @@ fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
     let first_subcommand_name = first_subcommand_index
         .map(|index| argv[index].to_string_lossy().into_owned())
         .unwrap_or_default();
+    let second_subcommand_name = first_subcommand_index.and_then(|index| {
+        argv.get(index + 1)
+            .map(|value| value.to_string_lossy().into_owned())
+    });
     let preserve_sheet_page_format = first_subcommand_name == "sheet-page"
         || first_subcommand_name == "range-export"
-        || first_subcommand_name == "range-values";
+        || first_subcommand_name == "range-values"
+        || (first_subcommand_name == "read"
+            && matches!(
+                second_subcommand_name.as_deref(),
+                Some("page") | Some("export") | Some("values")
+            ));
 
     let mut normalized = Vec::with_capacity(argv.len());
     normalized.push(argv[0].clone());
@@ -3016,17 +3269,695 @@ fn normalize_legacy_global_format_argv(argv: Vec<OsString>) -> Vec<OsString> {
     normalized
 }
 
+#[derive(Debug)]
+enum ResolvedSurfaceCommand {
+    Command(Commands),
+    Schema(DiscoverabilityCommands),
+    Example(DiscoverabilityCommands),
+}
+
+fn flat_to_canonical_command(flat: &str) -> Option<&'static str> {
+    match flat {
+        "list-sheets" => Some("read sheets"),
+        "sheet-overview" => Some("read overview"),
+        "range-values" => Some("read values"),
+        "range-export" => Some("read export"),
+        "inspect-cells" => Some("read cells"),
+        "sheet-page" => Some("read page"),
+        "read-table" => Some("read table"),
+        "named-ranges" => Some("read names"),
+        "describe" => Some("read workbook"),
+        "layout-page" => Some("read layout"),
+        "find-value" => Some("analyze find-value"),
+        "find-formula" => Some("analyze find-formula"),
+        "formula-map" => Some("analyze formula-map"),
+        "formula-trace" => Some("analyze formula-trace"),
+        "scan-volatiles" => Some("analyze scan-volatiles"),
+        "sheet-statistics" => Some("analyze sheet-statistics"),
+        "table-profile" => Some("analyze table-profile"),
+        "check-ref-impact" => Some("analyze ref-impact"),
+        "edit" => Some("write cells"),
+        "range-import" => Some("write import"),
+        "append-region" => Some("write append"),
+        "clone-template-row" => Some("write clone-template-row"),
+        "clone-row-band" => Some("write clone-row-band"),
+        "replace-in-formulas" => Some("write formulas replace"),
+        "transform-batch" => Some("write batch transform"),
+        "style-batch" => Some("write batch style"),
+        "apply-formula-pattern" => Some("write batch formula-pattern"),
+        "structure-batch" => Some("write batch structure"),
+        "column-size-batch" => Some("write batch column-size"),
+        "sheet-layout-batch" => Some("write batch sheet-layout"),
+        "rules-batch" => Some("write batch rules"),
+        "define-name" => Some("write name define"),
+        "update-name" => Some("write name update"),
+        "delete-name" => Some("write name delete"),
+        "create-workbook" => Some("workbook create"),
+        "copy" => Some("workbook copy"),
+        "recalculate" => Some("workbook recalculate"),
+        "verify" => Some("verify proof"),
+        "diff" => Some("verify diff"),
+        "run-manifest" => Some("sheetport run"),
+        _ => None,
+    }
+}
+
+fn flat_to_nested_tokens(flat: &str) -> Option<&'static [&'static str]> {
+    match flat {
+        "list-sheets" => Some(&["read", "sheets"]),
+        "sheet-overview" => Some(&["read", "overview"]),
+        "range-values" => Some(&["read", "values"]),
+        "range-export" => Some(&["read", "export"]),
+        "inspect-cells" => Some(&["read", "cells"]),
+        "sheet-page" => Some(&["read", "page"]),
+        "read-table" => Some(&["read", "table"]),
+        "named-ranges" => Some(&["read", "names"]),
+        "describe" => Some(&["read", "workbook"]),
+        "layout-page" => Some(&["read", "layout"]),
+        "find-value" => Some(&["analyze", "find-value"]),
+        "find-formula" => Some(&["analyze", "find-formula"]),
+        "formula-map" => Some(&["analyze", "formula-map"]),
+        "formula-trace" => Some(&["analyze", "formula-trace"]),
+        "scan-volatiles" => Some(&["analyze", "scan-volatiles"]),
+        "sheet-statistics" => Some(&["analyze", "sheet-statistics"]),
+        "table-profile" => Some(&["analyze", "table-profile"]),
+        "check-ref-impact" => Some(&["analyze", "ref-impact"]),
+        "edit" => Some(&["write", "cells"]),
+        "range-import" => Some(&["write", "import"]),
+        "append-region" => Some(&["write", "append"]),
+        "clone-template-row" => Some(&["write", "clone-template-row"]),
+        "clone-row-band" => Some(&["write", "clone-row-band"]),
+        "replace-in-formulas" => Some(&["write", "formulas", "replace"]),
+        "transform-batch" => Some(&["write", "batch", "transform"]),
+        "style-batch" => Some(&["write", "batch", "style"]),
+        "apply-formula-pattern" => Some(&["write", "batch", "formula-pattern"]),
+        "structure-batch" => Some(&["write", "batch", "structure"]),
+        "column-size-batch" => Some(&["write", "batch", "column-size"]),
+        "sheet-layout-batch" => Some(&["write", "batch", "sheet-layout"]),
+        "rules-batch" => Some(&["write", "batch", "rules"]),
+        "define-name" => Some(&["write", "name", "define"]),
+        "update-name" => Some(&["write", "name", "update"]),
+        "delete-name" => Some(&["write", "name", "delete"]),
+        "create-workbook" => Some(&["workbook", "create"]),
+        "copy" => Some(&["workbook", "copy"]),
+        "recalculate" => Some(&["workbook", "recalculate"]),
+        "verify" => Some(&["verify", "proof"]),
+        "diff" => Some(&["verify", "diff"]),
+        "run-manifest" => Some(&["sheetport", "run"]),
+        _ => None,
+    }
+}
+
+fn legacy_discoverability_tokens(target: &str) -> Option<&'static [&'static str]> {
+    match target {
+        "transform-batch" => Some(&["write", "batch", "transform"]),
+        "style-batch" => Some(&["write", "batch", "style"]),
+        "apply-formula-pattern" => Some(&["write", "batch", "formula-pattern"]),
+        "structure-batch" => Some(&["write", "batch", "structure"]),
+        "column-size-batch" => Some(&["write", "batch", "column-size"]),
+        "sheet-layout-batch" => Some(&["write", "batch", "sheet-layout"]),
+        "rules-batch" => Some(&["write", "batch", "rules"]),
+        _ => None,
+    }
+}
+
+fn canonical_leaf_path_to_flat(tokens: &[String]) -> Option<&'static str> {
+    match tokens {
+        [a, b] if a == "read" && b == "sheets" => Some("list-sheets"),
+        [a, b] if a == "read" && b == "overview" => Some("sheet-overview"),
+        [a, b] if a == "read" && b == "values" => Some("range-values"),
+        [a, b] if a == "read" && b == "export" => Some("range-export"),
+        [a, b] if a == "read" && b == "cells" => Some("inspect-cells"),
+        [a, b] if a == "read" && b == "page" => Some("sheet-page"),
+        [a, b] if a == "read" && b == "table" => Some("read-table"),
+        [a, b] if a == "read" && b == "names" => Some("named-ranges"),
+        [a, b] if a == "read" && b == "workbook" => Some("describe"),
+        [a, b] if a == "read" && b == "layout" => Some("layout-page"),
+        [a, b] if a == "analyze" && b == "find-value" => Some("find-value"),
+        [a, b] if a == "analyze" && b == "find-formula" => Some("find-formula"),
+        [a, b] if a == "analyze" && b == "formula-map" => Some("formula-map"),
+        [a, b] if a == "analyze" && b == "formula-trace" => Some("formula-trace"),
+        [a, b] if a == "analyze" && b == "scan-volatiles" => Some("scan-volatiles"),
+        [a, b] if a == "analyze" && b == "sheet-statistics" => Some("sheet-statistics"),
+        [a, b] if a == "analyze" && b == "table-profile" => Some("table-profile"),
+        [a, b] if a == "analyze" && b == "ref-impact" => Some("check-ref-impact"),
+        [a, b] if a == "write" && b == "cells" => Some("edit"),
+        [a, b] if a == "write" && b == "import" => Some("range-import"),
+        [a, b] if a == "write" && b == "append" => Some("append-region"),
+        [a, b] if a == "write" && b == "clone-template-row" => Some("clone-template-row"),
+        [a, b] if a == "write" && b == "clone-row-band" => Some("clone-row-band"),
+        [a, b] if a == "workbook" && b == "create" => Some("create-workbook"),
+        [a, b] if a == "workbook" && b == "copy" => Some("copy"),
+        [a, b] if a == "workbook" && b == "recalculate" => Some("recalculate"),
+        [a, b] if a == "verify" && b == "proof" => Some("verify"),
+        [a, b] if a == "verify" && b == "diff" => Some("diff"),
+        [a, b, c] if a == "write" && b == "formulas" && c == "replace" => {
+            Some("replace-in-formulas")
+        }
+        [a, b, c] if a == "write" && b == "name" && c == "define" => Some("define-name"),
+        [a, b, c] if a == "write" && b == "name" && c == "update" => Some("update-name"),
+        [a, b, c] if a == "write" && b == "name" && c == "delete" => Some("delete-name"),
+        [a, b, c] if a == "write" && b == "batch" && c == "transform" => Some("transform-batch"),
+        [a, b, c] if a == "write" && b == "batch" && c == "style" => Some("style-batch"),
+        [a, b, c] if a == "write" && b == "batch" && c == "formula-pattern" => {
+            Some("apply-formula-pattern")
+        }
+        [a, b, c] if a == "write" && b == "batch" && c == "structure" => Some("structure-batch"),
+        [a, b, c] if a == "write" && b == "batch" && c == "column-size" => {
+            Some("column-size-batch")
+        }
+        [a, b, c] if a == "write" && b == "batch" && c == "sheet-layout" => {
+            Some("sheet-layout-batch")
+        }
+        [a, b, c] if a == "write" && b == "batch" && c == "rules" => Some("rules-batch"),
+        _ => None,
+    }
+}
+
+fn rewrite_flat_surface_text(text: &str) -> String {
+    let mut rewritten = text.replace("agent-spreadsheet", "asp");
+
+    let replacements = [
+        ("session-op", "session op"),
+        (
+            "asp schema transform-batch",
+            "asp schema write batch transform",
+        ),
+        ("asp schema style-batch", "asp schema write batch style"),
+        (
+            "asp schema apply-formula-pattern",
+            "asp schema write batch formula-pattern",
+        ),
+        (
+            "asp schema structure-batch",
+            "asp schema write batch structure",
+        ),
+        (
+            "asp schema column-size-batch",
+            "asp schema write batch column-size",
+        ),
+        (
+            "asp schema sheet-layout-batch",
+            "asp schema write batch sheet-layout",
+        ),
+        ("asp schema rules-batch", "asp schema write batch rules"),
+        (
+            "asp example transform-batch",
+            "asp example write batch transform",
+        ),
+        ("asp example style-batch", "asp example write batch style"),
+        (
+            "asp example apply-formula-pattern",
+            "asp example write batch formula-pattern",
+        ),
+        (
+            "asp example structure-batch",
+            "asp example write batch structure",
+        ),
+        (
+            "asp example column-size-batch",
+            "asp example write batch column-size",
+        ),
+        (
+            "asp example sheet-layout-batch",
+            "asp example write batch sheet-layout",
+        ),
+        ("asp example rules-batch", "asp example write batch rules"),
+    ];
+    for (from, to) in replacements {
+        rewritten = rewritten.replace(from, to);
+        rewritten = rewritten.replace(&format!("`{from}`"), &format!("`{to}`"));
+    }
+
+    let flat_commands = [
+        "list-sheets",
+        "sheet-overview",
+        "range-values",
+        "range-export",
+        "inspect-cells",
+        "sheet-page",
+        "read-table",
+        "named-ranges",
+        "describe",
+        "layout-page",
+        "find-value",
+        "find-formula",
+        "formula-map",
+        "formula-trace",
+        "scan-volatiles",
+        "sheet-statistics",
+        "table-profile",
+        "check-ref-impact",
+        "edit",
+        "range-import",
+        "append-region",
+        "clone-template-row",
+        "clone-row-band",
+        "replace-in-formulas",
+        "transform-batch",
+        "style-batch",
+        "apply-formula-pattern",
+        "structure-batch",
+        "column-size-batch",
+        "sheet-layout-batch",
+        "rules-batch",
+        "define-name",
+        "update-name",
+        "delete-name",
+        "create-workbook",
+        "copy",
+        "recalculate",
+        "verify",
+        "diff",
+        "run-manifest",
+    ];
+    for flat in flat_commands {
+        if let Some(canonical) = flat_to_canonical_command(flat) {
+            rewritten = rewritten.replace(&format!("asp {flat}"), &format!("asp {canonical}"));
+            rewritten = rewritten.replace(&format!("`{flat}`"), &format!("`{canonical}`"));
+        }
+    }
+
+    rewritten
+}
+
+fn emit_rewritten_clap_error_and_exit(error: clap::Error) -> ! {
+    let kind = error.kind();
+    let code = error.exit_code();
+    let rendered = rewrite_flat_surface_text(&error.to_string());
+    match kind {
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+            print!("{rendered}");
+            std::process::exit(0);
+        }
+        _ => {
+            eprint!("{rendered}");
+            std::process::exit(code);
+        }
+    }
+}
+
+fn normalize_legacy_command_argv(argv: Vec<OsString>) -> (Vec<OsString>, Vec<String>) {
+    if argv.len() <= 1 {
+        return (argv, Vec::new());
+    }
+
+    let Some(index) = first_subcommand_index(&argv) else {
+        return (argv, Vec::new());
+    };
+
+    let token = argv[index].to_string_lossy().into_owned();
+    let mut warnings = Vec::new();
+
+    if let Some(path) = flat_to_nested_tokens(&token) {
+        let next_token = argv
+            .get(index + 1)
+            .map(|value| value.to_string_lossy().into_owned());
+        let conflicts_with_canonical_group =
+            token == "verify" && matches!(next_token.as_deref(), Some("proof") | Some("diff"));
+
+        if !conflicts_with_canonical_group {
+            let mut normalized = Vec::with_capacity(argv.len() + path.len());
+            normalized.extend_from_slice(&argv[..index]);
+            for part in path {
+                normalized.push(OsString::from(part));
+            }
+            normalized.extend_from_slice(&argv[index + 1..]);
+            warnings.push(format!(
+                "warning: '{}' is deprecated; use '{}'",
+                token,
+                flat_to_canonical_command(&token).unwrap_or_default()
+            ));
+            return (normalized, warnings);
+        }
+    }
+
+    if (token == "schema" || token == "example") && index + 1 < argv.len() {
+        let target = argv[index + 1].to_string_lossy().into_owned();
+        if let Some(path) = legacy_discoverability_tokens(&target) {
+            let mut normalized = Vec::with_capacity(argv.len() + path.len());
+            normalized.extend_from_slice(&argv[..=index]);
+            for part in path {
+                normalized.push(OsString::from(part));
+            }
+            normalized.extend_from_slice(&argv[index + 2..]);
+            warnings.push(format!(
+                "warning: '{} {}' is deprecated; use '{} {}'",
+                token,
+                target,
+                token,
+                path.join(" ")
+            ));
+            return (normalized, warnings);
+        }
+
+        if target == "session-op" {
+            let mut normalized = Vec::with_capacity(argv.len() + 1);
+            normalized.extend_from_slice(&argv[..=index]);
+            normalized.push(OsString::from("session"));
+            normalized.push(OsString::from("op"));
+            normalized.extend_from_slice(&argv[index + 2..]);
+            warnings.push(format!(
+                "warning: '{} session-op' is deprecated; use '{} session op'",
+                token, token
+            ));
+            return (normalized, warnings);
+        }
+    }
+
+    (argv, warnings)
+}
+
+fn maybe_emit_forwarded_leaf_help(argv: &[OsString]) {
+    let Some(last) = argv.last() else {
+        return;
+    };
+    let last = last.to_string_lossy();
+    if last.as_ref() != "--help" && last.as_ref() != "-h" {
+        return;
+    }
+
+    let argv_without_help = &argv[..argv.len() - 1];
+    let Some(index) = first_subcommand_index(argv_without_help) else {
+        return;
+    };
+
+    let mut tokens = Vec::new();
+    for arg in &argv_without_help[index..] {
+        let token = arg.to_string_lossy();
+        if token.starts_with('-') {
+            break;
+        }
+        tokens.push(token.into_owned());
+    }
+
+    if let Some(flat) = canonical_leaf_path_to_flat(&tokens) {
+        let translated = vec![
+            OsString::from("asp"),
+            OsString::from(flat),
+            OsString::from("--help"),
+        ];
+        match Cli::try_parse_from(translated) {
+            Ok(_) => unreachable!("help parse should not succeed"),
+            Err(error) => emit_rewritten_clap_error_and_exit(error),
+        }
+    }
+}
+
+fn parse_flat_command_from_surface(
+    flat_command: &'static str,
+    args: Vec<OsString>,
+) -> Result<Commands, clap::Error> {
+    let mut argv = vec![OsString::from("asp"), OsString::from(flat_command)];
+    argv.extend(args);
+    Cli::try_parse_from(argv).map(|cli| cli.command)
+}
+
+fn resolve_surface_discoverability(
+    command: SurfaceDiscoverabilityCommands,
+) -> DiscoverabilityCommands {
+    match command {
+        SurfaceDiscoverabilityCommands::Write(command) => match command {
+            SurfaceDiscoverabilityWriteCommands::Batch(command) => match command {
+                SurfaceDiscoverabilityBatchCommands::Transform => {
+                    DiscoverabilityCommands::TransformBatch
+                }
+                SurfaceDiscoverabilityBatchCommands::Style => DiscoverabilityCommands::StyleBatch,
+                SurfaceDiscoverabilityBatchCommands::FormulaPattern => {
+                    DiscoverabilityCommands::ApplyFormulaPattern
+                }
+                SurfaceDiscoverabilityBatchCommands::Structure => {
+                    DiscoverabilityCommands::StructureBatch
+                }
+                SurfaceDiscoverabilityBatchCommands::ColumnSize => {
+                    DiscoverabilityCommands::ColumnSizeBatch
+                }
+                SurfaceDiscoverabilityBatchCommands::SheetLayout => {
+                    DiscoverabilityCommands::SheetLayoutBatch
+                }
+                SurfaceDiscoverabilityBatchCommands::Rules => DiscoverabilityCommands::RulesBatch,
+            },
+        },
+        SurfaceDiscoverabilityCommands::Session(command) => match command {
+            SurfaceDiscoverabilitySessionCommands::Op { kind } => {
+                DiscoverabilityCommands::SessionOp { kind }
+            }
+        },
+    }
+}
+
+fn resolve_surface_command(
+    command: SurfaceCommands,
+) -> Result<ResolvedSurfaceCommand, clap::Error> {
+    match command {
+        SurfaceCommands::Read(command) => match command {
+            SurfaceReadCommands::Sheets(args) => {
+                parse_flat_command_from_surface("list-sheets", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Overview(args) => {
+                parse_flat_command_from_surface("sheet-overview", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Values(args) => {
+                parse_flat_command_from_surface("range-values", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Export(args) => {
+                parse_flat_command_from_surface("range-export", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Cells(args) => {
+                parse_flat_command_from_surface("inspect-cells", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Page(args) => {
+                parse_flat_command_from_surface("sheet-page", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Table(args) => {
+                parse_flat_command_from_surface("read-table", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Names(args) => {
+                parse_flat_command_from_surface("named-ranges", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Workbook(args) => {
+                parse_flat_command_from_surface("describe", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceReadCommands::Layout(args) => {
+                parse_flat_command_from_surface("layout-page", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+        },
+        SurfaceCommands::Analyze(command) => match command {
+            SurfaceAnalyzeCommands::FindValue(args) => {
+                parse_flat_command_from_surface("find-value", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::FindFormula(args) => {
+                parse_flat_command_from_surface("find-formula", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::FormulaMap(args) => {
+                parse_flat_command_from_surface("formula-map", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::FormulaTrace(args) => {
+                parse_flat_command_from_surface("formula-trace", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::ScanVolatiles(args) => {
+                parse_flat_command_from_surface("scan-volatiles", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::SheetStatistics(args) => {
+                parse_flat_command_from_surface("sheet-statistics", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::TableProfile(args) => {
+                parse_flat_command_from_surface("table-profile", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceAnalyzeCommands::RefImpact(args) => {
+                parse_flat_command_from_surface("check-ref-impact", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+        },
+        SurfaceCommands::Write(command) => match command {
+            SurfaceWriteCommands::Cells(args) => parse_flat_command_from_surface("edit", args.args)
+                .map(ResolvedSurfaceCommand::Command),
+            SurfaceWriteCommands::Import(args) => {
+                parse_flat_command_from_surface("range-import", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWriteCommands::Append(args) => {
+                parse_flat_command_from_surface("append-region", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWriteCommands::CloneTemplateRow(args) => {
+                parse_flat_command_from_surface("clone-template-row", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWriteCommands::CloneRowBand(args) => {
+                parse_flat_command_from_surface("clone-row-band", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWriteCommands::Formulas(command) => match command {
+                SurfaceWriteFormulaCommands::Replace(args) => {
+                    parse_flat_command_from_surface("replace-in-formulas", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+            },
+            SurfaceWriteCommands::Name(command) => match command {
+                SurfaceWriteNameCommands::Define(args) => {
+                    parse_flat_command_from_surface("define-name", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteNameCommands::Update(args) => {
+                    parse_flat_command_from_surface("update-name", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteNameCommands::Delete(args) => {
+                    parse_flat_command_from_surface("delete-name", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+            },
+            SurfaceWriteCommands::Batch(command) => match command {
+                SurfaceWriteBatchCommands::Transform(args) => {
+                    parse_flat_command_from_surface("transform-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::Style(args) => {
+                    parse_flat_command_from_surface("style-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::FormulaPattern(args) => {
+                    parse_flat_command_from_surface("apply-formula-pattern", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::Structure(args) => {
+                    parse_flat_command_from_surface("structure-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::ColumnSize(args) => {
+                    parse_flat_command_from_surface("column-size-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::SheetLayout(args) => {
+                    parse_flat_command_from_surface("sheet-layout-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+                SurfaceWriteBatchCommands::Rules(args) => {
+                    parse_flat_command_from_surface("rules-batch", args.args)
+                        .map(ResolvedSurfaceCommand::Command)
+                }
+            },
+        },
+        SurfaceCommands::Workbook(command) => match command {
+            SurfaceWorkbookCommands::Create(args) => {
+                parse_flat_command_from_surface("create-workbook", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWorkbookCommands::Copy(args) => {
+                parse_flat_command_from_surface("copy", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceWorkbookCommands::Recalculate(args) => {
+                parse_flat_command_from_surface("recalculate", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+        },
+        SurfaceCommands::Verify(command) => match command {
+            SurfaceVerifyCommands::Proof(args) => {
+                parse_flat_command_from_surface("verify", args.args)
+                    .map(ResolvedSurfaceCommand::Command)
+            }
+            SurfaceVerifyCommands::Diff(args) => parse_flat_command_from_surface("diff", args.args)
+                .map(ResolvedSurfaceCommand::Command),
+        },
+        SurfaceCommands::Schema { command } => Ok(ResolvedSurfaceCommand::Schema(
+            resolve_surface_discoverability(command),
+        )),
+        SurfaceCommands::Example { command } => Ok(ResolvedSurfaceCommand::Example(
+            resolve_surface_discoverability(command),
+        )),
+        SurfaceCommands::Session(command) => {
+            Ok(ResolvedSurfaceCommand::Command(Commands::Session(command)))
+        }
+        SurfaceCommands::Sheetport { command } => {
+            Ok(ResolvedSurfaceCommand::Command(Commands::Sheetport {
+                command,
+            }))
+        }
+    }
+}
+
 pub async fn run() -> Result<()> {
     let argv = normalize_legacy_global_format_argv(std::env::args_os().collect());
-    let cli = Cli::parse_from(argv);
-    run_with_options(
-        cli.command,
-        cli.output_format,
-        cli.shape,
-        cli.compact,
-        cli.quiet,
-    )
-    .await
+    let (argv, warnings) = normalize_legacy_command_argv(argv);
+    maybe_emit_forwarded_leaf_help(&argv);
+
+    let surface = match SurfaceCli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+
+    let result = match resolve_surface_command(surface.command) {
+        Ok(ResolvedSurfaceCommand::Command(command)) => {
+            run_with_options(
+                command,
+                surface.output_format,
+                surface.shape,
+                surface.compact,
+                surface.quiet,
+            )
+            .await
+        }
+        Ok(ResolvedSurfaceCommand::Schema(command)) => match run_schema_command(command) {
+            Ok(payload) => {
+                if let Err(error) = output::emit_value(
+                    &payload,
+                    surface.output_format,
+                    surface.shape,
+                    output::CompactProjectionTarget::None,
+                    surface.compact,
+                    surface.quiet,
+                ) {
+                    emit_error_and_exit(error);
+                }
+                Ok(())
+            }
+            Err(error) => emit_error_and_exit(error),
+        },
+        Ok(ResolvedSurfaceCommand::Example(command)) => match run_example_command(command) {
+            Ok(payload) => {
+                if let Err(error) = output::emit_value(
+                    &payload,
+                    surface.output_format,
+                    surface.shape,
+                    output::CompactProjectionTarget::None,
+                    surface.compact,
+                    surface.quiet,
+                ) {
+                    emit_error_and_exit(error);
+                }
+                Ok(())
+            }
+            Err(error) => emit_error_and_exit(error),
+        },
+        Err(error) => emit_rewritten_clap_error_and_exit(error),
+    };
+
+    if result.is_ok() && !surface.quiet {
+        for warning in &warnings {
+            eprintln!("{warning}");
+        }
+    }
+
+    result
 }
 
 pub async fn run_with_options(
@@ -4358,5 +5289,92 @@ mod tests {
             },
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn surface_cli_parses_nested_read_table_and_resolves_to_internal_command() {
+        let cli = SurfaceCli::try_parse_from([
+            "asp",
+            "read",
+            "table",
+            "workbook.xlsx",
+            "--sheet",
+            "Sheet1",
+            "--table-format",
+            "csv",
+        ])
+        .expect("parse surface read table");
+
+        let resolved = resolve_surface_command(cli.command).expect("resolve surface command");
+        match resolved {
+            ResolvedSurfaceCommand::Command(Commands::ReadTable {
+                file,
+                sheet,
+                table_format,
+                ..
+            }) => {
+                assert_eq!(file, PathBuf::from("workbook.xlsx"));
+                assert_eq!(sheet.as_deref(), Some("Sheet1"));
+                assert!(matches!(table_format, Some(TableReadFormat::Csv)));
+            }
+            other => panic!("unexpected resolved command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn surface_cli_parses_nested_schema_targets() {
+        let cli = SurfaceCli::try_parse_from(["asp", "schema", "write", "batch", "transform"])
+            .expect("parse surface schema target");
+
+        let resolved = resolve_surface_command(cli.command).expect("resolve schema command");
+        match resolved {
+            ResolvedSurfaceCommand::Schema(DiscoverabilityCommands::TransformBatch) => {}
+            other => panic!("unexpected resolved command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalizes_legacy_flat_command_to_nested_surface() {
+        let (normalized, warnings) = normalize_legacy_command_argv(
+            ["agent-spreadsheet", "append-region", "workbook.xlsx"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        );
+
+        let tokens = normalized
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tokens,
+            vec!["agent-spreadsheet", "write", "append", "workbook.xlsx"]
+        );
+        assert_eq!(
+            warnings,
+            vec!["warning: 'append-region' is deprecated; use 'write append'"]
+        );
+    }
+
+    #[test]
+    fn legacy_normalization_preserves_canonical_verify_group() {
+        let (normalized, warnings) = normalize_legacy_command_argv(
+            ["agent-spreadsheet", "verify", "diff", "a.xlsx", "b.xlsx"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        );
+
+        let tokens = normalized
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tokens,
+            vec!["agent-spreadsheet", "verify", "diff", "a.xlsx", "b.xlsx"]
+        );
+        assert!(warnings.is_empty());
     }
 }

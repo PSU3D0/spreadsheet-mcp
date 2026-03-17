@@ -16,12 +16,12 @@ Use this skill for stateless batch writes through `asp`.
 When unsure of payload shape, ask the CLI directly:
 
 ```bash
-asp schema transform-batch
-asp example transform-batch
-asp schema structure-batch
-asp example structure-batch
-asp schema session-op transform.write_matrix
-asp example session-op transform.write_matrix
+asp schema write batch transform
+asp example write batch transform
+asp schema write batch structure
+asp example write batch structure
+asp schema session op transform.write_matrix
+asp example session op transform.write_matrix
 ```
 
 ## Mutation modes
@@ -37,14 +37,14 @@ Every batch write command requires exactly **one** of:
 ## Canonical commands
 
 ```bash
-asp transform-batch workbook.xlsx --ops @transform_ops.json --dry-run
-asp style-batch workbook.xlsx --ops @style_ops.json --in-place
-asp apply-formula-pattern workbook.xlsx --ops @formula_ops.json --in-place
-asp structure-batch workbook.xlsx --ops @structure_ops.json --dry-run --impact-report --show-formula-delta
-asp column-size-batch workbook.xlsx --ops @column_ops.json --in-place
-asp sheet-layout-batch workbook.xlsx --ops @layout_ops.json --in-place
-asp rules-batch workbook.xlsx --ops @rules_ops.json --in-place
-asp replace-in-formulas workbook.xlsx Sheet1 --find '$64' --replace '$65' --dry-run
+asp write batch transform workbook.xlsx --ops @transform_ops.json --dry-run
+asp write batch style workbook.xlsx --ops @style_ops.json --in-place
+asp write batch formula-pattern workbook.xlsx --ops @formula_ops.json --in-place
+asp write batch structure workbook.xlsx --ops @structure_ops.json --dry-run --impact-report --show-formula-delta
+asp write batch column-size workbook.xlsx --ops @column_ops.json --in-place
+asp write batch sheet-layout workbook.xlsx --ops @layout_ops.json --in-place
+asp write batch rules workbook.xlsx --ops @rules_ops.json --in-place
+asp write formulas replace workbook.xlsx Sheet1 --find '$64' --replace '$65' --dry-run
 ```
 
 ## Exact payload conventions
@@ -116,14 +116,14 @@ Preferred canonical form includes top-level `sheet_name`:
 
 ## Post-write checklist
 
-1. Run `asp recalculate` if formulas changed
-2. Run `asp verify <baseline> <current> --targets <Sheet!A1,...>` for explicit proof (target classifications + new/resolved/preexisting errors). Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` for pure target proof.
+1. Run `asp workbook recalculate` if formulas changed
+2. Run `asp verify proof <baseline> <current> --targets <Sheet!A1,...>` for explicit proof (target classifications + new/resolved/preexisting errors). Use `--errors-only` for a sheet-scoped QA pass or `--targets-only` for pure target proof.
 3. Run `asp diff` to confirm intent. Add `--exclude-recalc-result` when you want a lower-noise review focused on direct edits.
-4. Use `asp append-region ...` when you need to append tabular rows before totals/subtotals without hand-calculating insertion points. It accepts either `--rows @rows.json` or `--from-csv rows.csv --header`, and it can target either `--region-id` or `--table-name` with `--footer-policy auto|before-footer|append-at-end`.
-5. Use `asp clone-template-row ...` when you need another modeled row like a nearby template row. Start with `--dry-run` and inspect `formula_targets`, `likely_patch_targets`, merge warnings, and confidence before applying.
-6. Use `asp clone-row-band ...` when the template spans multiple contiguous rows and you want repeated blocks with the same preview-first safety contract.
-7. Use `asp inspect-cells` on critical cells/ranges
-5. Use `asp recalculate --changed-cells` for a change summary
+4. Use `asp write append ...` when you need to append tabular rows before totals/subtotals without hand-calculating insertion points. It accepts either `--rows @rows.json` or `--from-csv rows.csv --header`, and it can target either `--region-id` or `--table-name` with `--footer-policy auto|before-footer|append-at-end`.
+5. Use `asp write clone-template-row ...` when you need another modeled row like a nearby template row. Start with `--dry-run` and inspect `formula_targets`, `likely_patch_targets`, merge warnings, and confidence before applying.
+6. Use `asp write clone-row-band ...` when the template spans multiple contiguous rows and you want repeated blocks with the same preview-first safety contract.
+7. Use `asp read cells` on critical cells/ranges
+5. Use `asp workbook recalculate --changed-cells` for a change summary
 
 ## Session integration
 
@@ -131,7 +131,7 @@ Use sessions for multi-step edits or anything that needs undo/redo, branching, o
 
 ```bash
 asp session start --base workbook.xlsx --workspace <dir>
-asp example session-op transform.write_matrix
+asp example session op transform.write_matrix
 asp session op --session <id> --ops @edits.json --workspace <dir>
 asp session apply --session <id> <staged_id> --workspace <dir>
 asp session materialize --session <id> --output result.xlsx --workspace <dir>

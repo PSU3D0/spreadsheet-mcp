@@ -60,7 +60,7 @@ fn surface_matrix_drift_check_fails_when_variant_row_missing() {
 
     let modified = original
         .lines()
-        .filter(|line| !line.contains("`range-export --format grid`"))
+        .filter(|line| !line.contains("`read export --format grid`"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -74,7 +74,7 @@ fn surface_matrix_drift_check_fails_when_variant_row_missing() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Missing CLI entries") || stdout.contains("range-export --format grid"),
+        stdout.contains("Missing CLI entries") || stdout.contains("read export --format grid"),
         "expected missing variant diagnostics, got:\n{stdout}"
     );
 
@@ -87,7 +87,7 @@ fn surface_matrix_drift_check_fails_on_stale_row() {
     let matrix_path = root.join("docs/architecture/surface-capability-matrix.md");
     let original = fs::read_to_string(&matrix_path).expect("read matrix");
 
-    let marker = "| `run-manifest` (deprecated)";
+    let marker = "| `analyze ref-impact` |";
     let fake_row = "| `fake-command-for-drift-check` | _(none)_ | CLI_ONLY | `adapter-cli.fake` | n/a | test stale row | `crates/spreadsheet-kit/src/cli/mod.rs` | `crates/spreadsheet-kit/tests/surface_matrix_drift_check.rs` |";
     let modified = if let Some(pos) = original.find(marker) {
         let mut out = String::with_capacity(original.len() + fake_row.len() + 2);
@@ -123,8 +123,8 @@ fn surface_matrix_drift_check_fails_on_missing_required_metadata() {
     let matrix_path = root.join("docs/architecture/surface-capability-matrix.md");
     let original = fs::read_to_string(&matrix_path).expect("read matrix");
 
-    let target_row = "| `list-sheets` | `list_sheets` | ALL | `core.read.list_sheets` | mvp | Shared read primitive | `crates/spreadsheet-kit/src/cli/commands/read.rs::list_sheets` | `crates/spreadsheet-kit/tests/core_runtime_parity.rs` |";
-    let broken_row = "| `list-sheets` | `list_sheets` | ALL | `core.read.list_sheets` | mvp | Shared read primitive | `crates/spreadsheet-kit/src/cli/commands/read.rs::list_sheets` |  |";
+    let target_row = "| `read sheets` | `list_sheets` | ALL | `core.read.list_sheets` | mvp | Shared read primitive | `crates/spreadsheet-kit/src/cli/commands/read.rs::list_sheets` | `crates/spreadsheet-kit/tests/core_runtime_parity.rs` |";
+    let broken_row = "| `read sheets` | `list_sheets` | ALL | `core.read.list_sheets` | mvp | Shared read primitive | `crates/spreadsheet-kit/src/cli/commands/read.rs::list_sheets` |  |";
 
     let modified = original.replacen(target_row, broken_row, 1);
     assert_ne!(

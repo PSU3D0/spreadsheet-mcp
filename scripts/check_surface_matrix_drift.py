@@ -42,13 +42,13 @@ VALID_WASM_TARGETS = {"mvp", "later", "n/a", "host-owned", "⛔/optional"}
 
 # Variant rows represented separately in the matrix and enforced as separate entries.
 CLI_VARIANT_ROWS: dict[str, set[str]] = {
-    "range-export": {
-        "range-export --format json/csv",
-        "range-export --format grid",
+    "read export": {
+        "read export --format json/csv",
+        "read export --format grid",
     },
-    "range-import": {
-        "range-import --from-grid",
-        "range-import --from-csv",
+    "write import": {
+        "write import --from-grid",
+        "write import --from-csv",
     },
 }
 
@@ -75,16 +75,52 @@ def camel_to_kebab(name: str) -> str:
 
 
 def discover_cli_commands(cli_source: str) -> set[str]:
-    top_level = set(
-        re.findall(r"(?<![A-Za-z0-9_])Commands::([A-Za-z0-9_]+)", cli_source)
-    )
+    top_level = set(re.findall(r"SurfaceCommands::([A-Za-z0-9_]+)", cli_source))
+    read = set(re.findall(r"SurfaceReadCommands::([A-Za-z0-9_]+)", cli_source))
+    analyze = set(re.findall(r"SurfaceAnalyzeCommands::([A-Za-z0-9_]+)", cli_source))
+    workbook = set(re.findall(r"SurfaceWorkbookCommands::([A-Za-z0-9_]+)", cli_source))
+    verify = set(re.findall(r"SurfaceVerifyCommands::([A-Za-z0-9_]+)", cli_source))
+    write_top = set(re.findall(r"SurfaceWriteCommands::([A-Za-z0-9_]+)", cli_source))
+    write_formula = set(re.findall(r"SurfaceWriteFormulaCommands::([A-Za-z0-9_]+)", cli_source))
+    write_name = set(re.findall(r"SurfaceWriteNameCommands::([A-Za-z0-9_]+)", cli_source))
+    write_batch = set(re.findall(r"SurfaceWriteBatchCommands::([A-Za-z0-9_]+)", cli_source))
     sheetport = set(re.findall(r"SheetportCommands::([A-Za-z0-9_]+)", cli_source))
     manifest = set(re.findall(r"SheetportManifestCommands::([A-Za-z0-9_]+)", cli_source))
 
-    # The parent command "sheetport" is represented by subcommands in the matrix.
-    top_level.discard("Sheetport")
+    commands: set[str] = set()
 
-    commands = {camel_to_kebab(name) for name in top_level}
+    for name in read:
+        commands.add(f"read {camel_to_kebab(name)}")
+
+    for name in analyze:
+        commands.add(f"analyze {camel_to_kebab(name)}")
+
+    for name in workbook:
+        commands.add(f"workbook {camel_to_kebab(name)}")
+
+    for name in verify:
+        commands.add(f"verify {camel_to_kebab(name)}")
+
+    for name in write_top:
+        if name in {"Batch", "Name", "Formulas"}:
+            continue
+        commands.add(f"write {camel_to_kebab(name)}")
+
+    for name in write_formula:
+        commands.add(f"write formulas {camel_to_kebab(name)}")
+
+    for name in write_name:
+        commands.add(f"write name {camel_to_kebab(name)}")
+
+    for name in write_batch:
+        commands.add(f"write batch {camel_to_kebab(name)}")
+
+    if "Schema" in top_level:
+        commands.add("schema")
+    if "Example" in top_level:
+        commands.add("example")
+    if "Session" in top_level:
+        commands.add("session")
 
     for name in sheetport:
         if name == "Manifest":

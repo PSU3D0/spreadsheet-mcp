@@ -30,7 +30,7 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             code: "SHEET_NOT_FOUND".to_string(),
             message: format!("sheet '{}' was not found", requested),
             did_you_mean: Some(suggested),
-            try_this: Some("run `asp list-sheets <file>` to inspect valid names".to_string()),
+            try_this: Some("run `asp read sheets <file>` to inspect valid names".to_string()),
         };
     }
 
@@ -39,13 +39,13 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             code: "SHEET_NOT_FOUND".to_string(),
             message: format!("sheet '{}' was not found", requested),
             did_you_mean: None,
-            try_this: Some("run `asp list-sheets <file>` to inspect valid names".to_string()),
+            try_this: Some("run `asp read sheets <file>` to inspect valid names".to_string()),
         };
     }
 
     if let Some(detail) = message.strip_prefix("invalid argument: ") {
         let try_this = if detail.contains("session payload kind") {
-            "run `asp example session-op transform.write_matrix` or `asp schema session-op transform.write_matrix` to inspect supported kinds and canonical payloads".to_string()
+            "run `asp example session op transform.write_matrix` or `asp schema session op transform.write_matrix` to inspect supported kinds and canonical payloads".to_string()
         } else {
             "run the command with --help to inspect valid arguments".to_string()
         };
@@ -72,7 +72,7 @@ pub fn envelope_for(error: &anyhow::Error) -> ErrorEnvelope {
             message,
             did_you_mean: None,
             try_this: Some(
-                "run `asp example session-op transform.write_matrix` or `asp schema session-op transform.write_matrix` to inspect the canonical payload contract".to_string(),
+                "run `asp example session op transform.write_matrix` or `asp schema session op transform.write_matrix` to inspect the canonical payload contract".to_string(),
             ),
         };
     }

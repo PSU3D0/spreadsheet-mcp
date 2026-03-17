@@ -4267,10 +4267,13 @@ fn footer_reason_for_row(
         }
     }
 
-    if let Some(label) = saw_footer_label {
-        if saw_formula {
-            return Some(format!("footer keyword '{}' and formula on row {}", label, row));
-        }
+    if let Some(label) = saw_footer_label
+        && saw_formula
+    {
+        return Some(format!(
+            "footer keyword '{}' and formula on row {}",
+            label, row
+        ));
     }
 
     (saw_formula && !saw_non_formula_non_empty)

@@ -67,58 +67,58 @@ The CLI is the fastest path to working with spreadsheets from code. Every comman
 
 ```bash
 # List sheets
-asp list-sheets data.xlsx
+asp read sheets data.xlsx
 
 # Profile structure and detected regions
-asp sheet-overview data.xlsx "Sheet1"
+asp read overview data.xlsx "Sheet1"
 
 # Read a table as structured data
-asp read-table data.xlsx --sheet "Sheet1"
+asp read table data.xlsx --sheet "Sheet1"
 
 # Read one or more raw ranges
-asp range-values data.xlsx Sheet1 A1:C20
+asp read values data.xlsx Sheet1 A1:C20
 
 # Search values directly (default mode is value)
-asp find-value data.xlsx "Revenue" --mode value
+asp analyze find-value data.xlsx "Revenue" --mode value
 
 # Label lookup: match a label cell, then read an adjacent value
-asp find-value data.xlsx "Net Income" --mode label --label-direction below
+asp analyze find-value data.xlsx "Net Income" --mode label --label-direction below
 
 # Describe workbook metadata
-asp describe data.xlsx
+asp read workbook data.xlsx
 ```
 
 ### Deterministic pagination loops
 
 ```bash
 # sheet-page continuation
-asp sheet-page data.xlsx Sheet1 --format compact --page-size 200
-asp sheet-page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201
+asp read page data.xlsx Sheet1 --format compact --page-size 200
+asp read page data.xlsx Sheet1 --format compact --page-size 200 --start-row 201
 
 # read-table continuation
-asp read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 0
-asp read-table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
+asp read table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 0
+asp read table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
 ```
 
 ### Edit → recalculate → diff
 
 ```bash
-asp copy data.xlsx /tmp/draft.xlsx
-asp edit /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
-asp recalculate /tmp/draft.xlsx
-asp diff data.xlsx /tmp/draft.xlsx
+asp workbook copy data.xlsx /tmp/draft.xlsx
+asp write cells /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
+asp workbook recalculate /tmp/draft.xlsx
+asp verify diff data.xlsx /tmp/draft.xlsx
 ```
 
 ### Stateless batch writes (`--ops @...`)
 
 ```bash
-asp transform-batch data.xlsx --ops @ops.json --dry-run
-asp style-batch data.xlsx --ops @style_ops.json --dry-run
-asp apply-formula-pattern data.xlsx --ops @formula_ops.json --in-place
-asp structure-batch data.xlsx --ops @structure_ops.json --dry-run
-asp column-size-batch data.xlsx --ops @column_size_ops.json --output resized.xlsx
-asp sheet-layout-batch data.xlsx --ops @layout_ops.json --dry-run
-asp rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
+asp write batch transform data.xlsx --ops @ops.json --dry-run
+asp write batch style data.xlsx --ops @style_ops.json --dry-run
+asp write batch formula-pattern data.xlsx --ops @formula_ops.json --in-place
+asp write batch structure data.xlsx --ops @structure_ops.json --dry-run
+asp write batch column-size data.xlsx --ops @column_size_ops.json --output resized.xlsx
+asp write batch sheet-layout data.xlsx --ops @layout_ops.json --dry-run
+asp write batch rules data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
 ```
 
 #### Discover payload contracts
@@ -126,10 +126,10 @@ asp rules-batch data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
 When you are unsure of the exact JSON shape, ask the CLI directly:
 
 ```bash
-asp schema transform-batch
-asp example transform-batch
-asp schema session-op transform.write_matrix
-asp example session-op transform.write_matrix
+asp schema write batch transform
+asp example write batch transform
+asp schema session op transform.write_matrix
+asp example session op transform.write_matrix
 ```
 
 #### Canonical safe edit workflow
@@ -138,11 +138,11 @@ For moderate workbook edits, use this loop:
 
 ```bash
 # 1) Explore
-asp named-ranges data.xlsx
-asp formula-trace data.xlsx Sheet1 C2 precedents --depth 2
+asp read names data.xlsx
+asp analyze formula-trace data.xlsx Sheet1 C2 precedents --depth 2
 
 # 2) Discover the exact payload you need
-asp example session-op transform.write_matrix
+asp example session op transform.write_matrix
 
 # 3) Stage and inspect dry-run impact
 asp session start --base data.xlsx --workspace .
@@ -151,9 +151,9 @@ asp session op --session <id> --ops @edit.json --workspace .
 # 4) Apply, verify, materialize
 asp session apply --session <id> <staged_id> --workspace .
 asp session materialize --session <id> --output result.xlsx --workspace .
-asp verify data.xlsx result.xlsx --targets Summary!B2 --named-ranges
-asp verify data.xlsx result.xlsx --sheet Summary --errors-only
-asp diff data.xlsx result.xlsx --details --limit 50
+asp verify proof data.xlsx result.xlsx --targets Summary!B2 --named-ranges
+asp verify proof data.xlsx result.xlsx --sheet Summary --errors-only
+asp verify diff data.xlsx result.xlsx --details --limit 50
 ```
 
 `asp verify` reports target classifications plus new/resolved/preexisting errors so you can prove the edit outcome before drilling into a full diff.
@@ -171,7 +171,7 @@ All batch payloads use a top-level envelope object. Most commands require `{"ops
 - Minimal: `{"ops":[{"sheet_name":"Sheet1","target":{"kind":"range","range":"B2:B2"},"patch":{"font":{"bold":true}}}]}`
 - Advanced: `{"ops":[{"sheet_name":"Sheet1","target":{"kind":"cells","cells":["B2","B3"]},"patch":{"number_format":"$#,##0.00","alignment":{"horizontal":"right"}},"op_mode":"merge"}]}`
 
-##### apply-formula-pattern payloads (`@formula_ops.json`)
+##### write batch formula-pattern payloads (`@formula_ops.json`)
 - Minimal: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:C4","anchor_cell":"C2","base_formula":"B2*2"}]}`
 - Advanced: `{"ops":[{"sheet_name":"Sheet1","target_range":"C2:E4","anchor_cell":"C2","base_formula":"B2*2","fill_direction":"both","relative_mode":"excel"}]}`
 - `relative_mode` valid values: `excel`, `abs_cols`, `abs_rows`
@@ -193,7 +193,7 @@ All batch payloads use a top-level envelope object. Most commands require `{"ops
 - Minimal: `{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}`
 - Advanced: `{"ops":[{"kind":"set_conditional_format","sheet_name":"Sheet1","target_range":"C2:C10","rule":{"kind":"expression","formula":"C2>100"},"style":{"fill_color":"#FFF2CC","bold":true}}]}`
 
-`apply-formula-pattern` clears cached results for touched formula cells; run `recalculate` to refresh computed values.
+`write batch formula-pattern` clears cached results for touched formula cells; run `workbook recalculate` to refresh computed values.
 
 All output is JSON by default.
 Use `--shape canonical|compact` (default: `canonical`) to control response shape.
@@ -254,47 +254,47 @@ Machine continuation example:
 3. Stop when `next_start_row` is omitted.
 
 JSON output is compact by default; use `--quiet` to suppress warnings.
-Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read-table --table-format csv`.
+Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read table --table-format csv`.
 
 ### CLI command reference
 
 | Command | Description |
 | --- | --- |
-| `list-sheets <file>` | List sheets with summaries |
-| `sheet-overview <file> <sheet>` | Region detection + orientation |
-| `describe <file>` | Workbook metadata |
-| `read-table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
-| `sheet-page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
-| `range-values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]` | Raw cell values in dense JSON encoding by default, optionally with sparse formula metadata |
-| `inspect-cells <file> <sheet> <target> [target...] [--include-empty]` | Detail-view per-cell formula/value/cached/style snapshots (max 25 cells per request) |
-| `find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
-| `schema <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print canonical JSON schema for a batch payload target |
-| `schema session-op <kind>` | Print canonical JSON schema for a session payload kind |
-| `example <transform-batch\|style-batch\|apply-formula-pattern\|structure-batch\|column-size-batch\|sheet-layout-batch\|rules-batch>` | Print a copy-pastable canonical batch payload example |
-| `example session-op <kind>` | Print a copy-pastable canonical session payload example |
-| `named-ranges <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
-| `find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
-| `scan-volatiles <file> [--sheet S] [--limit N] [--offset N] [--formula-parse-policy P]` | Scan formulas for volatile functions |
-| `sheet-statistics <file> <sheet>` | Per-sheet density and type stats |
-| `formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N] [--formula-parse-policy P]` | Formula inventory summary |
-| `formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N] [--formula-parse-policy P]` | Trace formula dependencies with cursor continuation |
-| `table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
-| `create-workbook <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
-| `copy <source> <dest>` | Copy workbook (for edit workflows) |
-| `edit <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
-| `verify <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
-| `append-region <file> --sheet S (--region-id N\|--table-name NAME) (--rows @rows.json\|--from-csv rows.csv [--header]) [--footer-policy auto\|before-footer\|append-at-end] (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region or table with footer-aware insertion before totals/subtotals when found |
-| `clone-template-row <file> --sheet S --source-row N (--before R\|--after R\|--insert-at R) [--count N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone one template row into inserted rows with explicit patch targets, merge-boundary warnings, and preview-first planning |
-| `clone-row-band <file> --sheet S --source-rows START:END (--before R\|--after R\|--insert-at R) [--repeat N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone a contiguous row band with repeated blocks, explicit patch targets, merge-boundary warnings, and preview-first planning |
-| `transform-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
-| `style-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
-| `apply-formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
-| `structure-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless structure operations (sheet rows/columns) |
-| `column-size-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
-| `sheet-layout-batch <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
-| `rules-batch <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
-| `recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
-| `diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
+| `read sheets <file>` | List sheets with summaries |
+| `read overview <file> <sheet>` | Region detection + orientation |
+| `read workbook <file>` | Workbook metadata |
+| `read table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
+| `read page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
+| `read values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]` | Raw cell values in dense JSON encoding by default, optionally with sparse formula metadata |
+| `read cells <file> <sheet> <target> [target...] [--include-empty]` | Detail-view per-cell formula/value/cached/style snapshots (max 25 cells per request) |
+| `analyze find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
+| `schema write batch <transform\|style\|formula-pattern\|structure\|column-size\|sheet-layout\|rules>` | Print canonical JSON schema for a batch payload target |
+| `schema session op <kind>` | Print canonical JSON schema for a session payload kind |
+| `example write batch <transform\|style\|formula-pattern\|structure\|column-size\|sheet-layout\|rules>` | Print a copy-pastable canonical batch payload example |
+| `example session op <kind>` | Print a copy-pastable canonical session payload example |
+| `read names <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
+| `analyze find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
+| `analyze scan-volatiles <file> [--sheet S] [--limit N] [--offset N] [--formula-parse-policy P]` | Scan formulas for volatile functions |
+| `analyze sheet-statistics <file> <sheet>` | Per-sheet density and type stats |
+| `analyze formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N] [--formula-parse-policy P]` | Formula inventory summary |
+| `analyze formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N] [--formula-parse-policy P]` | Trace formula dependencies with cursor continuation |
+| `analyze table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
+| `workbook create <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
+| `workbook copy <source> <dest>` | Copy workbook (for edit workflows) |
+| `write cells <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
+| `verify proof <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
+| `write append <file> --sheet S (--region-id N\|--table-name NAME) (--rows @rows.json\|--from-csv rows.csv [--header]) [--footer-policy auto\|before-footer\|append-at-end] (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region or table with footer-aware insertion before totals/subtotals when found |
+| `write clone-template-row <file> --sheet S --source-row N (--before R\|--after R\|--insert-at R) [--count N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone one template row into inserted rows with explicit patch targets, merge-boundary warnings, and preview-first planning |
+| `write clone-row-band <file> --sheet S --source-rows START:END (--before R\|--after R\|--insert-at R) [--repeat N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone a contiguous row band with repeated blocks, explicit patch targets, merge-boundary warnings, and preview-first planning |
+| `write batch transform <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
+| `write batch style <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
+| `write batch formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
+| `write batch structure <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless structure operations (sheet rows/columns) |
+| `write batch column-size <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
+| `write batch sheet-layout <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
+| `write batch rules <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
+| `workbook recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
+| `verify diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
 
 `append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; it now supports `--region-id` or `--table-name`, explicit `--footer-policy` selection, and dry-run metadata for footer candidates / formula footer targets. Use `--from-csv ... --header` when your incoming rows already exist as CSV.
 

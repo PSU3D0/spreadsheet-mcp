@@ -504,7 +504,7 @@ fn normalize_session_payload_kind(kind: &str) -> Result<String> {
                             | "name.delete"
                     ) => Ok(kind.to_string()),
                 _ => bail!(
-                    "invalid argument: unsupported session payload kind '{kind}'. Try `asp example session-op transform.write_matrix` or `asp schema session-op structure.insert_rows`"
+                    "invalid argument: unsupported session payload kind '{kind}'. Try `asp example session op transform.write_matrix` or `asp schema session op structure.insert_rows`"
                 ),
             }
         })

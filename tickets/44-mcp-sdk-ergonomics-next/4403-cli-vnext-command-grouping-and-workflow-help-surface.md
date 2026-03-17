@@ -13,14 +13,21 @@ The CLI has accumulated too many top-level commands. Even with better docs, the 
 - Risk: High
 
 ## Scope
-Design a vNext CLI grouping strategy and workflow-oriented help surface.
+Design and implement a vNext CLI grouping strategy with true nested commands and a workflow-oriented help surface.
 
-### Candidate groups
+Authoritative design:
+- `tickets/44-mcp-sdk-ergonomics-next/designs/4403-cli-vnext-command-grouping-and-workflow-help-surface.md`
+
+### Final top-level groups
 - `read`
 - `analyze`
 - `write`
+- `workbook`
 - `verify`
+- `schema`
+- `example`
 - `session`
+- `sheetport`
 
 ### Migration concerns
 - preserve backward compatibility where possible
