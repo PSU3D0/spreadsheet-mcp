@@ -883,3 +883,8 @@ WORKSPACE_ROOT=/path/to/workbooks ./scripts/local-docker-mcp.sh
 ## License
 
 Apache-2.0
+
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/psu3d0-spreadsheet-mcp).
+
