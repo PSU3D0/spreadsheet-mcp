@@ -62,17 +62,30 @@ struct DiffGroupBuilder {
     sample_items: Vec<String>,
 }
 
-pub async fn diff(
-    original: PathBuf,
-    modified: PathBuf,
-    sheet: Option<String>,
-    sheets: Option<Vec<String>>,
-    range: Option<String>,
-    details: bool,
-    limit: u32,
-    offset: u32,
-    exclude_recalc_result: bool,
-) -> Result<Value> {
+pub struct DiffCommandArgs {
+    pub original: PathBuf,
+    pub modified: PathBuf,
+    pub sheet: Option<String>,
+    pub sheets: Option<Vec<String>>,
+    pub range: Option<String>,
+    pub details: bool,
+    pub limit: u32,
+    pub offset: u32,
+    pub exclude_recalc_result: bool,
+}
+
+pub async fn diff(args: DiffCommandArgs) -> Result<Value> {
+    let DiffCommandArgs {
+        original,
+        modified,
+        sheet,
+        sheets,
+        range,
+        details,
+        limit,
+        offset,
+        exclude_recalc_result,
+    } = args;
     if sheet.is_some() && sheets.is_some() {
         bail!("invalid argument: --sheet and --sheets are mutually exclusive");
     }

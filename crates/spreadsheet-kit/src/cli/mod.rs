@@ -3029,7 +3029,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             offset,
             exclude_recalc_result,
         } => {
-            commands::diff::diff(
+            commands::diff::diff(commands::diff::DiffCommandArgs {
                 original,
                 modified,
                 sheet,
@@ -3039,7 +3039,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
                 limit,
                 offset,
                 exclude_recalc_result,
-            )
+            })
             .await
         }
         Commands::Schema { command } => run_schema_command(command),
