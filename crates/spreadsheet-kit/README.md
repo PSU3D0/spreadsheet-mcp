@@ -3,35 +3,96 @@
 [![Crates.io](https://img.shields.io/crates/v/spreadsheet-kit.svg)](https://crates.io/crates/spreadsheet-kit)
 [![License](https://img.shields.io/crates/l/spreadsheet-kit.svg)](https://github.com/PSU3D0/spreadsheet-mcp/blob/main/LICENSE)
 
-Core shared primitives for the [spreadsheet-kit](https://github.com/PSU3D0/spreadsheet-mcp) workspace.
+**`spreadsheet-kit` is the shared engine crate behind the spreadsheet-kit tool interaction service for agent-based spreadsheet work.**
 
-## What's in this crate
+It powers:
+- the `asp` / `agent-spreadsheet` stateless CLI
+- the `spreadsheet-mcp` stateful MCP server
+- the in-repo `spreadsheet-kit-wasm` wrapper
+- shared verification, diff, session, and mutation logic
 
-- **Shared engine modules** — workbook model, repository layer, tools, diff/recalc pipelines
-- **`agent-spreadsheet` CLI binary** — stateless command surface for reads/edits/diff/recalc
-- **`CellEdit`** — canonical cell edit type (address + value + is_formula)
-- **`CoreWarning`** — structured warning type (code + message)
-- **`FormulaParsePolicy`** — three-level policy enum (`Fail`, `Warn`, `Off`) controlling formula parse error handling
-- **`FormulaParseDiagnostics` / `FormulaParseDiagnosticsBuilder`** — structured error grouping with reference normalization, sample addresses, and truncation control
-- **`validate_formula()`** — preflight formula syntax validation via `formualizer-parse` tokenizer
-- **`BasicDiffChange` / `BasicDiffResponse`** — diff result types
-- **`RecalculateOutcome`** — recalc result metadata (backend, duration, cells evaluated, errors)
-- **Edit normalization** — `normalize_shorthand_edit()` parses `"A1=100"` / `"B2==SUM(...)"` into `CellEdit`
-- **`apply_edits_to_file()`** — applies a batch of `CellEdit`s to an `.xlsx` file via `umya-spreadsheet`
-- **`SessionRuntime` trait** — scaffold for stateful session backends (open / apply_edits / recalculate / save_as)
+If the root project is the product surface, this crate is the semantic core.
 
-## What's intentionally not here
+---
 
-- **MCP server logic** — see [`spreadsheet-mcp`](../spreadsheet-mcp/)
-- **MCP transport adapter** — lives in `spreadsheet-mcp`
+## What this crate contains
 
-This crate is kept minimal so both the MCP server and the CLI can depend on it without pulling in server-specific dependencies.
+### Shared workbook engine
+- workbook loading and repository abstractions
+- sheet metrics and region detection
+- table reads, range reads, paging, and analysis tools
+- diff and recalc pipelines
+- formula-aware write helpers
+- style / layout / rules / structure mutation logic
 
-## Usage
+### Shared contracts
+- request/response models used across CLI, MCP, and WASM-facing work
+- diagnostic types and formula parse policy types
+- diff result models
+- verification and warning models
+- session/runtime abstractions
+
+### CLI binaries
+This crate also builds the stateless CLI binaries:
+- `asp`
+- `agent-spreadsheet`
+
+Those binaries are feature-gated on recalc support.
+
+---
+
+## What this crate is good for
+
+Use `spreadsheet-kit` directly when you want:
+- Rust-native access to the shared spreadsheet engine
+- direct workbook/session manipulation without going through MCP transport
+- common semantic behavior across your own higher-level adapters
+- reuse of the same diff, verification, and mutation core used by the CLI/MCP surfaces
+
+Use companion packages instead when you want:
+- **CLI** ergonomics -> `agent-spreadsheet` / `asp`
+- **MCP** transport -> `spreadsheet-mcp`
+- **JS integration** -> `spreadsheet-kit-sdk`
+
+---
+
+## Highlights
+
+### Read and inspect
+- workbook metadata and sheet summaries
+- region detection and structured table reads
+- targeted cell inspection
+- layout-aware range rendering
+- named range discovery
+
+### Analyze
+- value and formula search
+- formula tracing and volatility scans
+- sheet/table profiling
+- structural reference impact preview
+
+### Mutate safely
+- shorthand cell edit normalization
+- transform/style/structure/layout/rules batch helpers
+- formula-only replace flows
+- named range define/update/delete
+- recalc-aware write paths
+
+### Verify and review
+- grouped diff summaries
+- post-edit proof surfaces
+- explicit warnings and diagnostics
+
+### Stateful workflows
+- session abstractions for staged operations, apply, replay, and materialization
+
+---
+
+## Example
 
 ```toml
 [dependencies]
-spreadsheet-kit = "0.1"
+spreadsheet-kit = "0.10"
 ```
 
 ```rust
@@ -48,12 +109,65 @@ assert_eq!(formula.value, "SUM(A1:A2)");
 assert!(formula.is_formula);
 ```
 
-## Consumers
+---
 
-| Crate | Role |
+## Important types and capabilities
+
+Examples of notable shared types/functions exposed by this crate include:
+- `CellEdit`
+- `CoreWarning`
+- `FormulaParsePolicy`
+- `FormulaParseDiagnostics`
+- `validate_formula()`
+- diff/result models
+- session/runtime traits and helpers
+- edit normalization and workbook apply helpers
+
+The exact surface evolves with the shared engine, but the theme is constant: **one semantic spreadsheet core, many agent-facing surfaces**.
+
+---
+
+## Feature flags
+
+| Feature | Purpose |
+| --- | --- |
+| `recalc-formualizer` | Default native Rust recalc backend |
+| `recalc-libreoffice` | LibreOffice-backed recalc support |
+| `recalc` | Shared recalc-related functionality used by the binaries |
+
+Default builds include Formualizer-backed recalc.
+
+---
+
+## What this crate intentionally does not contain
+
+This crate is **not** the MCP transport/server layer.
+
+For that, see [`spreadsheet-mcp`](../spreadsheet-mcp/).
+
+It is also not the npm distribution wrapper or JS SDK surface.
+
+---
+
+## Related packages
+
+| Package | Role |
 | --- | --- |
 | [`spreadsheet-mcp`](../spreadsheet-mcp/) | Stateful MCP server adapter |
-| [`spreadsheet-kit`](./) | Shared engine + `agent-spreadsheet` CLI |
+| `agent-spreadsheet` / `asp` | Stateless CLI built from this crate |
+| `spreadsheet-kit-sdk` | JS SDK for MCP/WASM-style integrations |
+| `spreadsheet-kit-wasm` | In-repo WASM-facing wrapper |
+
+---
+
+## More documentation
+
+- Root README: <https://github.com/PSU3D0/spreadsheet-mcp#readme>
+- Packaging/versioning: <https://github.com/PSU3D0/spreadsheet-mcp/blob/main/docs/PACKAGING.md>
+- Heuristics: <https://github.com/PSU3D0/spreadsheet-mcp/blob/main/docs/HEURISTICS.md>
+- Recalc architecture: <https://github.com/PSU3D0/spreadsheet-mcp/blob/main/docs/RECALC.md>
+
+---
 
 ## License
 

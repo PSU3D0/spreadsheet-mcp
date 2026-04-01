@@ -7,16 +7,79 @@
 
 ![spreadsheet-kit](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/banner.jpeg)
 
-**Spreadsheet automation for AI agents.** Read, profile, edit, and recalculate `.xlsx` workbooks with tooling designed to be token-efficient, structurally aware, and agent-friendly.
+**spreadsheet-kit is the tool interaction service for agent-based spreadsheet usage.**
 
-spreadsheet-kit ships two surfaces:
+It gives agents a safe, inspectable, token-efficient way to **read, analyze, mutate, verify, and operationalize Excel workbooks** without falling back to brittle UI automation.
 
-| Surface | Binary | Mode | Best for |
+If you want an agent to work with spreadsheets like a real system instead of a screenshot puppet, this is the stack.
+
+---
+
+## What this project is
+
+spreadsheet-kit ships a unified spreadsheet interaction layer across four surfaces:
+
+| Surface | Binary / Package | Mode | Best for |
 | --- | --- | --- | --- |
-| **[agent-spreadsheet](#quickstart-cli)** | `agent-spreadsheet` | Stateless CLI | Scripts, pipelines, one-shot agent tasks |
-| **[spreadsheet-mcp](#quickstart-mcp-server)** | `spreadsheet-mcp` | Stateful MCP server | Multi-turn agent sessions with caching and fork/recalc |
+| **CLI** | `asp` / `agent-spreadsheet` | Stateless | One-shot reads, safe edits, pipelines, CI, agent tool calls |
+| **MCP server** | `spreadsheet-mcp` | Stateful | Multi-turn agent sessions, workbook caching, fork/recalc workflows |
+| **JS SDK** | `spreadsheet-kit-sdk` | Backend-agnostic | App integrations that can target MCP today and WASM/session backends over time |
+| **WASM runtime** | `spreadsheet-kit-wasm` | In-process | Experimental byte/session embedding for local runtimes |
 
-Both share the same core engine and support `.xlsx` / `.xlsm` (read + write) and `.xls` / `.xlsb` (discovery only).
+Supported workbook modes:
+
+- `.xlsx` / `.xlsm` — read + write
+- `.xls` / `.xlsb` — discovery/read-oriented workflows only
+
+---
+
+## Why agents use spreadsheet-kit
+
+### Built for tool use, not just humans
+- deterministic JSON contracts
+- schema and example discovery from the CLI itself
+- explicit pagination and compact output modes
+- machine-readable warnings and error envelopes
+
+### Safe mutation, not blind mutation
+- dry-run first workflows
+- stateless output modes and overwrite safety
+- event-sourced session editing
+- verification surfaces for proving downstream outcomes
+- structural impact analysis before risky workbook changes
+
+### Spreadsheet-aware, not generic file editing
+- region detection
+- table and footer-aware append helpers
+- template row / row band cloning
+- formula-specific replace and diagnostics
+- named range CRUD
+- recalculation + diff + proof flows
+
+### Good agent ergonomics
+- nested command groups with legacy alias compatibility
+- token-efficient reads
+- exact-cell inspection and layout inspection
+- workflow helpers for the repetitive parts agents usually get wrong
+
+---
+
+## What is new / what makes this stack different
+
+The current surface is much stronger than a plain “read some cells” tool. Major capabilities now include:
+
+- **`asp` as the primary CLI** with `agent-spreadsheet` preserved as a compatibility alias
+- **grouped verification** via `asp verify proof` and `asp verify diff`
+- **preview-first workflow helpers** for:
+  - `write append`
+  - `write clone-template-row`
+  - `write clone-row-band`
+- **formula-safe batch workflows** with parse-policy diagnostics
+- **cell/layout/export/import inspection surfaces**
+- **named range management** (`write name define|update|delete`)
+- **formula-only replacement** (`write formulas replace`)
+- **event-sourced session editing** with log, branch, undo/redo, fork, apply, and materialize
+- **SheetPort manifest lifecycle + execution** for contract-driven spreadsheet automation
 
 ---
 
@@ -29,7 +92,10 @@ npm i -g agent-spreadsheet
 asp --help
 ```
 
-Installs both `asp` (primary command) and `agent-spreadsheet` (compatibility alias).
+Installs both:
+- `asp` — primary command
+- `agent-spreadsheet` — compatibility alias
+
 Downloads a prebuilt native binary for your platform. No Rust toolchain required.
 
 ### Cargo
@@ -42,51 +108,402 @@ cargo install spreadsheet-kit --features recalc --bin asp --bin agent-spreadshee
 cargo install spreadsheet-mcp
 ```
 
-Formualizer (native Rust recalc engine) is included by default. To build without it, use `--no-default-features`.
+Formualizer (the native Rust recalc engine) is included by default.
+
+### Docker
+
+```bash
+# Read-only / slim
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest
+
+# Write + recalc + screenshots
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:full
+```
+
+### JavaScript SDK
+
+```bash
+npm i spreadsheet-kit-sdk
+```
 
 ### Prebuilt binaries
 
 Download from [GitHub Releases](https://github.com/PSU3D0/spreadsheet-mcp/releases).
-Builds are published for Linux x86_64, macOS x86_64/aarch64, and Windows x86_64.
 
-### Docker (MCP server)
+Published native assets include:
+- Linux x86_64
+- macOS x86_64
+- macOS arm64
+- Windows x86_64
+
+---
+
+## Start here: the core workflows
+
+## 1) Orient the workbook before reading cells
 
 ```bash
-# Read-only (~15 MB)
-docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest
+# What sheets are here?
+asp read sheets data.xlsx
 
-# With write/recalc support (~800 MB, includes LibreOffice)
-docker pull ghcr.io/psu3d0/spreadsheet-mcp:full
+# What regions/tables/parameter blocks does this sheet contain?
+asp read overview data.xlsx "Model"
+
+# What named items are available?
+asp read names data.xlsx
+
+# Read a structured region as a table
+asp read table data.xlsx --sheet "Model"
+```
+
+## 2) Inspect exactly what an agent needs
+
+```bash
+# Raw values for exact ranges
+asp read values data.xlsx Model A1:C20
+
+# Detail-view for targeted cells (value / formula / cached / style triage)
+asp read cells data.xlsx Model B2 D10:F12
+
+# Layout-aware rendering for a bounded range
+asp read layout data.xlsx Model --range A1:H30 --render both
+
+# Export a bounded range to csv or grid json
+asp read export data.xlsx Model A1:H30 --format csv --output model.csv
+```
+
+## 3) Do a safe stateless edit → recalc → proof → diff loop
+
+```bash
+asp workbook copy data.xlsx /tmp/draft.xlsx
+asp write cells /tmp/draft.xlsx Inputs "B2=500" "C2==B2*1.1"
+asp workbook recalculate /tmp/draft.xlsx
+asp verify proof data.xlsx /tmp/draft.xlsx --targets Summary!B2,Summary!B3 --named-ranges
+asp verify diff data.xlsx /tmp/draft.xlsx --details --limit 50
+```
+
+A representative label-mode lookup:
+
+```bash
+asp analyze find-value data.xlsx "Net Income" --mode label --label-direction below
+```
+
+## 4) Preview structural risk before mutating the workbook
+
+```bash
+asp analyze ref-impact data.xlsx --ops @structure_ops.json --show-formula-delta
+```
+
+This is intentionally read-only. It surfaces shifted spans, absolute-reference warnings, token counts, and optional before/after formula samples.
+
+## 5) Use workflow helpers instead of reinventing row logic
+
+```bash
+# Stateless batch writes
+asp write batch transform data.xlsx --ops @ops.json --dry-run
+asp write batch style data.xlsx --ops @style_ops.json --dry-run
+
+# Append rows into a detected region or table, respecting footer rows when present
+asp write append data.xlsx --sheet Revenue --table-name RevenueTable --from-csv rows.csv --header --dry-run
+
+# Clone one template row with preview-first planning
+asp write clone-template-row data.xlsx --sheet Inputs --source-row 8 --after 8 --count 3 --dry-run
+
+# Clone a contiguous row band repeatedly
+asp write clone-row-band data.xlsx --sheet Forecast --source-rows 12:16 --after 16 --repeat 4 --dry-run
+```
+
+## 6) Use a stateful session when the edit story gets complex
+
+```bash
+asp session start --base data.xlsx --workspace .
+asp session op --session <id> --ops @edit.json --workspace .
+asp session apply --session <id> <staged_id> --workspace .
+asp session materialize --session <id> --output result.xlsx --workspace .
+```
+
+And when you need proper history and branching:
+
+```bash
+asp session log --session <id> --workspace .
+asp session fork --session <id> scenario-a --workspace .
+asp session undo --session <id> --workspace .
+asp session redo --session <id> --workspace .
+asp session checkout --session <id> <op_id> --workspace .
+```
+
+## 7) Turn workbook interfaces into contracts with SheetPort
+
+```bash
+# Discover candidate ports from workbook structure
+asp sheetport manifest candidates model.xlsx
+
+# Validate or normalize a manifest
+asp sheetport manifest validate manifest.yaml
+asp sheetport manifest normalize manifest.yaml
+
+# Bind-check a workbook against a manifest
+asp sheetport bind-check model.xlsx manifest.yaml
+
+# Execute the manifest with JSON inputs
+asp sheetport run model.xlsx manifest.yaml --inputs @inputs.json
 ```
 
 ---
 
-## Quickstart: CLI
+## CLI overview
 
-The CLI is the fastest path to working with spreadsheets from code. Every command is stateless — pass a file, get JSON.
+The primary CLI is **`asp`**.
+
+`agent-spreadsheet` remains available as a compatibility alias, so both of these are valid:
 
 ```bash
-# List sheets
 asp read sheets data.xlsx
-
-# Profile structure and detected regions
-asp read overview data.xlsx "Sheet1"
-
-# Read a table as structured data
-asp read table data.xlsx --sheet "Sheet1"
-
-# Read one or more raw ranges
-asp read values data.xlsx Sheet1 A1:C20
-
-# Search values directly (default mode is value)
-asp analyze find-value data.xlsx "Revenue" --mode value
-
-# Label lookup: match a label cell, then read an adjacent value
-asp analyze find-value data.xlsx "Net Income" --mode label --label-direction below
-
-# Describe workbook metadata
-asp read workbook data.xlsx
+agent-spreadsheet read sheets data.xlsx
 ```
+
+### Preferred command groups
+
+- `asp read ...`
+- `asp analyze ...`
+- `asp write ...`
+- `asp workbook ...`
+- `asp verify ...`
+- `asp session ...`
+- `asp sheetport ...`
+
+### Legacy aliases
+
+Legacy flat commands are still normalized to the new nested surface where practical. That makes migration easier for older prompts, docs, and automation.
+
+### Discoverability built into the CLI
+
+When an agent is unsure of payload shape, it can ask the tool directly:
+
+```bash
+asp schema write batch transform
+asp example write batch transform
+asp schema session op transform.write_matrix
+asp example session op transform.write_matrix
+```
+
+This is a core design principle: **the surface should explain itself to the agent**.
+
+---
+
+## Command families
+
+## `read` — extraction and inspection
+
+| Command | Purpose |
+| --- | --- |
+| `asp read sheets <file>` | List sheets with summary metadata |
+| `asp read overview <file> <sheet>` | Detect regions, headers, and orientation |
+| `asp read values <file> <sheet> <range> [range...]` | Pull raw values for exact A1 ranges |
+| `asp read export <file> <sheet> <range>` | Export a bounded range to csv or grid json |
+| `asp read cells <file> <sheet> <target> [target...]` | Inspect exact cells/ranges with value/formula/cached/style snapshots |
+| `asp read page <file> <sheet> ...` | Deterministic sheet paging with `next_start_row` |
+| `asp read table <file> ...` | Structured table/region read with deterministic `next_offset` |
+| `asp read names <file>` | Named ranges, named formulas, and table items |
+| `asp read workbook <file>` | Workbook-level metadata |
+| `asp read layout <file> <sheet>` | Layout-aware rendering with widths, merges, borders, and optional ascii output |
+
+### Why these matter for agents
+
+Agents rarely need “the whole spreadsheet.” They need:
+- the right region
+- the right page
+- the right cells
+- just enough layout to understand intent
+
+That is why the read surface combines **region detection**, **structured reads**, **detail inspection**, and **explicit continuation**.
+
+---
+
+## `analyze` — search, diagnostics, and impact understanding
+
+| Command | Purpose |
+| --- | --- |
+| `asp analyze find-value <file> <query>` | Search by value or by label semantics |
+| `asp analyze find-formula <file> <query>` | Text search within formulas |
+| `asp analyze formula-map <file> <sheet>` | Summarize formulas by complexity/frequency |
+| `asp analyze formula-trace <file> <sheet> <cell> <precedents\|dependents>` | Dependency tracing with continuation |
+| `asp analyze scan-volatiles <file>` | Find volatile formulas |
+| `asp analyze sheet-statistics <file> <sheet>` | Density and type statistics |
+| `asp analyze table-profile <file>` | Header/type/cardinality profiling |
+| `asp analyze ref-impact <file> --ops @structure_ops.json` | Preflight structural edit impact without mutation |
+
+### Why this matters
+
+Headless spreadsheet automation wins when it can **explain consequences**, not just execute mutations. `ref-impact`, `formula-trace`, and grouped diagnostics are all part of that story.
+
+---
+
+## `write` — safe mutations and workflow helpers
+
+| Command | Purpose |
+| --- | --- |
+| `asp write cells <file> <sheet> ...` | Direct shorthand cell edits |
+| `asp write import <file> <sheet> ...` | Import grid json or csv into a workbook range |
+| `asp write append ...` | Footer-aware row append into a region or table |
+| `asp write clone-template-row ...` | Clone one template row with preview-first planning |
+| `asp write clone-row-band ...` | Clone a multi-row template band repeatedly |
+| `asp write formulas replace ...` | Formula-only find/replace on a sheet/range |
+| `asp write name define|update|delete ...` | Named range mutation helpers |
+| `asp write batch transform ...` | Stateless transform pipeline |
+| `asp write batch style ...` | Stateless style edits |
+| `asp write batch formula-pattern ...` | Autofill-like formula application |
+| `asp write batch structure ...` | Rows/cols/sheets/copy/move style mutations |
+| `asp write batch column-size ...` | Column width operations |
+| `asp write batch sheet-layout ...` | Freeze panes, zoom, page setup, print area |
+| `asp write batch rules ...` | Data validation + conditional formatting |
+
+### Safety model
+
+Most mutating commands support a strict mode matrix:
+- `--dry-run`
+- `--in-place`
+- `--output <PATH>`
+
+This matters for agents because it allows:
+- dry-run planning
+- non-destructive execution
+- explicit overwrite control
+
+### Formula maintenance
+
+Formula mutation is now a first-class surface:
+
+```bash
+asp write formulas replace data.xlsx Sheet1 --find '$64' --replace '$65' --dry-run
+asp write formulas replace data.xlsx Sheet1 --find 'Sheet1!' --replace 'Sheet2!' --range A1:Z100 --output fixed.xlsx
+```
+
+### Named range maintenance
+
+```bash
+asp write name define data.xlsx RevenueInput 'Inputs!$B$2'
+asp write name update data.xlsx RevenueInput 'Inputs!$B$2:$B$4' --in-place
+asp write name delete data.xlsx RevenueInput --in-place
+```
+
+---
+
+## `workbook` — file-level flows
+
+| Command | Purpose |
+| --- | --- |
+| `asp workbook create <path>` | Create a new workbook |
+| `asp workbook copy <source> <dest>` | Safe copy for edit workflows |
+| `asp workbook recalculate <file>` | Recalculate formulas via the configured backend |
+
+---
+
+## `verify` — proof, not vibes
+
+| Command | Purpose |
+| --- | --- |
+| `asp verify proof <baseline> <current>` | Prove target deltas and isolate new/resolved/preexisting errors |
+| `asp verify diff <original> <modified>` | Summary-first grouped workbook diff with optional paged details |
+
+### Why verification matters
+
+Most spreadsheet automation tools stop at “the edit applied.”
+
+spreadsheet-kit goes further:
+- did the target cells change the way we expected?
+- did the workbook introduce new errors?
+- which changes were direct edits vs recalculation fallout?
+- what changed overall, grouped in a way an agent can reason about?
+
+This verification layer is a big part of why this project is a serious agent substrate rather than a utility script.
+
+---
+
+## `session` — event-sourced stateful editing
+
+The session surface is for workflows that are too complex for a single stateless write.
+
+### What sessions give you
+- persistent editing state
+- staged dry-run operations
+- compare-and-swap apply semantics
+- logs and replayability
+- branch/switch/fork flows
+- undo / redo / checkout
+- explicit materialization back to a workbook file
+
+### Canonical loop
+
+```bash
+asp session start --base model.xlsx --workspace .
+asp session op --session <id> --ops @ops.json --workspace .
+asp session apply --session <id> <staged_id> --workspace .
+asp session materialize --session <id> --output result.xlsx --workspace .
+```
+
+### History and branching
+
+```bash
+asp session log --session <id> --workspace .
+asp session branches --session <id> --workspace .
+asp session fork --session <id> experiment-b --workspace .
+asp session switch --session <id> experiment-b --workspace .
+asp session undo --session <id> --workspace .
+asp session redo --session <id> --workspace .
+asp session checkout --session <id> <op_id> --workspace .
+```
+
+Use sessions when you want **repeatability, auditability, and multi-step safety**.
+
+---
+
+## `sheetport` — spreadsheet interfaces as executable contracts
+
+SheetPort is the workflow surface for turning workbook inputs/outputs into explicit machine contracts.
+
+### Manifest lifecycle
+
+```bash
+asp sheetport manifest candidates model.xlsx
+asp sheetport manifest schema
+asp sheetport manifest validate manifest.yaml
+asp sheetport manifest normalize manifest.yaml
+```
+
+### Bind-check + run
+
+```bash
+asp sheetport bind-check model.xlsx manifest.yaml
+asp sheetport run model.xlsx manifest.yaml --inputs @inputs.json --freeze-volatile
+```
+
+Use this when you want a workbook to behave less like an opaque file and more like a **declared service interface**.
+
+---
+
+## Output contracts for agents
+
+### Canonical vs compact shapes
+
+All commands default to JSON. Many also support:
+
+```bash
+--shape canonical
+--shape compact
+```
+
+Policy:
+- **canonical** keeps the full stable schema
+- **compact** removes wrapper noise where the contract allows it while preserving continuation fields and command-specific semantics
+
+Shape policy:
+- **Canonical (default):** preserve the full response schema.
+- **range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.
+- **range-values default encoding:** dense JSON (`dense.encoding = "dense_v1"`) with `dictionary` + run-length `row_runs`.
+- **range-values `--include-formulas`:** includes sparse formula coordinates in dense mode (`dense.formulas`), or a matrix in explicit `json` format.
+- **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
+- **formula-trace compact:** omits per-layer `highlights` while preserving `layers` and `next_cursor`.
 
 ### Deterministic pagination loops
 
@@ -100,66 +517,31 @@ asp read table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --of
 asp read table data.xlsx --sheet "Sheet1" --table-format values --limit 200 --offset 200
 ```
 
-### Edit → recalculate → diff
+#### `sheet-page` machine contract
+- Inspect top-level `format` before reading payload fields.
+- `format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`.
+- `format=compact`: read `compact.headers`, `compact.header_row`, `compact.rows` plus optional `next_start_row`.
+- `format=values_only`: read `values_only.rows` plus optional `next_start_row`.
+- Continuation is always driven by top-level `next_start_row` when present.
+- Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.
+
+Machine continuation example:
+1. Request page 1 without `--start-row`.
+2. If `next_start_row` is present, call `sheet-page` again with `--start-row <next_start_row>`.
+3. Stop when `next_start_row` is omitted.
+
+### Self-describing payloads
+
+When the agent is unsure what to send, ask for a schema or example:
 
 ```bash
-asp workbook copy data.xlsx /tmp/draft.xlsx
-asp write cells /tmp/draft.xlsx Sheet1 "B2=500" "C2==B2*1.1"
-asp workbook recalculate /tmp/draft.xlsx
-asp verify diff data.xlsx /tmp/draft.xlsx
+asp schema write batch rules
+asp example write batch rules
+asp schema session op structure.insert_rows
+asp example session op structure.insert_rows
 ```
 
-### Stateless batch writes (`--ops @...`)
-
-```bash
-asp write batch transform data.xlsx --ops @ops.json --dry-run
-asp write batch style data.xlsx --ops @style_ops.json --dry-run
-asp write batch formula-pattern data.xlsx --ops @formula_ops.json --in-place
-asp write batch structure data.xlsx --ops @structure_ops.json --dry-run
-asp write batch column-size data.xlsx --ops @column_size_ops.json --output resized.xlsx
-asp write batch sheet-layout data.xlsx --ops @layout_ops.json --dry-run
-asp write batch rules data.xlsx --ops @rules_ops.json --output ruled.xlsx --force
-```
-
-#### Discover payload contracts
-
-When you are unsure of the exact JSON shape, ask the CLI directly:
-
-```bash
-asp schema write batch transform
-asp example write batch transform
-asp schema session op transform.write_matrix
-asp example session op transform.write_matrix
-```
-
-#### Canonical safe edit workflow
-
-For moderate workbook edits, use this loop:
-
-```bash
-# 1) Explore
-asp read names data.xlsx
-asp analyze formula-trace data.xlsx Sheet1 C2 precedents --depth 2
-
-# 2) Discover the exact payload you need
-asp example session op transform.write_matrix
-
-# 3) Stage and inspect dry-run impact
-asp session start --base data.xlsx --workspace .
-asp session op --session <id> --ops @edit.json --workspace .
-
-# 4) Apply, verify, materialize
-asp session apply --session <id> <staged_id> --workspace .
-asp session materialize --session <id> --output result.xlsx --workspace .
-asp verify proof data.xlsx result.xlsx --targets Summary!B2 --named-ranges
-asp verify proof data.xlsx result.xlsx --sheet Summary --errors-only
-asp verify diff data.xlsx result.xlsx --details --limit 50
-```
-
-`asp verify` reports target classifications plus new/resolved/preexisting errors so you can prove the edit outcome before drilling into a full diff.
-Use `--errors-only` for a sheet-scoped QA gate or `--targets-only` when you only want explicit target proof.
-
-#### Batch payload examples (JSON body passed via `--ops @file.json`)
+### Batch payload examples
 
 All batch payloads use a top-level envelope object. Most commands require `{"ops":[...]}`; `column-size-batch` prefers `{"sheet_name":"...","ops":[...]}` and also accepts per-op `sheet_name` inside `{"ops":[...]}`.
 
@@ -195,120 +577,37 @@ All batch payloads use a top-level envelope object. Most commands require `{"ops
 
 `write batch formula-pattern` clears cached results for touched formula cells; run `workbook recalculate` to refresh computed values.
 
-All output is JSON by default.
-Use `--shape canonical|compact` (default: `canonical`) to control response shape.
-
 ### Formula parse policy
 
-Commands that tokenize or validate formulas accept `--formula-parse-policy <fail|warn|off>`:
+Formula-aware commands support:
 
-| Mode | Behavior | Default for |
-| --- | --- | --- |
-| **fail** | Abort on any formula parse error | `edit` (single-write) |
-| **warn** | Continue; attach `formula_parse_diagnostics` to the response | `scan-volatiles`, `formula-map`, `formula-trace`, `transform-batch`, `structure-batch`, `rules-batch` |
-| **off** | Silently skip parse errors | — |
-
-When the policy is `warn` (or `fail` with errors), the response includes a `formula_parse_diagnostics` object:
-
-```json
-{
-  "formula_parse_diagnostics": {
-    "policy": "warn",
-    "total_errors": 400,
-    "groups_truncated": false,
-    "groups": [
-      {
-        "error_code": "FORMULA_PARSE_FAILED",
-        "error_message": "No matching opener for closer at position 161",
-        "sheet_name": "Assessments",
-        "formula_preview": "=IF(C4=\"\",\"\",IF(C4=\"N/A\",…",
-        "count": 400,
-        "sample_addresses": ["D4", "D5", "D10", "D11", "D12"]
-      }
-    ]
-  }
-}
+```bash
+--formula-parse-policy fail|warn|off
 ```
 
-Errors are grouped by structural pattern — formulas that differ only in cell references (e.g., `=IF(C4=…)` and `=IF(C5=…)`) collapse into a single group with a count and sample addresses.
+- `fail` — abort
+- `warn` — continue and attach grouped diagnostics
+- `off` — skip silently
 
-Shape policy:
-- **Canonical (default/omitted):** preserve the full response schema.
-- **range-values:** returns a stable `values: [...]` envelope in both canonical and compact modes.
-- **range-values default encoding:** dense JSON (`dense.encoding = "dense_v1"`) with `dictionary` + run-length `row_runs`.
-- **range-values `--include-formulas`:** includes sparse formula coordinates in dense mode (`dense.formulas`), or a matrix in explicit `json` format.
-- **read-table and sheet-page: compact preserves the active branch and continuation fields (`next_offset`, `next_start_row`)**.
-- **formula-trace compact:** omits per-layer `highlights` while preserving `layers` and `next_cursor`.
+This lets agents choose between strictness and progress depending on the workflow.
 
-#### `sheet-page` machine contract
-- Inspect top-level `format` before reading payload fields.
-- `format=full`: read top-level `rows` plus optional `header_row` and `next_start_row`.
-- `format=compact`: read `compact.headers`, `compact.header_row`, `compact.rows` plus optional `next_start_row`.
-- `format=values_only`: read `values_only.rows` plus optional `next_start_row`.
-- Continuation is always driven by top-level `next_start_row` when present.
-- Global `--shape compact` preserves the active `sheet-page` branch; it does not flatten `sheet-page` payloads.
+### CLI reference excerpts
 
-Machine continuation example:
-1. Request page 1 without `--start-row`.
-2. If `next_start_row` is present, call `sheet-page` again with `--start-row <next_start_row>`.
-3. Stop when `next_start_row` is omitted.
-
-JSON output is compact by default; use `--quiet` to suppress warnings.
-Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read table --table-format csv`.
-
-### CLI command reference
-
-| Command | Description |
-| --- | --- |
-| `read sheets <file>` | List sheets with summaries |
-| `read overview <file> <sheet>` | Region detection + orientation |
-| `read workbook <file>` | Workbook metadata |
-| `read table <file> [--sheet S] [--range R] [--table-name T] [--region-id ID] [--limit N] [--offset N] [--sample-mode first\|last\|distributed] [--table-format json\|values\|csv]` | Structured table read with deterministic offset pagination |
-| `read page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]` | Deterministic row paging with `next_start_row` continuation |
-| `read values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]` | Raw cell values in dense JSON encoding by default, optionally with sparse formula metadata |
-| `read cells <file> <sheet> <target> [target...] [--include-empty]` | Detail-view per-cell formula/value/cached/style snapshots (max 25 cells per request) |
-| `analyze find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]` | Search cell values (`value`) or match labels and return adjacent values (`label`) |
-| `schema write batch <transform\|style\|formula-pattern\|structure\|column-size\|sheet-layout\|rules>` | Print canonical JSON schema for a batch payload target |
-| `schema session op <kind>` | Print canonical JSON schema for a session payload kind |
-| `example write batch <transform\|style\|formula-pattern\|structure\|column-size\|sheet-layout\|rules>` | Print a copy-pastable canonical batch payload example |
-| `example session op <kind>` | Print a copy-pastable canonical session payload example |
-| `read names <file> [--sheet S] [--name-prefix P]` | List named ranges/tables/formula items |
-| `analyze find-formula <file> <query> [--sheet S] [--limit N] [--offset N]` | Formula text search with continuation |
-| `analyze scan-volatiles <file> [--sheet S] [--limit N] [--offset N] [--formula-parse-policy P]` | Scan formulas for volatile functions |
-| `analyze sheet-statistics <file> <sheet>` | Per-sheet density and type stats |
-| `analyze formula-map <file> <sheet> [--sort-by complexity\|count] [--limit N] [--formula-parse-policy P]` | Formula inventory summary |
-| `analyze formula-trace <file> <sheet> <cell> <precedents\|dependents> [--depth N] [--page-size N] [--cursor-depth N --cursor-offset N] [--formula-parse-policy P]` | Trace formula dependencies with cursor continuation |
-| `analyze table-profile <file> [--sheet S]` | Column types, cardinality, distributions |
-| `workbook create <path> [--sheets Inputs,Calc,...] [--overwrite]` | Create a blank workbook with configurable initial sheets |
-| `workbook copy <source> <dest>` | Copy workbook (for edit workflows) |
-| `write cells <file> <sheet> [--dry-run\|--in-place\|--output PATH] [--force] <edits...> [--formula-parse-policy P]` | Apply cell edits with preview/output safety modes (`A1=42` literal, `B2==SUM(...)` formula) |
-| `verify proof <baseline> <current> [--targets Sheet!A1,...] [--sheet S] [--named-ranges] [--errors-only\|--targets-only]` | Compare two workbook states and report classified target deltas plus new/resolved/pre-existing errors, with optional named-range deltas |
-| `write append <file> --sheet S (--region-id N\|--table-name NAME) (--rows @rows.json\|--from-csv rows.csv [--header]) [--footer-policy auto\|before-footer\|append-at-end] (--dry-run\|--in-place\|--output PATH)` | Append rows into a detected region or table with footer-aware insertion before totals/subtotals when found |
-| `write clone-template-row <file> --sheet S --source-row N (--before R\|--after R\|--insert-at R) [--count N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone one template row into inserted rows with explicit patch targets, merge-boundary warnings, and preview-first planning |
-| `write clone-row-band <file> --sheet S --source-rows START:END (--before R\|--after R\|--insert-at R) [--repeat N] [--patch-targets likely-inputs\|all-non-formula\|none] [--merge-policy safe\|strict] [--expand-adjacent-sums] (--dry-run\|--in-place\|--output PATH)` | Clone a contiguous row band with repeated blocks, explicit patch targets, merge-boundary warnings, and preview-first planning |
-| `write batch transform <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Generic stateless transform batch pipeline |
-| `write batch style <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless style operations |
-| `write batch formula-pattern <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless formula fill/pattern operations (clears touched formula caches; run `recalculate`) |
-| `write batch structure <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless structure operations (sheet rows/columns) |
-| `write batch column-size <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless column sizing operations |
-| `write batch sheet-layout <file> --ops @ops.json (--dry-run|--in-place|--output PATH)` | Stateless layout operations (freeze/split/hide/view) |
-| `write batch rules <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH) [--formula-parse-policy P]` | Stateless validation/conditional-format operations |
-| `workbook recalculate <file> [--output PATH] [--force]` | Recalculate formulas via backend (in-place or to output) |
-| `verify diff <original> <modified> [--details --limit N --offset N] [--sheet S] [--range A1:C10] [--exclude-recalc-result]` | Summary-first workbook diff with grouped buckets, subtype counts, optional paged details, and a recalc-noise filter |
-
-`append-region` is preview-first and compiles down to `insert_rows` + `write_matrix`; it now supports `--region-id` or `--table-name`, explicit `--footer-policy` selection, and dry-run metadata for footer candidates / formula footer targets. Use `--from-csv ... --header` when your incoming rows already exist as CSV.
-
-`clone-template-row` is the first 4304 workflow helper: it compiles to `clone_row`, reports `formula_targets` and `likely_patch_targets` in dry-run output, and uses `--merge-policy safe|strict` to make merge-boundary behavior explicit.
-
-`clone-row-band` extends that contract to contiguous multi-row templates, returning explicit `inserted_blocks`, repeated target ranges, formula targets, patch targets, and merge/validation warnings before apply.
+- `read values <file> <sheet> <range> [range...] [--format dense\|json\|values\|csv] [--include-formulas]`
+- `read cells <file> <sheet> <target> [target...] [--include-empty]`
+- `read page <file> <sheet> --format <full|compact|values_only> [--start-row ROW] [--page-size N]`
+- `workbook create <path> [--sheets Inputs,Calc,...] [--overwrite]`
+- `analyze find-value <file> <query> [--sheet S] [--mode value\|label] [--label-direction right\|below\|any]`
+- `write batch transform <file> --ops @ops.json (--dry-run\|--in-place\|--output PATH)`
 
 #### Formula write-path provenance (`write_path_provenance`)
+
 Formula-writing commands emit optional provenance metadata for troubleshooting:
 - `written_via`: write path (`edit`, `transform_batch`, `apply_formula_pattern`)
 - `formula_targets`: sheet/cell or sheet/range targets touched by formula writes
 
-Debug compare workflow (same-target by write path):
-1. Apply the same formula target via two paths (for example `edit` vs `apply-formula-pattern`).
+Debug compare workflow:
+1. Apply the same formula target via two paths.
 2. Compare `write_path_provenance.written_via` and `formula_targets` in responses.
 3. Use `inspect-cells` plus `recalculate` to compare resulting behavior.
 
@@ -320,11 +619,20 @@ Debug compare workflow (same-target by write path):
   - Integer/count: `#,##0`
 - Apply `sheet-layout-batch` freeze panes after header layout stabilizes.
 
+JSON output is compact by default; use `--quiet` to suppress warnings.
+Global `--output-format csv` is currently unsupported; use command-specific CSV options like `read table --table-format csv`.
+
 ---
 
-## Quickstart: MCP Server
+## MCP server quickstart
 
-The MCP server provides agents a stateful session with workbook caching, fork management, and recalculation. Connect any MCP-compatible client.
+The MCP surface is the stateful server version of spreadsheet-kit.
+
+Use it when you want:
+- workbook caching across calls
+- fork lifecycle instead of stateless file replacement
+- multi-turn agent workflows
+- screenshots and richer server-side orchestration
 
 ### Claude Code / Claude Desktop
 
@@ -341,7 +649,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
 }
 ```
 
-Or with Docker:
+### Docker
 
 ```json
 {
@@ -359,560 +667,209 @@ Or with Docker:
 }
 ```
 
-### Cursor / VS Code
-
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "spreadsheet-mcp",
-      "args": ["--workspace-root", "${workspaceFolder}", "--transport", "stdio"]
-    }
-  }
-}
-```
-
 ### HTTP mode
 
 ```bash
 spreadsheet-mcp --workspace-root /path/to/workbooks
-# → http://127.0.0.1:8079 — POST /mcp
+# -> http://127.0.0.1:8079  (POST /mcp)
 ```
-
-<details>
-<summary>More MCP client configurations</summary>
-
-**Claude Code — Docker with VBA:**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio", "--vba-enabled"]
-    }
-  }
-}
-```
-
-**Claude Code — Docker with write/recalc:**
-```json
-{
-  "mcpServers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "/path/to/workbooks:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio", "--recalc-enabled"]
-    }
-  }
-}
-```
-
-**Cursor / VS Code — Docker read-only:**
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:latest", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-**Cursor / VS Code — Docker write/recalc:**
-```json
-{
-  "mcp.servers": {
-    "spreadsheet": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/data", "ghcr.io/psu3d0/spreadsheet-mcp:full", "--transport", "stdio", "--recalc-enabled"]
-    }
-  }
-}
-```
-
-</details>
 
 ---
 
-## When to use what
+## MCP tool surface
 
-| You want to… | Use |
-| --- | --- |
-| One-shot reads from scripts or pipelines | **CLI** (`asp`, alias: `agent-spreadsheet`) |
-| Agent sessions with caching across calls | **MCP** (`spreadsheet-mcp`) |
-| Fork → edit → recalc → diff workflows | **MCP** (fork lifecycle + recalc backend) |
-| Embed in an LLM tool-use loop | **MCP** (designed for multi-turn agent use) |
-| Quick CLI edits without running a server | **CLI** (`copy` → `edit` → `diff`) |
-| npm/npx install with zero Rust toolchain | **npm** (`npm i -g agent-spreadsheet`) |
+### Read and discovery
+- `list_workbooks`
+- `describe_workbook`
+- `list_sheets`
+- `workbook_summary`
+- `sheet_overview`
+- `sheet_page`
+- `read_table`
+- `range_values`
+- `named_ranges`
+- `sheet_styles`
+- `workbook_style_summary`
+
+### Search and analysis
+- `find_value`
+- `find_formula`
+- `sheet_formula_map`
+- `formula_trace`
+- `scan_volatiles`
+- `table_profile`
+- `sheet_statistics`
+- `get_manifest_stub`
+
+### Stateful write and recalc
+- fork lifecycle
+- checkpoints
+- `edit_batch`
+- `transform_batch`
+- `style_batch`
+- `apply_formula_pattern`
+- `structure_batch`
+- `column_size_batch`
+- `sheet_layout_batch`
+- `rules_batch`
+- `recalculate`
+- `get_changeset`
+- `save_fork`
+- staged-change management
+- `screenshot_sheet`
+
+### VBA inspection
+- `vba_project_summary`
+- `vba_module_source`
 
 ---
 
-## Token efficiency
+## JS SDK and WASM status
 
-Dumping a 50,000-row spreadsheet into context is expensive and usually unnecessary. spreadsheet-kit tools are built around **discover → profile → extract** — agents get structural awareness without burning tokens on cells they don't need.
+## `spreadsheet-kit-sdk`
 
-### Output profiles
+The JS SDK is the app-facing integration layer.
 
-The server defaults to **token-dense** output:
+It normalizes:
+- method names
+- input aliases
+- output shapes
+- typed capability errors
 
-- `read_table` → CSV format (flat string, minimal overhead)
-- `range_values` → values array (no metadata wrapper)
-- `sheet_page` → compact format (no formulas/styles unless requested)
-- `table_profile` / `sheet_statistics` → summary only (no samples unless requested)
-- Pagination fields (`next_offset`, `next_start_row`) only appear when more data exists
+It is designed so an integration can target:
+- **MCP backends** now
+- **WASM/session backends** as they mature in embedded runtimes
 
-Switch to verbose output with `--output-profile verbose` or `SPREADSHEET_MCP_OUTPUT_PROFILE=verbose`.
+Install:
 
-### Recommended agent workflow
+```bash
+npm i spreadsheet-kit-sdk
+```
 
-![Token Efficiency Workflow](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/token_efficiency.jpeg)
+## `spreadsheet-kit-wasm`
 
-1. `list_workbooks` → `list_sheets` → `workbook_summary` for orientation
-2. `sheet_overview` to get detected regions (ids, bounds, kind, confidence)
-3. `table_profile` → `read_table` with `region_id` and small `limit`
-4. `find_value` (label mode) or `range_values` for targeted pulls
-5. Reserve `sheet_page` for unknown layouts; prefer `compact` format
-6. Page and filter — avoid full-sheet reads
+The Rust crate exists in this repository and provides a WASM-facing byte/session wrapper around the shared engine.
 
----
+Current status:
+- the crate exists and is tested in-repo
+- it is **not yet published as a general-purpose public package**
+- the npm `spreadsheet-kit-wasm` distribution remains planned
 
-## Tool surface (MCP)
-
-### Read-only tools (always available)
-
-| Tool | Purpose |
-| --- | --- |
-| `list_workbooks` | List spreadsheet files in workspace |
-| `describe_workbook` | Workbook metadata |
-| `list_sheets` | Sheets with summaries |
-| `workbook_summary` | Summary + optional entry points / named ranges |
-| `sheet_overview` | Orientation + region detection (cached) |
-| `sheet_page` | Page through cells (compact / full / values_only) |
-| `read_table` | Structured region/table read (csv / values / json) |
-| `range_values` | Raw cell values for specific ranges |
-| `table_profile` | Column types, cardinality, sample distributions |
-| `find_value` | Search values or labels |
-| `find_formula` | Search formulas with paging |
-| `sheet_statistics` | Density, nulls, duplicates |
-| `sheet_formula_map` | Formulas by complexity / count |
-| `formula_trace` | Precedent / dependent tracing |
-| `scan_volatiles` | Find volatile formulas (NOW, RAND, etc.) |
-| `named_ranges` | Defined names + tables |
-| `sheet_styles` | Style inspection (sheet-scoped) |
-| `workbook_style_summary` | Workbook-wide style summary |
-| `get_manifest_stub` | Generate SheetPort manifest scaffold |
-| `close_workbook` | Evict from cache |
-
-### VBA tools (opt-in: `--vba-enabled`)
-
-| Tool | Purpose |
-| --- | --- |
-| `vba_project_summary` | VBA project metadata + module list |
-| `vba_module_source` | Paged VBA module source extraction |
-
-Read-only — does not execute macros, only extracts source text from `.xlsm` files.
-
-### Write & recalc tools (opt-in: `--recalc-enabled`)
-
-| Tool | Purpose |
-| --- | --- |
-| `create_fork` / `list_forks` / `discard_fork` | Fork lifecycle |
-| `checkpoint_fork` / `restore_checkpoint` / `list_checkpoints` / `delete_checkpoint` | Snapshot + rollback |
-| `edit_batch` | Cell value / formula edits |
-| `transform_batch` | Range-first clear / fill / replace |
-| `style_batch` | Batch style edits (range / region / cells) |
-| `apply_formula_pattern` | Autofill-like formula fills |
-| `structure_batch` | Rows / cols / sheets + copy / move ranges |
-| `column_size_batch` | Column width operations |
-| `sheet_layout_batch` | Freeze panes, zoom, print area, page setup |
-| `rules_batch` | Data validation + conditional formatting |
-| `recalculate` | Trigger formula recalculation |
-| `get_changeset` | Diff fork vs original (paged, filterable) |
-| `screenshot_sheet` | Render range to PNG (max 100x30 cells) |
-| `save_fork` | Export fork to file |
-| `list_staged_changes` / `apply_staged_change` / `discard_staged_change` | Manage previewed changes |
-| `get_edits` | List applied edits on a fork |
+So the right framing today is:
+- **WASM is real inside the repo**
+- **public distribution and broader packaging are still evolving**
 
 ---
 
 ## Recalc backends
 
-Formula recalculation is handled by a pluggable backend. Two are supported:
+Formula recalculation is pluggable.
 
-| Backend | How | Default | When to use |
+| Backend | How | Default | Best for |
 | --- | --- | --- | --- |
-| **Formualizer** | Native Rust engine (320+ functions) | **Yes** (default feature) | Fast, zero external deps. Ships with every `cargo install`. |
-| **LibreOffice** | Headless `soffice` process | Docker `:full` only | Full Excel formula compatibility. Used by the `:full` Docker image. |
+| **Formualizer** | Native Rust engine | **Yes** | Fast default recalc with no external dependency |
+| **LibreOffice** | Headless `soffice` | Docker `:full` / explicit builds | Maximum compatibility and screenshot flows |
 
-**Default behavior:** `cargo install` includes Formualizer out of the box — recalculation works immediately with no extra setup. LibreOffice is only used in the Docker `:full` image, which bundles `soffice` with pre-configured macros for maximum formula coverage.
-
-Compile-time feature flags:
-- `recalc-formualizer` (**default**) — pure Rust, bundled via Formualizer
-- `recalc-libreoffice` — uses LibreOffice (requires `soffice` on PATH)
-- `--no-default-features` — read-only mode, no recalc support
-
-If recalc is disabled, all read, edit, and diff operations still work — only `recalculate` requires a backend.
+Feature notes:
+- `recalc-formualizer` is enabled by default
+- `recalc-libreoffice` is available for LibreOffice-backed builds
+- read and many write flows still work without recalc; only recalculate itself requires a backend
 
 ---
 
-## Deployment modes
+## Docker images
 
-| Mode | Binary | State | Recalc | Transport |
-| --- | --- | --- | --- | --- |
-| **CLI** | `agent-spreadsheet` | Stateless | Yes (Formualizer, default) | stdin → stdout JSON |
-| **MCP (stdio)** | `spreadsheet-mcp` | Stateful (LRU cache) | Optional (`--recalc-enabled`) | MCP over stdio |
-| **MCP (HTTP)** | `spreadsheet-mcp` | Stateful (LRU cache) | Optional (`--recalc-enabled`) | Streamable HTTP `POST /mcp` |
-| **Docker slim** | `spreadsheet-mcp` | Stateful | No | HTTP (default) or stdio |
-| **Docker full** | `spreadsheet-mcp` | Stateful | Yes (LibreOffice) | HTTP (default) or stdio |
-| **WASM** | — | — | — | *Planned* |
+Published at `ghcr.io/psu3d0/spreadsheet-mcp`:
+
+| Image | Size | Recalc | Best for |
+| --- | --- | --- | --- |
+| `latest` | ~15 MB | No | Read-only analysis and lightweight agent deployments |
+| `full` | ~800 MB | Yes | Write + recalc + screenshots |
+
+Examples:
+
+```bash
+# Read-only
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
+
+# Write + recalc
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
+```
 
 ---
 
 ## Workspace layout
 
-```
+```text
 spreadsheet-kit/
 ├── crates/
-│   ├── spreadsheet-kit/       # Shared engine + agent-spreadsheet CLI binary
-│   └── spreadsheet-mcp/       # Stateful MCP server adapter
+│   ├── spreadsheet-kit/        # shared engine + asp / agent-spreadsheet CLI
+│   ├── spreadsheet-mcp/        # MCP server adapter
+│   └── spreadsheet-kit-wasm/   # experimental WASM-facing wrapper
 ├── npm/
-│   └── agent-spreadsheet/     # npm binary distribution package
-├── formualizer/               # Formula recalc engine (default backend)
-├── docs/                      # Architecture and design docs
-└── .github/workflows/         # CI, release, Docker builds
+│   ├── agent-spreadsheet/      # npm CLI wrapper
+│   └── spreadsheet-kit-sdk/    # JS SDK
+├── docs/                       # architecture and design docs
+├── benchmarks/                 # scenario budget regression harnesses
+└── .github/workflows/          # CI, release, docker builds
 ```
 
-| Crate | Role |
+### Package roles
+
+| Package | Role |
 | --- | --- |
-| [`spreadsheet-kit`](crates/spreadsheet-kit/) | Shared engine + `agent-spreadsheet` CLI binary |
-| [`spreadsheet-mcp`](crates/spreadsheet-mcp/) | MCP server adapter + transport layer |
-| [`agent-spreadsheet` (npm)](npm/agent-spreadsheet/) | npm wrapper — downloads prebuilt native binary on install |
+| `spreadsheet-kit` | shared engine and CLI binaries |
+| `spreadsheet-mcp` | stateful MCP transport + server surface |
+| `spreadsheet-kit-wasm` | WASM-facing byte/session wrapper |
+| `agent-spreadsheet` | npm wrapper for the CLI binary |
+| `spreadsheet-kit-sdk` | JS SDK for MCP/WASM-style integrations |
 
 ---
 
-## Region detection
-
-![Region Detection Visualization](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/region_detection_viz.jpeg)
-
-Spreadsheets often contain multiple logical tables, parameter blocks, and output areas on a single sheet. The server detects these automatically:
-
-1. **Gutter detection** — scans for empty rows/columns separating content blocks
-2. **Recursive splitting** — subdivides areas along detected gutters
-3. **Border trimming** — removes sparse edges to tighten bounds
-4. **Header detection** — identifies header rows (including multi-row merged headers)
-5. **Classification** — labels each region: `data`, `parameters`, `outputs`, `calculator`, `metadata`
-6. **Confidence scoring** — higher scores for well-structured regions with clear headers
-
-Regions are cached per sheet. Tools like `read_table` accept a `region_id` to scope reads without manually specifying ranges. See [docs/HEURISTICS.md](docs/HEURISTICS.md) for details.
-
----
-
-## Architecture
+## Architecture notes
 
 ![Architecture Overview](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/architecture_overview.jpeg)
 
-- **LRU cache** keeps recently-accessed workbooks in memory (configurable capacity)
-- **Lazy sheet metrics** computed once per sheet, reused across tools
-- **Region detection on demand** runs for `sheet_overview` and is cached for `region_id` lookups
-- **Fork isolation** — write operations work on copies, never mutate originals in-place
-- **Sampling modes** — `distributed` sampling reads evenly across rows without loading everything
-- **Output caps** — truncated by default; use tool params to expand
+Core ideas:
+- **one semantic core** shared across CLI, MCP, session, and WASM-facing work
+- **region detection** for structural awareness
+- **token-efficient defaults** so agents do not over-read spreadsheets
+- **verification as a first-class feature** rather than an afterthought
+- **workflow helpers** for the common mutations that spreadsheet agents repeatedly struggle with
 
----
+Token-efficient workflow reference:
 
-## Configuration reference
+![Token Efficiency Workflow](https://raw.githubusercontent.com/PSU3D0/spreadsheet-mcp/main/assets/token_efficiency.jpeg)
 
-All flags can also be set via environment variables prefixed with `SPREADSHEET_MCP_`.
-
-| Flag | Env | Default | Description |
-| --- | --- | --- | --- |
-| `--workspace-root <DIR>` | `SPREADSHEET_MCP_WORKSPACE` | cwd | Directory to scan for workbooks |
-| `--cache-capacity <N>` | `SPREADSHEET_MCP_CACHE_CAPACITY` | `5` | LRU workbook cache size |
-| `--extensions <csv>` | `SPREADSHEET_MCP_EXTENSIONS` | `xlsx,xlsm,xls,xlsb` | Allowed file extensions |
-| `--workbook <FILE>` | `SPREADSHEET_MCP_WORKBOOK` | — | Single-workbook mode |
-| `--enabled-tools <csv>` | `SPREADSHEET_MCP_ENABLED_TOOLS` | all | Whitelist exposed tools |
-| `--transport <T>` | `SPREADSHEET_MCP_TRANSPORT` | `http` | `http` or `stdio` |
-| `--http-bind <ADDR>` | `SPREADSHEET_MCP_HTTP_BIND` | `127.0.0.1:8079` | HTTP bind address |
-| `--output-profile <P>` | `SPREADSHEET_MCP_OUTPUT_PROFILE` | `token-dense` | `token-dense` or `verbose` |
-| `--recalc-enabled` | `SPREADSHEET_MCP_RECALC_ENABLED` | `false` | Enable write/recalc tools |
-| `--max-concurrent-recalcs <N>` | `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | `2` | Parallel recalc limit |
-| `--tool-timeout-ms <MS>` | `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | `30000` | Per-tool timeout (0 = disabled) |
-| `--max-response-bytes <N>` | `SPREADSHEET_MCP_MAX_RESPONSE_BYTES` | `1000000` | Max response size (0 = disabled) |
-| `--allow-overwrite` | `SPREADSHEET_MCP_ALLOW_OVERWRITE` | `false` | Allow `save_fork` to overwrite originals |
-| `--vba-enabled` | `SPREADSHEET_MCP_VBA_ENABLED` | `false` | Enable VBA inspection tools |
-| `--screenshot-dir <DIR>` | `SPREADSHEET_MCP_SCREENSHOT_DIR` | `<workspace>/screenshots` | Screenshot output directory |
-| `--path-map <MAP>` | `SPREADSHEET_MCP_PATH_MAP` | — | Docker path remapping (`/data=/host/path`) |
-
----
-
-## Docker deployment
-
-### Image variants
-
-| Image | Size | Recalc | Use case |
-| --- | --- | --- | --- |
-| `ghcr.io/psu3d0/spreadsheet-mcp:latest` | ~15 MB | No | Read-only analysis |
-| `ghcr.io/psu3d0/spreadsheet-mcp:full` | ~800 MB | Yes (LibreOffice) | Write + recalc + screenshots |
-
-### Basic usage
-
-```bash
-# Read-only
-docker run -v /path/to/workbooks:/data -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:latest
-
-# With VBA tools
-docker run -v /path/to/workbooks:/data -p 8079:8079 \
-  -e SPREADSHEET_MCP_VBA_ENABLED=true \
-  ghcr.io/psu3d0/spreadsheet-mcp:latest
-
-# Write + recalc
-docker run -v /path/to/workbooks:/data -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-### Path mapping
-
-When the server runs in Docker but your agent reads files from the host, configure path mapping so responses include host-visible paths:
-
-```bash
-docker run \
-  -v /path/to/workbooks:/data \
-  -e SPREADSHEET_MCP_PATH_MAP="/data=/path/to/workbooks" \
-  -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-This adds `client_path`, `client_output_path`, and `client_saved_to` fields to tool responses.
-
-### Separate screenshot output
-
-```bash
-docker run \
-  -v /path/to/workbooks:/data \
-  -v /path/to/screenshots:/screenshots \
-  -e SPREADSHEET_MCP_SCREENSHOT_DIR=/screenshots \
-  -e SPREADSHEET_MCP_PATH_MAP="/data=/path/to/workbooks,/screenshots=/path/to/screenshots" \
-  -p 8079:8079 \
-  ghcr.io/psu3d0/spreadsheet-mcp:full
-```
-
-### Privilege handling
-
-The `:full` image entrypoint drops privileges to match the owner of the mounted workspace directory. Override with `SPREADSHEET_MCP_RUN_UID` / `SPREADSHEET_MCP_RUN_GID` or `docker run --user`.
-
----
-
-## Write & recalc workflows
-
-Write tools use a **fork-based** model for safety. Edits never mutate the original file — work on a fork, inspect changes, and export when satisfied.
-
-```
-create_fork → edit_batch / transform_batch → recalculate → get_changeset → save_fork
-                    ↑                                              |
-             checkpoint_fork ←──── restore_checkpoint ←────────────┘
-```
-
-### Edit shorthand
-
-`edit_batch` accepts both canonical objects and shorthand strings:
-
-```json
-{
-  "edits": [
-    { "address": "A1", "value": "Revenue" },
-    { "address": "B2", "formula": "SUM(B3:B10)" },
-    "C1=100",
-    "D1==SUM(A1:A2)"
-  ]
-}
-```
-
-`"A1=100"` sets a value. `"A1==SUM(...)"` sets a formula (double `=`).
-
-<details>
-<summary>Write tool shapes reference</summary>
-
-**edit_batch**
-```json
-{
-  "tool": "edit_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "sheet_name": "Inputs",
-    "edits": [
-      { "address": "A1", "value": "Financial Model Inputs" },
-      { "address": "B2", "formula": "SUM(B3:B10)" },
-      "C1=100",
-      "D1==SUM(A1:A2)"
-    ]
-  }
-}
-```
-
-**style_batch**
-```json
-{
-  "tool": "style_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "ops": [
-      {
-        "sheet_name": "Accounts",
-        "target": { "kind": "range", "range": "A2:F2" },
-        "patch": {
-          "font": { "bold": true },
-          "fill": { "kind": "pattern", "pattern_type": "solid", "foreground_color": "FFF5F7FA" }
-        }
-      },
-      {
-        "sheet_name": "Accounts",
-        "range": "A3:F3",
-        "style": { "fill": { "color": "#F5F7FA" } }
-      }
-    ]
-  }
-}
-```
-
-**structure_batch**
-```json
-{
-  "tool": "structure_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "ops": [
-      { "kind": "create_sheet", "name": "Inputs" },
-      { "kind": "insert_rows", "sheet_name": "Data", "start": 5, "count": 3 },
-      { "kind": "copy_range", "sheet_name": "Data", "source": "A1:D1", "target": "A5" }
-    ]
-  }
-}
-```
-
-**column_size_batch**
-```json
-{
-  "tool": "column_size_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "sheet_name": "Accounts",
-    "mode": "apply",
-    "ops": [
-      { "target": { "kind": "columns", "range": "A:C" }, "size": { "kind": "auto", "max_width_chars": 40.0 } },
-      { "range": "D:D", "size": { "kind": "width", "width_chars": 24.0 } }
-    ]
-  }
-}
-```
-
-**sheet_layout_batch**
-```json
-{
-  "tool": "sheet_layout_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "mode": "preview",
-    "ops": [
-      { "kind": "freeze_panes", "sheet_name": "Dashboard", "freeze_rows": 1, "freeze_cols": 1 },
-      { "kind": "set_zoom", "sheet_name": "Dashboard", "zoom_percent": 110 },
-      { "kind": "set_print_area", "sheet_name": "Dashboard", "range": "A1:G30" },
-      { "kind": "set_page_setup", "sheet_name": "Dashboard", "orientation": "landscape", "fit_to_width": 1, "fit_to_height": 1 }
-    ]
-  }
-}
-```
-
-**rules_batch**
-```json
-{
-  "tool": "rules_batch",
-  "arguments": {
-    "fork_id": "fork-123",
-    "mode": "apply",
-    "ops": [
-      {
-        "kind": "set_data_validation",
-        "sheet_name": "Inputs",
-        "target_range": "B3:B100",
-        "validation": { "kind": "list", "formula1": "=Lists!$A$1:$A$10", "allow_blank": false }
-      },
-      {
-        "kind": "set_conditional_format",
-        "sheet_name": "Dashboard",
-        "target_range": "D3:D100",
-        "rule": { "kind": "cell_is", "operator": "less_than", "formula": "0" },
-        "style": { "fill_color": "#FFE0E0", "font_color": "#8A0000", "bold": true }
-      }
-    ]
-  }
-}
-```
-
-</details>
-
-### Screenshot tool
-
-`screenshot_sheet` renders a range to a cropped PNG via LibreOffice (requires `:full` image or `--recalc-enabled`).
-
-- Max range: **100 rows x 30 columns** per screenshot
-- Pixel guard: **4096 px** per side, **12 MP** area (override via `SPREADSHEET_MCP_MAX_PNG_DIM_PX` / `SPREADSHEET_MCP_MAX_PNG_AREA_PX`)
-- On rejection, the tool returns suggested sub-range splits
-
-See [docs/RECALC.md](docs/RECALC.md) for architecture details.
-
----
-
-## Example
-
-**Request:** Profile a detected region
-
-```json
-{
-  "tool": "table_profile",
-  "arguments": {
-    "workbook_id": "wb-23456789ab",
-    "sheet_name": "Q1 Actuals",
-    "region_id": 1,
-    "sample_size": 10,
-    "sample_mode": "distributed"
-  }
-}
-```
-
-**Response:**
-
-```json
-{
-  "sheet_name": "Q1 Actuals",
-  "headers": ["Date", "Category", "Amount", "Notes"],
-  "column_types": [
-    { "name": "Date", "inferred_type": "date", "nulls": 0, "distinct": 87 },
-    { "name": "Category", "inferred_type": "text", "nulls": 2, "distinct": 12, "top_values": ["Payroll", "Marketing", "Infrastructure"] },
-    { "name": "Amount", "inferred_type": "number", "nulls": 0, "min": 150.0, "max": 84500.0, "mean": 12847.32 },
-    { "name": "Notes", "inferred_type": "text", "nulls": 45, "distinct": 38 }
-  ],
-  "row_count": 1247
-}
-```
-
-The agent now knows column types, cardinality, and value distributions — without reading 1,247 rows.
+Recommended progression:
+1. discover workbook + sheets
+2. detect regions / table-like structures
+3. inspect only the exact region or cells needed
+4. mutate with dry-run or session staging
+5. recalculate if needed
+6. verify proof and review grouped diffs
 
 ---
 
 ## Development
 
 ```bash
-# Run tests
-cargo test
-
-# Build all crates
+# Build everything
 cargo build --release
 
-# Test local binary with an MCP client
+# Run formatting, lint, and tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-Point your MCP client config at the local binary:
+Local MCP iteration:
+
+```bash
+WORKSPACE_ROOT=/path/to/workbooks ./scripts/local-docker-mcp.sh
+```
+
+Or point your MCP client directly at the local binary:
 
 ```json
 {
@@ -925,11 +882,18 @@ Point your MCP client config at the local binary:
 }
 ```
 
-Or use the Docker rebuild script for live iteration:
+---
 
-```bash
-WORKSPACE_ROOT=/path/to/workbooks ./scripts/local-docker-mcp.sh
-```
+## Read more
+
+- CLI package README: [`npm/agent-spreadsheet`](./npm/agent-spreadsheet/)
+- Core crate README: [`crates/spreadsheet-kit`](./crates/spreadsheet-kit/)
+- MCP crate README: [`crates/spreadsheet-mcp`](./crates/spreadsheet-mcp/)
+- JS SDK README: [`npm/spreadsheet-kit-sdk`](./npm/spreadsheet-kit-sdk/)
+- WASM wrapper README: [`crates/spreadsheet-kit-wasm`](./crates/spreadsheet-kit-wasm/README.md)
+- Packaging/versioning notes: [`docs/PACKAGING.md`](./docs/PACKAGING.md)
+- Heuristics and region detection: [`docs/HEURISTICS.md`](./docs/HEURISTICS.md)
+- Recalc architecture: [`docs/RECALC.md`](./docs/RECALC.md)
 
 ---
 
