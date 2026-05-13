@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.psu3d0/spreadsheet-mcp",
+  "name": "io.github.PSU3D0/spreadsheet-mcp",
   "title": "spreadsheet-kit MCP",
   "description": "Agent-safe Excel workbook analysis, editing, recalc, and verification tools.",
   "version": "0.10.1",

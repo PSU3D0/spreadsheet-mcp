@@ -17,7 +17,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVER_JSON = REPO_ROOT / "server.json"
 DOCKERFILES = [REPO_ROOT / "Dockerfile", REPO_ROOT / "Dockerfile.full"]
-EXPECTED_SERVER_NAME = "io.github.psu3d0/spreadsheet-mcp"
+EXPECTED_SERVER_NAME = "io.github.PSU3D0/spreadsheet-mcp"
 EXPECTED_REPO = "https://github.com/PSU3D0/spreadsheet-mcp"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 

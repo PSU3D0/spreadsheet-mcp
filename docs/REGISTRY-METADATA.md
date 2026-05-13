@@ -10,7 +10,7 @@ This repository is prepared for distribution through:
 Canonical server name:
 
 ```text
-io.github.psu3d0/spreadsheet-mcp
+io.github.PSU3D0/spreadsheet-mcp
 ```
 
 Metadata file:
@@ -49,7 +49,7 @@ mcp-publisher publish server.json
 Dockerfiles include the required OCI ownership label:
 
 ```dockerfile
-LABEL io.modelcontextprotocol.server.name="io.github.psu3d0/spreadsheet-mcp"
+LABEL io.modelcontextprotocol.server.name="io.github.PSU3D0/spreadsheet-mcp"
 ```
 
 Docker Catalog submission happens in the Docker registry repo:
