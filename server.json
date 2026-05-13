@@ -14,7 +14,6 @@
     {
       "registryType": "oci",
       "identifier": "ghcr.io/psu3d0/spreadsheet-mcp:0.10.1-full",
-      "version": "0.10.1",
       "runtimeHint": "docker",
       "runtimeArguments": [
         {

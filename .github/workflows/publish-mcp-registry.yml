@@ -57,7 +57,7 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           IMAGE="${{ steps.meta.outputs.image }}"
           jq --arg version "$VERSION" --arg image "$IMAGE" \
-            '.version = $version | .packages[0].version = $version | .packages[0].identifier = $image' \
+            '.version = $version | .packages[0].identifier = $image | del(.packages[0].version)' \
             server.json > server.rendered.json
           mv server.rendered.json server.json
           cat server.json
