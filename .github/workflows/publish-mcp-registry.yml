@@ -10,6 +10,10 @@ on:
         description: 'Version to publish (for example 0.10.1); defaults to tag version when run from a tag'
         required: false
         type: string
+      image_tag:
+        description: 'GHCR image tag to publish; defaults to <version>-full'
+        required: false
+        type: string
 
 jobs:
   publish-official-registry:
@@ -31,7 +35,12 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME#v}"
           fi
-          IMAGE="ghcr.io/psu3d0/spreadsheet-mcp:${VERSION}-full"
+          if [ -n "${{ inputs.image_tag || '' }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            IMAGE_TAG="${VERSION}-full"
+          fi
+          IMAGE="ghcr.io/psu3d0/spreadsheet-mcp:${IMAGE_TAG}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "Publishing MCP registry metadata for ${IMAGE}"
