@@ -66,6 +66,23 @@ jobs:
           path: target/release/agent-spreadsheet
           if-no-files-found: error
 
+  registry-metadata:
+    name: Registry metadata checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate local MCP registry metadata
+        run: python3 scripts/validate_registry_metadata.py
+
+      - name: Validate server.json with official MCP Registry
+        run: |
+          curl --fail --show-error --silent \
+            --header 'Content-Type: application/json' \
+            --data @server.json \
+            https://registry.modelcontextprotocol.io/v0.1/validate
+
   sdk-parity:
     name: SDK parity checks
     runs-on: ubuntu-latest

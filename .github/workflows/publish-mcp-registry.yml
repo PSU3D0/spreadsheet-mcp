@@ -1,0 +1,84 @@
+name: Publish MCP Registry Metadata
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (for example 0.10.1); defaults to tag version when run from a tag'
+        required: false
+        type: string
+
+jobs:
+  publish-official-registry:
+    name: Publish to Official MCP Registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Resolve version and image
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version || '' }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          IMAGE="ghcr.io/psu3d0/spreadsheet-mcp:${VERSION}-full"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Publishing MCP registry metadata for ${IMAGE}"
+
+      - name: Wait for GHCR full image
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.meta.outputs.image }}"
+          for attempt in $(seq 1 40); do
+            if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "Found ${IMAGE}"
+              exit 0
+            fi
+            echo "Waiting for ${IMAGE} (${attempt}/40)"
+            sleep 30
+          done
+          echo "Timed out waiting for ${IMAGE}" >&2
+          exit 1
+
+      - name: Render server.json for this release
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
+          jq --arg version "$VERSION" --arg image "$IMAGE" \
+            '.version = $version | .packages[0].version = $version | .packages[0].identifier = $image' \
+            server.json > server.rendered.json
+          mv server.rendered.json server.json
+          cat server.json
+
+      - name: Validate local registry metadata
+        run: python3 scripts/validate_registry_metadata.py
+
+      - name: Validate server.json with official MCP Registry
+        run: |
+          curl --fail --show-error --silent \
+            --header 'Content-Type: application/json' \
+            --data @server.json \
+            https://registry.modelcontextprotocol.io/v0.1/validate
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --help
+
+      - name: Authenticate to MCP Registry with GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server metadata
+        run: ./mcp-publisher publish
