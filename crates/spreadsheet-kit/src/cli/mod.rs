@@ -1287,6 +1287,11 @@ For broader discovery, use sheet-page, range-values, or layout-page."
         #[arg(value_name = "SHEET", help = "Sheet name")]
         sheet: String,
         #[arg(
+            value_name = "RANGE",
+            help = "A1 range to render (default: A1:T50); equivalent to --range"
+        )]
+        range_positional: Option<String>,
+        #[arg(
             long,
             value_name = "RANGE",
             help = "A1 range to render (default: A1:T50)"
@@ -1365,9 +1370,11 @@ For broader discovery, use sheet-page, range-values, or layout-page."
     #[command(
         about = "Apply one or more shorthand cell edits to a sheet",
         after_long_help = r#"Examples:
-  agent-spreadsheet edit workbook.xlsx Sheet1 A1=42 B2==SUM(A1:A10)
-  agent-spreadsheet edit workbook.xlsx Sheet1 --dry-run A1=42 B2==SUM(A1:A10)
-  agent-spreadsheet edit workbook.xlsx Sheet1 --output edited.xlsx --force A1=42 B2==SUM(A1:A10)
+  agent-spreadsheet edit workbook.xlsx Sheet1 A1=42 'B2==SUM(A1:A10)'
+  agent-spreadsheet edit workbook.xlsx Sheet1 --dry-run A1=42 'B2==SUM(A1:A10)'
+  agent-spreadsheet edit workbook.xlsx Sheet1 --output edited.xlsx --force A1=42 'B2==SUM(A1:A10)'
+  agent-spreadsheet edit workbook.xlsx Sheet1 --edits-file edits.txt --output edited.xlsx --force
+  printf '%s\n' 'B13==-MIN(B9,B12)' 'C13==-MIN(C9,C12)' | agent-spreadsheet edit workbook.xlsx Sheet1 --edits-file - --output edited.xlsx --force
 
 Mode selection:
   Default behavior (no mode flags): in-place edit of the source workbook.
@@ -1376,6 +1383,13 @@ Mode selection:
 Formula shorthand:
   Use double equals for formulas, e.g. C2==SUM(A1:A10).
   Single equals writes a literal value/text, e.g. C2=SUM(A1:A10).
+
+Shell quoting (positional edits):
+  Single-quote every edit that contains parentheses, spaces, or $:
+  unquoted ( breaks the shell, and double quotes let the shell expand
+  $-style absolute references (e.g. "$A$1" becomes "1").
+  Prefer --edits-file (one edit per line, '-' for stdin) for formula
+  batches; file/stdin edits bypass shell quoting entirely.
 
 Cache note:
   Formula edits (values starting with =) clear cached results.
@@ -1399,9 +1413,15 @@ Diagnostics note:
         force: bool,
         #[arg(
             value_name = "EDIT",
-            help = "Edit operations like A1=42 or B2==SUM(A1:A10)"
+            help = "Edit operations like A1=42 or 'B2==SUM(A1:A10)' (single-quote formulas containing parentheses or $)"
         )]
         edits: Vec<String>,
+        #[arg(
+            long = "edits-file",
+            value_name = "PATH",
+            help = "Read edits from a file, one edit per line ('-' reads stdin). Blank lines and lines starting with # are ignored. Avoids shell quoting issues with $ and parentheses."
+        )]
+        edits_file: Option<PathBuf>,
         #[arg(
             long = "formula-parse-policy",
             value_enum,
@@ -2584,6 +2604,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
         Commands::LayoutPage {
             file,
             sheet,
+            range_positional,
             range,
             mode,
             max_col_width,
@@ -2598,7 +2619,7 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             commands::read::layout_page(
                 resolved,
                 sheet,
-                range,
+                range.or(range_positional),
                 mode,
                 max_col_width,
                 fit_columns,
@@ -2621,12 +2642,14 @@ pub async fn run_command(command: Commands) -> Result<Value> {
             output,
             force,
             edits,
+            edits_file,
             formula_parse_policy,
         } => {
             commands::write::edit(
                 file,
                 sheet,
                 edits,
+                edits_file,
                 dry_run,
                 in_place,
                 output,

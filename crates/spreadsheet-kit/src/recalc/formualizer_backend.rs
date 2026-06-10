@@ -90,7 +90,7 @@ fn recalc_sync(path: &Path, timeout_ms: Option<u64>) -> Result<RecalcResult> {
     let mut eval_errors = Vec::new();
     if cycle_errors > 0 {
         eval_errors.push(format!(
-            "Detected {} circular reference cycle(s)",
+            "Detected {} circular reference cycle(s). Cells in cycles are reported as #CIRC! by this backend; workbooks built with Excel's iterative calculation (common in financial models with interest/cash-sweep circularity) need a backend that iterates. If LibreOffice is installed, retry with SPREADSHEET_MCP_RECALC_BACKEND=libreoffice. Do not try to 'fix' intentional circular references.",
             cycle_errors
         ));
     }
