@@ -43,7 +43,7 @@ Or use Docker:
 docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest
 
 # Write + recalc + screenshots
-docker pull ghcr.io/psu3d0/spreadsheet-mcp:full
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest-full
 ```
 
 ---
@@ -81,13 +81,15 @@ Add to `~/.claude.json` or project `.mcp.json`:
       "args": [
         "run", "-i", "--rm",
         "-v", "/path/to/workbooks:/data",
-        "ghcr.io/psu3d0/spreadsheet-mcp:latest",
+        "ghcr.io/psu3d0/spreadsheet-mcp:latest-full",
         "--transport", "stdio"
       ]
     }
   }
 }
 ```
+
+`:latest` is the read-only slim image (write/fork/recalc tools disabled); `:latest-full` includes the write tools and recalculation.
 
 ### HTTP transport
 

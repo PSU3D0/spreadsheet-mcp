@@ -578,7 +578,7 @@ pub struct CliArgs {
     #[arg(
         long,
         env = "SPREADSHEET_MCP_RECALC_ENABLED",
-        help = "Enable write/recalc tools (requires LibreOffice)"
+        help = "Enable write/recalc tools (uses the native Formualizer backend by default; see --recalc-backend)"
     )]
     pub recalc_enabled: bool,
 

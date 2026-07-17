@@ -117,7 +117,7 @@ Formualizer (the native Rust recalc engine) is included by default.
 docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest
 
 # Write + recalc + screenshots
-docker pull ghcr.io/psu3d0/spreadsheet-mcp:full
+docker pull ghcr.io/psu3d0/spreadsheet-mcp:latest-full
 ```
 
 ### JavaScript SDK
@@ -659,7 +659,7 @@ Add to `~/.claude.json` or project `.mcp.json`:
       "args": [
         "run", "-i", "--rm",
         "-v", "/path/to/workbooks:/data",
-        "ghcr.io/psu3d0/spreadsheet-mcp:latest",
+        "ghcr.io/psu3d0/spreadsheet-mcp:latest-full",
         "--transport", "stdio"
       ]
     }
@@ -667,12 +667,43 @@ Add to `~/.claude.json` or project `.mcp.json`:
 }
 ```
 
+`:latest` is the read-only slim image (write/fork/recalc tools disabled); `:latest-full` includes the write tools and recalculation (LibreOffice-backed).
+
 ### HTTP mode
 
 ```bash
 spreadsheet-mcp --workspace-root /path/to/workbooks
 # -> http://127.0.0.1:8079  (POST /mcp)
 ```
+
+### Configuration
+
+Every setting is available as a CLI flag (`spreadsheet-mcp --help`), an environment variable, or a config file key (`--config file.yaml`). CLI takes precedence over the config file.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SPREADSHEET_MCP_WORKSPACE` | `.` | Workspace root containing spreadsheet files |
+| `SPREADSHEET_MCP_WORKBOOK` | none | Lock the server to a single workbook path |
+| `SPREADSHEET_MCP_EXTENSIONS` | `xlsx,xlsm,xls,xlsb` | Comma-separated list of allowed workbook extensions |
+| `SPREADSHEET_MCP_ENABLED_TOOLS` | all tools | Restrict execution to the provided tool names (comma-separated) |
+| `SPREADSHEET_MCP_TRANSPORT` | `http` | Transport to expose (`http` or `stdio`) |
+| `SPREADSHEET_MCP_HTTP_BIND` | `127.0.0.1:8079` | HTTP bind address when using http transport |
+| `SPREADSHEET_MCP_RECALC_ENABLED` | `false` | Enable write/recalc tools (uses the native Formualizer backend by default) |
+| `SPREADSHEET_MCP_RECALC_BACKEND` | `auto` | Recalc backend preference: `auto`, `formualizer`, or `libreoffice` |
+| `SPREADSHEET_MCP_MAX_CONCURRENT_RECALCS` | `2` | Max concurrent LibreOffice instances |
+| `SPREADSHEET_MCP_VBA_ENABLED` | `false` | Enable VBA introspection tools (read-only) |
+| `SPREADSHEET_MCP_ALLOW_OVERWRITE` | `false` | Allow `save_fork` to overwrite original workbook files |
+| `SPREADSHEET_MCP_CACHE_CAPACITY` | `5` | Maximum number of workbooks kept in memory |
+| `SPREADSHEET_MCP_TOOL_TIMEOUT_MS` | `30000` | Tool request timeout in milliseconds |
+| `SPREADSHEET_MCP_MAX_RESPONSE_BYTES` | `1000000` | Max response size in bytes |
+| `SPREADSHEET_MCP_MAX_PAYLOAD_BYTES` | `65536` | Max tool payload size in bytes before truncation |
+| `SPREADSHEET_MCP_MAX_CELLS` | `10000` | Max cells per tool payload before truncation |
+| `SPREADSHEET_MCP_MAX_ITEMS` | `500` | Max items per tool payload before truncation |
+| `SPREADSHEET_MCP_OUTPUT_PROFILE` | `token_dense` | Output profile for tool responses (`token_dense` or `verbose`) |
+| `SPREADSHEET_MCP_SCREENSHOT_DIR` | `<workspace_root>/screenshots` | Directory to write screenshot PNGs |
+| `SPREADSHEET_MCP_PATH_MAP` | none | Path mapping(s) `INTERNAL=CLIENT` to include client-visible paths in responses (comma-separated; useful for Docker volume mounts) |
+
+Setting any of the timeout/limit variables (`TOOL_TIMEOUT_MS`, `MAX_RESPONSE_BYTES`, `MAX_PAYLOAD_BYTES`, `MAX_CELLS`, `MAX_ITEMS`) to `0` disables that limit.
 
 ---
 
@@ -687,9 +718,13 @@ spreadsheet-mcp --workspace-root /path/to/workbooks
 - `sheet_page`
 - `read_table`
 - `range_values`
+- `inspect_cells` — detail-view for up to 25 individual cells with full metadata (value, formula, style, number format)
+- `layout_page` — render a sheet range with layout semantics (column widths, borders, merges) as JSON and optionally an ASCII grid
+- `grid_export` — export a range as a rich grid payload with per-cell values, formulas, number formats, styles, column sizes, and merges
 - `named_ranges`
 - `sheet_styles`
 - `workbook_style_summary`
+- `close_workbook` — evict a workbook from cache
 
 ### Search and analysis
 - `find_value`
@@ -700,6 +735,10 @@ spreadsheet-mcp --workspace-root /path/to/workbooks
 - `table_profile`
 - `sheet_statistics`
 - `get_manifest_stub`
+- `execute_manifest` — execute a SheetPort manifest with JSON inputs
+
+### Verification
+- `verify_workbook` — compare baseline/current workbook or fork ids and report target proof plus new/resolved/preexisting errors; the summary-first proof step after `recalculate`
 
 ### Stateful write and recalc
 - fork lifecycle
@@ -707,12 +746,16 @@ spreadsheet-mcp --workspace-root /path/to/workbooks
 - `edit_batch`
 - `transform_batch`
 - `style_batch`
+- `grid_import` — import a rich grid payload (values, formulas, styles, formats, column sizes, merges)
 - `apply_formula_pattern`
 - `structure_batch`
 - `column_size_batch`
 - `sheet_layout_batch`
 - `rules_batch`
+- `define_name` / `update_name` / `delete_name` — manage named ranges in a fork
+- `replace_in_formulas` — find and replace text in formula bodies only, plain text or regex, preview or apply
 - `recalculate`
+- `get_edits` — list all edits applied to a fork
 - `get_changeset`
 - `save_fork`
 - staged-change management
@@ -768,7 +811,7 @@ Formula recalculation is pluggable.
 | Backend | How | Default | Best for |
 | --- | --- | --- | --- |
 | **Formualizer** | Native Rust engine | **Yes** | Fast default recalc with no external dependency |
-| **LibreOffice** | Headless `soffice` | Docker `:full` / explicit builds | Maximum compatibility and screenshot flows |
+| **LibreOffice** | Headless `soffice` | Docker `:latest-full` / explicit builds | Maximum compatibility and screenshot flows |
 
 Feature notes:
 - `recalc-formualizer` is enabled by default
@@ -784,7 +827,7 @@ Published at `ghcr.io/psu3d0/spreadsheet-mcp`:
 | Image | Size | Recalc | Best for |
 | --- | --- | --- | --- |
 | `latest` | ~15 MB | No | Read-only analysis and lightweight agent deployments |
-| `full` | ~800 MB | Yes | Write + recalc + screenshots |
+| `latest-full` | ~800 MB | Yes | Write + recalc + screenshots |
 
 Examples:
 
@@ -793,7 +836,7 @@ Examples:
 docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest
 
 # Write + recalc
-docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:full
+docker run -v /path/to/workbooks:/data -p 8079:8079 ghcr.io/psu3d0/spreadsheet-mcp:latest-full
 ```
 
 ---
