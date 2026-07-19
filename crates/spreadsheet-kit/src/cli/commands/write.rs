@@ -162,6 +162,33 @@ const RULES_PAYLOAD_SHAPE: &str = r#"{"ops":[{"kind":"<rules_kind>",...}]}"#;
 const RULES_PAYLOAD_MINIMAL_EXAMPLE: &str = r#"{"ops":[{"kind":"set_data_validation","sheet_name":"Sheet1","target_range":"B2:B4","validation":{"kind":"list","formula1":"\"A,B,C\""}}]}"#;
 const EDIT_FORMULA_HINT: &str =
     "Tip: formulas in edit shorthand use double equals, e.g. A1==SUM(B1:B5).";
+const SHELL_QUOTING_HINT: &str = "Hint: if this edit was passed as a shell argument, check quoting: double quotes let the shell expand $-style absolute references (\"$A$1\" reaches asp as \"1\"), and unquoted parentheses break the shell. Single-quote each edit, or use --edits-file (one edit per line, '-' for stdin) to bypass shell quoting.";
+
+fn load_edits_file(path: &std::path::Path) -> Result<Vec<String>> {
+    // Tolerate the @path convention used by --ops payloads.
+    let path = match path.to_str().and_then(|s| s.strip_prefix('@')) {
+        Some(stripped) => std::path::PathBuf::from(stripped),
+        None => path.to_path_buf(),
+    };
+    let path = path.as_path();
+    let raw = if path.as_os_str() == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("failed to read edits from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read edits file '{}'", path.display()))?
+    };
+    Ok(raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect())
+}
 
 #[allow(dead_code)]
 #[derive(Debug, JsonSchema)]
@@ -422,14 +449,21 @@ pub async fn edit(
     file: PathBuf,
     sheet: String,
     edits: Vec<String>,
+    edits_file: Option<PathBuf>,
     dry_run: bool,
     in_place: bool,
     output: Option<PathBuf>,
     force: bool,
     formula_parse_policy: Option<FormulaParsePolicy>,
 ) -> Result<Value> {
+    let mut edits = edits;
+    if let Some(path) = edits_file {
+        let mut file_edits = load_edits_file(&path)?;
+        file_edits.append(&mut edits);
+        edits = file_edits;
+    }
     if edits.is_empty() {
-        bail!("at least one edit must be provided");
+        bail!("at least one edit must be provided (positional EDIT args or --edits-file)");
     }
 
     let runtime = StatelessRuntime;
@@ -442,8 +476,8 @@ pub async fn edit(
         let (edit, entry_warnings) = crate::core::write::normalize_shorthand_edit(&entry)
             .with_context(|| {
                 format!(
-                    "invalid shorthand edit at index {}. {}",
-                    idx, EDIT_FORMULA_HINT
+                    "invalid shorthand edit at index {}. {} {}",
+                    idx, EDIT_FORMULA_HINT, SHELL_QUOTING_HINT
                 )
             })?;
         normalized_edits.push(edit);
@@ -470,10 +504,11 @@ pub async fn edit(
                     Err(err_msg) => {
                         if policy == FormulaParsePolicy::Fail {
                             bail!(
-                                "{}edit at {} failed: {}",
+                                "{}edit at {} failed: {}\n{}",
                                 FORMULA_PARSE_FAILED_PREFIX,
                                 edit.address,
-                                err_msg
+                                err_msg,
+                                SHELL_QUOTING_HINT
                             );
                         }
                         builder.record_error(&sheet, &edit.address, &edit.value, &err_msg);
