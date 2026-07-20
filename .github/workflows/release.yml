@@ -118,6 +118,15 @@ jobs:
             awk -F '"' '/^version = "[^"]+"/ { print $2; exit }' "$manifest"
           }
 
+          # crates.io returns 403 to requests without a User-Agent
+          crate_available() {
+            local crate="$1"
+            local version="$2"
+            curl --silent --fail \
+              --user-agent "spreadsheet-mcp-release (github.com/PSU3D0/spreadsheet-mcp)" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null
+          }
+
           wait_for_crate() {
             local crate="$1"
             local version="$2"
@@ -125,7 +134,7 @@ jobs:
             local delay=15
 
             for ((attempt=1; attempt<=attempts; attempt++)); do
-              if curl --silent --show-error --fail "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+              if crate_available "$crate" "$version"; then
                 echo "${crate}@${version} is available on crates.io"
                 return 0
               fi
@@ -142,6 +151,11 @@ jobs:
             local crate="$2"
             local version
             version="$(crate_version "$manifest")"
+
+            if crate_available "$crate" "$version"; then
+              echo "${crate}@${version} already published; skipping"
+              return 0
+            fi
 
             cargo publish --locked --manifest-path "$manifest"
             wait_for_crate "$crate" "$version"
