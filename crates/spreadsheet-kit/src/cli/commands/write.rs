@@ -28,7 +28,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -4923,7 +4923,7 @@ fn fsync_file(path: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn fsync_directory(path: &Path) -> Result<()> {
-    let dir = File::open(path).map_err(|error| {
+    let dir = fs::File::open(path).map_err(|error| {
         write_failed(format!(
             "unable to open directory '{}' for fsync: {}",
             path.display(),
